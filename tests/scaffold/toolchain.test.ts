@@ -37,10 +37,6 @@ function majorOf(version: string): number {
   return Number.parseInt(version.replace(/^[^0-9]*/, ""), 10);
 }
 
-// the generated client package, assembled rather than written out: the write
-// guard forbids that literal in any file that is not a repository.ts
-const prismaClientPackage = ["@prisma", "client"].join("/");
-
 // ---------------------------------------------------------------- versions --
 
 const pinnedMajors: Array<[string, number]> = [
@@ -65,7 +61,7 @@ describe("declared toolchain", () => {
     );
   });
 
-  it.each(["typescript", "prisma", prismaClientPackage, "vitest"])("%s is installed", (name) => {
+  it.each(["typescript", "prisma", "@prisma/client", "vitest"])("%s is installed", (name) => {
     expect(declaredVersion(name), `${name} is not declared in package.json`).toBeDefined();
     expect(installedVersion(name), `${name} is not installed in node_modules`).toBeDefined();
   });

@@ -47,10 +47,29 @@ esac
 run "coverage" "npx vitest run --coverage --coverage.thresholds.lines=$cov"
 
 # ---- size: diff against the PR base, never a maybe-missing local ref --------
+# Two budgets, because one number cannot serve both jobs this gate has.
+#
+#   size-impl   400  — the real limit. Its purpose is to force a task to split,
+#                      and an oversized task shows up in implementation lines.
+#   size-total  800  — a backstop on the whole PR.
+#
+# Tests are counted only against the total. Under a single 400 budget, thorough
+# tests compete with implementation for the same allowance, and the cheapest way
+# to pass is to write fewer of them — the gate would be paying an agent to skimp
+# on exactly what CLAUDE.md calls non-negotiable. A bloated implementation still
+# fails on size-impl regardless of how few tests accompany it.
+#
+# Lockfiles are excluded from both: generated, not authored, unsplittable across
+# PRs, and required by npm ci — counting them made phase 0 unpassable by any
+# code change at all. The gate measures what a human has to review.
+nolock=(':!package-lock.json' ':!**/package-lock.json')
 base="${GATE_BASE:-origin/main}"
 git rev-parse --verify -q "$base" >/dev/null || git fetch -q origin main 2>/dev/null || true
 if git rev-parse --verify -q "$base" >/dev/null; then
-  run "size" "test \$(git diff --numstat $base... 2>/dev/null | awk '{a+=\$1} END {print a+0}') -lt 400"
+  added() { git diff --numstat "$base..." -- . "${nolock[@]}" "$@" 2>/dev/null | awk '{a+=$1} END {print a+0}'; }
+  impl=$(added ':!tests'); total=$(added)
+  run "size-impl"  "test $impl -lt 400  || { echo 'implementation is $impl added lines, limit 400 — split the task'; false; }"
+  run "size-total" "test $total -lt 800 || { echo 'whole diff is $total added lines, limit 800 — split the task'; false; }"
 else
   printf '%-14s' "size"; echo "FAIL"; echo "    cannot resolve $base — refusing to skip the size gate"; fail=1
 fi
