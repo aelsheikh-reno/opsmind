@@ -62,12 +62,17 @@ run "coverage" "npx vitest run --coverage --coverage.thresholds.lines=$cov"
 # Lockfiles are excluded from both: generated, not authored, unsplittable across
 # PRs, and required by npm ci — counting them made phase 0 unpassable by any
 # code change at all. The gate measures what a human has to review.
-nolock=(':!package-lock.json' ':!**/package-lock.json')
+#
+# Every pathspec carries :(top) so the measurement is relative to the repository
+# root, not the shell's directory. Without it, running the gate from a subtree
+# measures only that subtree and quietly reports a smaller diff — under-counting
+# is the direction that lets an oversized task through.
+nolock=(':(top,exclude)*package-lock.json')
 base="${GATE_BASE:-origin/main}"
 git rev-parse --verify -q "$base" >/dev/null || git fetch -q origin main 2>/dev/null || true
 if git rev-parse --verify -q "$base" >/dev/null; then
-  added() { git diff --numstat "$base..." -- . "${nolock[@]}" "$@" 2>/dev/null | awk '{a+=$1} END {print a+0}'; }
-  impl=$(added ':!tests'); total=$(added)
+  added() { git diff --numstat "$base..." -- ':(top)' "${nolock[@]}" "$@" 2>/dev/null | awk '{a+=$1} END {print a+0}'; }
+  impl=$(added ':(top,exclude)tests/'); total=$(added)
   run "size-impl"  "test $impl -lt 400  || { echo 'implementation is $impl added lines, limit 400 — split the task'; false; }"
   run "size-total" "test $total -lt 800 || { echo 'whole diff is $total added lines, limit 800 — split the task'; false; }"
 else

@@ -52,11 +52,23 @@ jobs:
       # fails exactly as before; it is a bootstrap guard, not a relaxation.
       - name: Prisma client and migrations
         run: |
-          if grep -qE '^\s*model\s+\w+\s*\{' prisma/schema.prisma; then
+          # A missing schema must not read as "no models". That would skip
+          # migrate deploy silently and run the tests against an unmigrated
+          # database with a green check — the one failure direction that hides.
+          # Both layouts are matched so moving to prisma/schema/*.prisma later
+          # cannot disable generation by deleting schema.prisma.
+          schemas=$(ls prisma/schema.prisma prisma/schema/*.prisma 2>/dev/null || true)
+          if [ -z "$schemas" ]; then
+            echo "::error::no .prisma schema found under prisma/ — refusing to skip generate and migrate deploy"
+            exit 1
+          fi
+          # POSIX classes, not \s and \w: those are GNU extensions and this also
+          # runs on the self-hosted runner.
+          if grep -qhE '^[[:space:]]*model[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\{' $schemas; then
             npx prisma generate
             npx prisma migrate deploy
           else
-            echo "prisma/schema.prisma declares no models yet — skipping generate/deploy"
+            echo "no models declared yet — skipping generate/deploy (phase 0)"
           fi
       - name: Verify the guards still fire
         run: ./scripts/test-guards.sh
