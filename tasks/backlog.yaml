@@ -1,0 +1,121 @@
+# The task graph. Each node is one pull request.
+#
+# risk:  low        — mechanical; gates alone are sufficient
+#        money      — touches currency; requires a differential test
+#        compliance — touches a deadline, filing or permission; requires a
+#                     differential test and is never auto-merged
+#
+# status: todo | in_progress | blocked | done
+
+- id: scaffold-project
+  title: Scaffold the new OpsMind project
+  phase: 0
+  depends_on: []
+  spec: SETUP.md
+  produces:
+    - package.json
+    - tsconfig.json
+    - eslint.config.mjs
+    - vitest.config.ts
+    - prisma/schema.prisma
+    - lib/kernel/.gitkeep
+    - lib/modules/.gitkeep
+    - lib/services/.gitkeep
+    - lib/adapters/.gitkeep
+  done_when:
+    gates: [lint, types]
+    assertions:
+      - "npm test runs vitest; npm run lint runs eslint"
+      - "eslint.config.mjs contains the three boundary rule blocks from templates/"
+      - "Next.js 16, React 19, TypeScript strict, Prisma, vitest + coverage installed"
+      - "@vitest/coverage-v8 present so the coverage gate can run"
+  risk: low
+  status: todo
+  note: >
+    Nothing else can run before this exists. Copy the lint boundary rules from
+    templates/eslint.config.mjs verbatim — they are the enforcement layer.
+
+- id: harness-differential
+  title: Differential test harness against the legacy system
+  phase: 0
+  depends_on: [scaffold-project]
+  spec: PIPELINE.md#the-problem-this-design-solves
+  produces:
+    - tests/differential/harness.ts
+    - tests/golden/README.md
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "Runs the same input through legacy and new code and diffs field by field"
+      - "Reports a difference with its cause, not just that one exists"
+      - "Golden dataset is anonymised — no real salary, passport or Emirates ID"
+  risk: low
+  status: todo
+  note: >
+    Build this before any module. It is the only oracle for business
+    correctness, and every money task depends on it.
+
+- id: staging-deploy
+  title: Staging deployment to the Proxmox VM
+  phase: 0
+  depends_on: [scaffold-project]
+  spec: runner/PROXMOX.md
+  produces:
+    - Dockerfile
+    - docker-compose.staging.yml
+    - .github/workflows/deploy-staging.yml
+  done_when:
+    gates: [lint, types]
+    assertions:
+      - "Compose runs app + postgres + nginx; app image builds from the Dockerfile"
+      - "deploy-staging.yml triggers on push to main and runs ONLY on a runner labeled staging"
+      - "prisma migrate deploy runs on every deploy before the app starts"
+      - "No secret appears in the compose file or the workflow — all via an env file on the VM"
+  risk: low
+  status: todo
+  note: >
+    This is what makes the parallel build visible: every merge lands on the
+    lab staging VM where the team can try it while the old system still runs.
+
+- id: kernel-schema-base
+  title: Prisma schema for the kernel entities
+  phase: 1
+  depends_on: [harness-differential]
+  spec: docs/architecture/components-kernel.md
+  legacy_reference: reference/legacy/prisma/schema.prisma
+  produces:
+    - prisma/schema.prisma
+    - prisma/migrations/
+  done_when:
+    gates: [lint, types, boundaries]
+    differential: none   # a schema computes nothing; risk still blocks auto-merge
+    assertions:
+      - "Document carries a direction and it is not nullable"
+      - "No isPaid or equivalent boolean exists anywhere in the schema"
+      - "JurisdictionEnrolment is unique on (legalEntityId, regimeId)"
+      - "Jurisdiction carries a business calendar with a weekend mask"
+  risk: compliance
+  status: todo
+
+- id: module-deadlines
+  title: Deadline monitor — the reference module
+  phase: 1
+  depends_on: [kernel-schema-base]
+  spec: docs/architecture/components-core-deadline-monitor.md
+  legacy_reference: reference/legacy/app/api/cron/expiry-reminders/route.ts
+  produces:
+    - lib/modules/deadlines/{index,repository,thresholds,calendar}.ts
+    - tests/modules/deadlines/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage, differential]
+    assertions:
+      - "Business-day arithmetic uses the Sunday-Thursday Gulf week"
+      - "A run reports the complete breach set, and an empty set is meaningful"
+      - "Thresholds are data in settings, not constants in code"
+      - "Registering a deadline already inside a threshold evaluates immediately"
+  risk: compliance
+  status: todo
+  note: >
+    Built first among modules because it is small and exercises every pattern
+    the other six copy: module interface, repository boundary, business
+    calendar, and the alert contract.

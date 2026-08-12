@@ -1,0 +1,21 @@
+name: Fetch FX Rates
+
+on:
+  schedule:
+    - cron: "0 2 * * *"   # 6:00 AM UAE (UTC+4) — runs before the daily digest
+  workflow_dispatch:        # allow manual trigger from GitHub Actions tab
+
+jobs:
+  fetch-fx-rates:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger fx rate fetch
+        run: |
+          STATUS=$(curl -s -o /tmp/response.txt -w "%{http_code}" \
+            "${{ secrets.APP_URL }}/api/cron/fx")
+          cat /tmp/response.txt
+          if [ "$STATUS" -ge 400 ]; then
+            echo "❌ Failed with status $STATUS"
+            exit 1
+          fi
+          echo "✅ Done with status $STATUS"

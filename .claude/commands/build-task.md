@@ -1,0 +1,53 @@
+---
+description: Run one task from the backlog end to end — implement, test, gate, review, PR.
+argument-hint: [task-id]
+---
+
+Run task `$1` from `tasks/backlog.yaml` through the full pipeline.
+
+1. **Read the node.** Confirm every `depends_on` is merged. If not, stop and say
+   which dependency is outstanding.
+
+2. **Branch — without touching main.** The guards forbid checking out main, so
+   branch directly from the remote ref:
+
+   ```
+   git fetch origin main
+   git checkout -b task/$1 origin/main
+   ```
+
+3. **Arm the gates.** Write the task's node to `.task-current.yaml` in the repo
+   root. `gate.sh` reads the risk level from this file; without it, every gate
+   runs on the strict path. Do not commit this file.
+
+4. **Implement.** Delegate to the `implementer` subagent with the task node and
+   its `spec` document. Do not implement in this context.
+
+5. **Test, independently.** Delegate to `test-author` with the task node and the
+   spec — and instruct it explicitly not to read the implementation.
+
+6. **Differential, if `risk` is `money` or `compliance`.** Delegate to `differ`.
+   Any difference it reports stops the pipeline and is escalated to Ahmed. Never
+   resolve a difference yourself.
+
+7. **Gates.** Run `./scripts/gate.sh`. On failure, hand the output back to
+   `implementer`. Maximum three attempts, then stop and report — three failures
+   on the same gate means the task or the spec is wrong, not the code.
+
+8. **Review.** Delegate to `reviewer`. A `fail` verdict returns to step 7 with
+   the findings. `reviewer` may not edit.
+
+9. **Ship.** Remove `.task-current.yaml`, commit with a conventional message
+   scoped to the module, push the task branch, and open a PR whose body lists:
+   the task id, each assertion and whether it is met, the gate results, and any
+   question for Ahmed.
+
+10. **Merge policy by risk.**
+    - `risk: low` → enable auto-merge so the PR lands the moment CI is green:
+      `gh pr merge --auto --squash --delete-branch`
+    - `risk: money` or `compliance` → never auto-merge. Instead:
+      `gh pr comment --body "risk: <risk> — waiting for Ahmed's review"`
+      and leave the PR open. Human adjudication is the point of the tag.
+
+Report at the end: task id, outcome, gates, and anything needing a human. If the
+pipeline stopped, say at which step and why.

@@ -1,0 +1,53 @@
+name: gates
+
+# Runs on GitHub-hosted runners by default. To run on the local containerized
+# runner instead, set the repository VARIABLE  GATES_RUNNER=self-hosted
+# (see runner/README.md). Delete the variable to fall back — jobs on a powered-
+# off machine otherwise queue until it returns.
+#
+# Postgres is provided two ways because the local runner deliberately has no
+# Docker inside it (no docker.sock — see runner/docker-compose.yml):
+#   hosted      → started here as a throwaway container
+#   self-hosted → the compose sidecar, injected as DATABASE_URL by the runner
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  gates:
+    runs-on: ${{ vars.GATES_RUNNER || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Start Postgres (hosted runners only)
+        if: runner.environment == 'github-hosted'
+        run: |
+          docker run -d --name pg -p 5432:5432 \
+            -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=opsmind_test \
+            postgres:16
+          for i in $(seq 1 30); do
+            docker exec pg pg_isready -U postgres && break
+            sleep 2
+          done
+
+      - name: Resolve database URL
+        run: |
+          if [ "${{ runner.environment }}" = "github-hosted" ]; then
+            echo "DATABASE_URL=postgresql://postgres:postgres@localhost:5432/opsmind_test" >> "$GITHUB_ENV"
+          else
+            echo "DATABASE_URL=${DATABASE_URL}" >> "$GITHUB_ENV"   # from the compose sidecar
+          fi
+
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm }
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npx prisma migrate deploy
+      - name: Verify the guards still fire
+        run: ./scripts/test-guards.sh
+      - name: Run all gates
+        run: GATE_BASE=origin/${{ github.base_ref || 'main' }} ./scripts/gate.sh
+      - run: npm run build

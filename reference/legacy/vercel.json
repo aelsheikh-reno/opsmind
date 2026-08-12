@@ -1,0 +1,33 @@
+{
+  "functions": {
+    "app/api/capture/preview/route.ts": { "maxDuration": 60 },
+    "app/api/capture/confirm/route.ts": { "maxDuration": 60 },
+    "app/api/capture/refine/route.ts":  { "maxDuration": 60 },
+    "app/api/capture/ask/route.ts":     { "maxDuration": 60 },
+    "app/api/cron/expiry-reminders/route.ts": { "maxDuration": 60 },
+    "app/api/projects/[id]/milestones/extract/route.ts": { "maxDuration": 300 },
+    "app/api/projects/[id]/timesheets/[importId]/suggest-milestones/route.ts": { "maxDuration": 300 }
+  },
+  "crons": [
+    {
+      "path": "/api/cron/expiry-reminders",
+      "schedule": "5 8 * * *"
+    },
+    {
+      "path": "/api/cron/fx",
+      "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/cron/drive-sync",
+      "schedule": "0 2 * * *"
+    },
+    {
+      "path": "/api/cron/asana-expenses",
+      "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/cron/whatsapp-reminders",
+      "schedule": "0 7 * * *"
+    }
+  ]
+}

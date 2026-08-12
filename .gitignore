@@ -1,0 +1,19 @@
+node_modules/
+.next/
+out/
+coverage/
+playwright-report/
+test-results/
+.env
+.env.*
+!.env.example
+*.sql
+*.sql.gz
+*.dump
+.task-current.yaml
+# the legacy SOURCE is committed — it is the differential oracle and CI needs it.
+# its dependencies and any data are not.
+reference/legacy/node_modules/
+reference/legacy/.next/
+reference/legacy/.env*
+reference/legacy/uploads/

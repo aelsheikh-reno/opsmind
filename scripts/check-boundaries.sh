@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# Module ownership, checked statically. Lint covers imports; this covers what a
+# lint rule cannot see. Findings are collected in the main shell so a violation
+# can never be printed and then forgotten (the classic `| while read` subshell
+# bug did exactly that in an earlier version of this script).
+set -uo pipefail
+findings=()
+
+# a module repository must declare its tables and touch only those
+for repo in lib/modules/*/repository.ts lib/kernel/*/repository.ts; do
+  [[ -f "$repo" ]] || continue
+  mod=$(basename "$(dirname "$repo")")
+  owned=$(grep -oE "^\s*//\s*owns:.*" "$repo" | head -1 | sed 's/.*owns://')
+  if [[ -z "$owned" ]]; then
+    findings+=("$repo has no '// owns:' declaration listing its tables (see CLAUDE.md)")
+    continue
+  fi
+  while IFS= read -r model; do
+    [[ -z "$model" ]] && continue
+    echo "$owned" | grep -qi "$model" \
+      || findings+=("$mod touches '$model' which it does not declare owning")
+  done < <(grep -oE 'db\.[a-zA-Z]+\.' "$repo" | sed 's/db\.//; s/\.//' | sort -u)
+done
+
+# obfuscated database access is itself a violation — casting or bracket-indexing
+# the client is how a gate gets evaded, so the evasion is what gets flagged
+for repo in lib/modules/*/repository.ts lib/kernel/*/repository.ts; do
+  [[ -f "$repo" ]] || continue
+  while IFS= read -r hit; do
+    findings+=("obfuscated db access in $repo: $hit")
+  done < <(grep -nE 'db as any|db\)\.|db\[' "$repo" || true)
+done
+
+# nothing outside a repository may reach the database
+while IFS= read -r f; do
+  findings+=("$f imports the database outside a repository")
+done < <(grep -rl "@/lib/db\|@prisma/client" --include="*.ts" --include="*.tsx" lib app 2>/dev/null \
+         | grep -v "repository.ts" || true)
+
+# no deep imports past a module index
+while IFS= read -r hit; do
+  findings+=("deep import: $hit")
+done < <(grep -rEn "from ['\"]@/lib/modules/[a-z-]+/[a-z]" --include="*.ts" --include="*.tsx" lib app 2>/dev/null \
+         | grep -vE "/index['\"]" || true)
+
+# no paid booleans in the schema
+while IFS= read -r hit; do
+  findings+=("paid boolean in schema: $hit")
+done < <(grep -nE "isPaid|is_paid" prisma/schema.prisma 2>/dev/null || true)
+
+if (( ${#findings[@]} )); then
+  printf 'BOUNDARY: %s\n' "${findings[@]}"
+  exit 1
+fi
+echo "boundaries clean"

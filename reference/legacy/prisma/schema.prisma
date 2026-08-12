@@ -1,0 +1,610 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model LegalEntity {
+  id        String     @id @default(cuid())
+  name      String
+  country   String
+  currency  String?
+  active    Boolean    @default(true)
+  createdAt DateTime   @default(now())
+  documents Document[]
+  projects  Project[]
+}
+
+model Document {
+  id              String       @id @default(cuid())
+  createdAt       DateTime     @default(now())
+  filename        String
+  source          String       @default("upload")
+  mimeType        String
+  status          String       @default("processing")
+  docType         String?
+  confidence      Float?
+  parties         String?
+  summary         String?
+  issueDate       DateTime?
+  expiryDate      DateTime?
+  renewalDeadline DateTime?
+  amount          Float?
+  vatAmount       Float?
+  currency        String?
+  issuingCountry  String?
+  referenceNumber String?
+  notes           String?
+  paymentTerms    String?
+  filePath        String?
+  isPaid          Boolean      @default(false)
+  paidAt          DateTime?
+  poStatus        String?      @default("open")
+  fxRateSnapshot  String?
+  fileHash        String?
+  legalEntityId   String?
+  legalEntity     LegalEntity? @relation(fields: [legalEntityId], references: [id], onDelete: SetNull)
+  alerts           Alert[]
+  person           Person?
+  payrollRun       PayrollRun?
+  paymentSchedules PaymentSchedule[] @relation("ContractPayments")
+  invoicePayments  PaymentSchedule[] @relation("InvoicePayments")
+  vatPayments      VatPayment[]
+  taxPayments      TaxPayment[]
+  projectLinks     ProjectDocumentLink[]
+}
+
+model Person {
+  id             String         @id @default(cuid())
+  createdAt      DateTime       @default(now())
+  name           String
+  jobTitle       String?
+  department     String?
+  nationality    String?
+  contractStart  DateTime?
+  contractEnd    DateTime?
+  salary           Float?
+  salaryCurrency   String?
+  salaryComponents String?  // JSON: [{ name, amount }]
+  costPerHour      Float?
+  billingRate      Float?
+  rateCurrency     String?
+  exitDate         DateTime?
+  exitReason     String?
+  email          String?
+  employmentType             String    @default("fulltime") // "fulltime" | "parttime"
+  weeklyHours                Float     @default(40)
+  payslipInContractCurrency  Boolean   @default(false)
+  documentId     String?        @unique
+  document       Document?      @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  payrollEntries  PayrollEntry[]
+  expenses        Expense[]
+  pettyCashFloats PettyCashFloat[]
+  projectMembers  ProjectTeamMember[]
+}
+
+model ClaimToken {
+  id        String   @id @default(cuid())
+  email     String
+  personId  String?
+  otp       String
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+model PayrollRun {
+  id          String         @id @default(cuid())
+  createdAt   DateTime       @default(now())
+  period      String
+  month       Int?
+  year        Int?
+  totalAmount Float?
+  currency    String?
+  isProcessed    Boolean        @default(false)
+  processedAt    DateTime?
+  fxRateSnapshot String?
+  documentId  String?        @unique
+  document    Document?      @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  entries     PayrollEntry[]
+}
+
+model PayrollEntry {
+  id           String     @id @default(cuid())
+  payrollRunId String
+  payrollRun   PayrollRun @relation(fields: [payrollRunId], references: [id], onDelete: Cascade)
+  personId     String?
+  person       Person?    @relation(fields: [personId], references: [id], onDelete: SetNull)
+  employeeName String
+  salary       Float
+  currency     String     @default("AED")
+  isPaid           Boolean    @default(false)
+  note             String?
+  salaryComponents String?    // JSON: [{ name, amount }]
+  zohoExpenseId    String?
+  payslipSentCount Int        @default(0)
+  bankingFee           Float?     // transaction cost charged by bank on transfer — not part of employee salary
+  bankingFeeCurrency   String?    // currency of the banking fee (may differ from salary currency)
+  bankingFeeExpenseId  String?    // references Expense.id for the auto-created banking fee expense record
+  budgetId             String?
+  budget               Budget?    @relation(fields: [budgetId], references: [id], onDelete: SetNull)
+}
+
+model Alert {
+  id         String   @id @default(cuid())
+  createdAt  DateTime @default(now())
+  documentId String
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  type       String
+  dueDate    DateTime
+  message    String
+  status     String   @default("pending")
+}
+
+model Setting {
+  key   String @id
+  value String
+}
+
+model User {
+  id           String    @id @default(cuid())
+  createdAt    DateTime  @default(now())
+  email        String    @unique
+  name         String
+  passwordHash String
+  role         String    @default("viewer") // admin | manager | viewer | custom
+  permissions  String?   // JSON: { people, records, payroll, intel, settings } each "none"|"read"|"write"
+  isActive     Boolean   @default(true)
+  lastLoginAt  DateTime?
+  lastSeenAt   DateTime?
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  createdAt   DateTime @default(now())
+  action      String
+  entityType  String
+  entityId    String?
+  entityLabel String?
+  details     String?
+  userId      String?
+  userName    String?
+
+  @@index([entityId])
+}
+
+model DriveConnection {
+  id           String    @id @default(cuid())
+  email        String
+  accessToken  String
+  refreshToken String
+  folderId     String?
+  folderName   String?
+  lastSyncAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+}
+
+model DriveFile {
+  id          String   @id @default(cuid())
+  driveFileId String   @unique
+  filename    String
+  documentId  String?
+  status      String   @default("ok")
+  error       String?
+  syncedAt    DateTime @default(now())
+}
+
+model ContractTemplate {
+  id           String   @id @default(cuid())
+  createdAt    DateTime @default(now())
+  name         String
+  filePath     String
+  placeholders String?  // JSON array of detected placeholder keys
+  isActive     Boolean  @default(false)
+}
+
+model Budget {
+  id          String    @id @default(cuid())
+  name        String
+  amount      Float
+  currency    String    @default("AED")
+  color       String?
+  category    String?
+  startDate   DateTime?
+  endDate     DateTime?
+  notes       String?
+  active      Boolean   @default(true)
+  isArchived  Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  expenses        Expense[]
+  payrollEntries  PayrollEntry[]
+}
+
+model Expense {
+  id              String              @id @default(cuid())
+  asanaTaskGid    String?             @unique
+  name            String
+  currency        String              @default("AED")
+  expenseType     String?
+  paymentMethod   String?
+  submitterEmail  String?
+  dueOn           DateTime?
+  completed       Boolean             @default(false)
+  amount          Float?
+  amountConfirmed Boolean             @default(false)
+  notes           String?
+  claimStatus     String?   // null = n/a, "pending" | "approved" | "rejected"
+  claimNote       String?
+  payrollMonth    Int?      // explicit payroll month assignment (1-12)
+  payrollYear     Int?
+  zohoExpenseId   String?
+  asanaCreatedAt  DateTime?
+  syncedAt        DateTime            @updatedAt
+  createdAt       DateTime            @default(now())
+  personId           String?
+  person             Person?             @relation(fields: [personId], references: [id], onDelete: SetNull)
+  pettyCashFloatId   String?
+  pettyCashFloat     PettyCashFloat?     @relation(fields: [pettyCashFloatId], references: [id], onDelete: SetNull)
+  budgetId           String?
+  budget             Budget?             @relation(fields: [budgetId], references: [id], onDelete: SetNull)
+  attachments        ExpenseAttachment[]
+}
+
+model PettyCashFloat {
+  id        String    @id @default(cuid())
+  personId  String?
+  person    Person?   @relation(fields: [personId], references: [id], onDelete: SetNull)
+  amount    Float
+  currency  String    @default("AED")
+  handedAt  DateTime
+  note      String?
+  status    String    @default("open")
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  expenses  Expense[]
+}
+
+model ExpenseAttachment {
+  id          String   @id @default(cuid())
+  asanaGid    String?  @unique
+  expenseId   String
+  expense     Expense  @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  name        String
+  downloadUrl String
+  size        Int?
+  createdAt   DateTime @default(now())
+}
+
+model VatConfig {
+  id                 String       @id @default(cuid())
+  country            String       // e.g. "UAE", "Egypt"
+  currency           String       // e.g. "AED", "EGP"
+  rate               Float        // e.g. 0.05 for 5%
+  frequencyMonths    Int          // 3 = quarterly, 1 = monthly, 12 = annual
+  filingDeadlineDays Int          // days after period end to file
+  anchorMonth        Int          @default(1) // month that starts a new cycle (1 = January)
+  startDate          DateTime     // when this obligation began
+  active             Boolean      @default(true)
+  periodsAhead       Int          @default(5)  // how many future periods to show
+  companyName        String?      // registered entity name from VAT certificate
+  taxId              String?      // TRN / VAT registration number
+  createdAt          DateTime     @default(now())
+  payments           VatPayment[]
+}
+
+model VatPayment {
+  id            String    @id @default(cuid())
+  vatConfigId   String
+  vatConfig     VatConfig @relation(fields: [vatConfigId], references: [id], onDelete: Cascade)
+  periodStart   DateTime
+  periodEnd     DateTime
+  dueDate       DateTime
+  customDueDate DateTime?           // user-overridden due date for this period
+  paidAmount    Float?
+  paidAt        DateTime?
+  notes         String?
+  documentId    String?
+  document      Document? @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  createdAt     DateTime  @default(now())
+
+  @@unique([vatConfigId, periodStart])
+}
+
+model TaxConfig {
+  id                 String       @id @default(cuid())
+  country            String
+  taxType            String       @default("corporate") // corporate | income | withholding | other
+  currency           String
+  rate               Float
+  frequencyMonths    Int
+  filingDeadlineDays Int
+  anchorMonth        Int          @default(1)
+  startDate          DateTime
+  active             Boolean      @default(true)
+  companyName        String?
+  taxId              String?
+  notes              String?
+  revenueBase        Boolean      @default(false) // tax on total revenue instead of profit
+  thresholdActive    Boolean      @default(false) // profit threshold applies
+  profitThreshold    Float?                       // tax-free below this profit amount
+  periodsAhead       Int          @default(5)     // how many future periods to show
+  createdAt          DateTime     @default(now())
+  payments           TaxPayment[]
+}
+
+model TaxPayment {
+  id          String    @id @default(cuid())
+  taxConfigId String
+  taxConfig   TaxConfig @relation(fields: [taxConfigId], references: [id], onDelete: Cascade)
+  periodStart DateTime
+  periodEnd   DateTime
+  dueDate     DateTime
+  paidAmount  Float?
+  paidAt      DateTime?
+  notes       String?
+  documentId  String?
+  document    Document? @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  createdAt   DateTime  @default(now())
+
+  @@unique([taxConfigId, periodStart])
+}
+
+model ZohoConnection {
+  id                 String   @id @default(cuid())
+  organizationId     String
+  organizationName   String?
+  accountId          String?
+  accountName        String?
+  claimTypeAccounts      String?  // JSON: { "Salary": "account_id", "Travel": "account_id", ... }
+  pullExcludeAccounts    String?  // JSON: string[] of account_id values to skip on import
+  pullExcludePaymentModes String? // JSON: string[] of payment_mode values to skip on import
+  accessToken        String
+  refreshToken       String
+  expiresAt          DateTime
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
+model PaymentSchedule {
+  id          String    @id @default(cuid())
+  createdAt   DateTime  @default(now())
+  documentId  String
+  document    Document  @relation("ContractPayments", fields: [documentId], references: [id], onDelete: Cascade)
+  invoiceId   String?
+  invoice     Document? @relation("InvoicePayments", fields: [invoiceId], references: [id], onDelete: SetNull)
+  dueDate     DateTime
+  amount      Float
+  currency    String
+  description    String?
+  scheduleType   String    @default("salary") // "salary" | "bonus"
+  isPaid         Boolean   @default(false)
+  paidAt         DateTime?
+  fxRateSnapshot String?
+}
+
+model WhatsappReminder {
+  id         String   @id @default(cuid())
+  createdAt  DateTime @default(now())
+  documentId String
+  daysWindow Int
+  targetDate DateTime
+
+  @@unique([documentId, daysWindow, targetDate])
+}
+
+model CapitalInjection {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  amount    Float
+  currency  String   @default("AED")
+  date      DateTime
+  source    String?
+  type      String   @default("equity")
+  notes     String?
+}
+
+model NotificationRecipient {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  email     String   @unique
+  name      String?
+  active    Boolean  @default(true)
+}
+
+model Project {
+  id             String             @id @default(cuid())
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  name           String
+  clientName     String?
+  clientId       String?
+  client         LegalEntity?       @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  description    String?
+  contractValue  Float?
+  currency       String             @default("AED")
+  startDate      DateTime?
+  endDate        DateTime?
+  billingType    String             @default("fixed") // fixed | milestone | tm | ps
+  status         String             @default("active") // active | completed | on_hold | cancelled
+  color          String?            // hex color for allocation grid, e.g. "#6366f1"
+  asanaProjectGid String?
+  insightText     String?
+  insightAt       DateTime?
+  milestones          ProjectMilestone[]
+  timesheets          TimesheetImport[]
+  expenses            ProjectExpense[]
+  invoices            ProjectInvoice[]
+  teamMembers         ProjectTeamMember[]
+  documentLinks       ProjectDocumentLink[]
+  memberAllocations   ProjectMemberAllocation[]
+  services            ProjectService[]
+  aiSuggestion        ProjectAiSuggestion?
+}
+
+model ProjectService {
+  id               String                   @id @default(cuid())
+  createdAt        DateTime                 @default(now())
+  projectId        String
+  project          Project                  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name             String
+  description      String?
+  billingAmount    Float?
+  paymentTerms     String?
+  order            Int                      @default(0)
+  activities       ProjectServiceActivity[]
+  timesheetEntries TimesheetEntry[]
+  invoices         ProjectInvoice[]
+  documentLinks    ProjectDocumentLink[]
+}
+
+model ProjectServiceActivity {
+  id          String         @id @default(cuid())
+  createdAt   DateTime       @default(now())
+  serviceId   String
+  service     ProjectService @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  status      String         @default("pending") // pending | in_progress | completed
+  order       Int            @default(0)
+}
+
+model ProjectAiSuggestion {
+  id        String   @id @default(cuid())
+  projectId String   @unique
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  data      Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ProjectMemberAllocation {
+  id                String   @id @default(cuid())
+  createdAt         DateTime @default(now())
+  projectId         String
+  project           Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  memberName        String
+  startDate         DateTime
+  endDate           DateTime
+  allocationPercent Float    @default(100)
+}
+
+model ProjectTeamMember {
+  id                String   @id @default(cuid())
+  createdAt         DateTime @default(now())
+  projectId         String
+  project           Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name              String
+  personId          String?
+  person            Person?  @relation(fields: [personId], references: [id], onDelete: SetNull)
+  costPerHour       Float?
+  billingRate       Float?
+  currency          String   @default("AED")
+  hidden            Boolean  @default(false)
+  allocationPercent Float?   @default(100)
+
+  @@unique([projectId, name])
+}
+
+model ProjectMilestone {
+  id             String           @id @default(cuid())
+  createdAt      DateTime         @default(now())
+  projectId      String
+  project        Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name           String
+  description    String?
+  startDate         DateTime?
+  dueDate           DateTime?
+  completedAt       DateTime?
+  completionPercent Float?           @default(0)
+  estimatedHours    Float?
+  tasks             String?          // JSON: [{ name: string, completionPercent: number | null, estimatedHours: number | null }]
+  billingAmount     Float?
+  billingPercent    Float?
+  order             Int              @default(0)
+  invoices         ProjectInvoice[]
+  timesheetEntries TimesheetEntry[]
+  documentLinks    ProjectDocumentLink[]
+}
+
+model TimesheetImport {
+  id        String           @id @default(cuid())
+  createdAt DateTime         @default(now())
+  projectId String
+  project   Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  month     String           // "YYYY-MM"
+  fileKey   String?
+  filename  String?
+  aiPrompt  String?
+  entries   TimesheetEntry[]
+}
+
+model TimesheetEntry {
+  id           String            @id @default(cuid())
+  importId     String
+  import       TimesheetImport   @relation(fields: [importId], references: [id], onDelete: Cascade)
+  milestoneId  String?
+  milestone    ProjectMilestone? @relation(fields: [milestoneId], references: [id], onDelete: SetNull)
+  serviceId    String?
+  service      ProjectService?   @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+  employeeName String
+  role         String?
+  taskName     String?
+  date         String?           // "YYYY-MM-DD"
+  hoursLogged  Float
+  hourlyRate   Float?
+  currency     String            @default("AED")
+  notes        String?
+}
+
+model ProjectExpense {
+  id          String   @id @default(cuid())
+  createdAt   DateTime @default(now())
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  description String
+  amount      Float
+  currency    String   @default("AED")
+  date        DateTime
+  category    String?
+  notes       String?
+}
+
+model ProjectInvoice {
+  id              String            @id @default(cuid())
+  createdAt       DateTime          @default(now())
+  projectId       String
+  project         Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  milestoneId     String?
+  milestone       ProjectMilestone? @relation(fields: [milestoneId], references: [id], onDelete: SetNull)
+  serviceId       String?
+  service         ProjectService?   @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+  amount          Float
+  currency        String            @default("AED")
+  issuedAt        DateTime?
+  dueDate         DateTime?
+  paidAt          DateTime?
+  status          String            @default("draft") // draft | sent | paid | overdue
+  notes           String?
+  referenceNumber String?
+}
+
+model ProjectDocumentLink {
+  id          String            @id @default(cuid())
+  createdAt   DateTime          @default(now())
+  projectId   String
+  project     Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  documentId  String
+  document    Document          @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  milestoneId String?
+  milestone   ProjectMilestone? @relation(fields: [milestoneId], references: [id], onDelete: SetNull)
+  serviceId   String?
+  service     ProjectService?   @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+
+  @@unique([projectId, documentId])
+}

@@ -1,0 +1,22 @@
+name: Daily Digest Email
+
+on:
+  schedule:
+    - cron: "45 9 * * *"  # 12:45 PM Cairo (UTC+3) — testing
+  workflow_dispatch:        # allow manual trigger from GitHub Actions tab
+
+jobs:
+  send-digest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger expiry-reminders
+        run: |
+          STATUS=$(curl -s -o /tmp/response.txt -w "%{http_code}" \
+            "${{ secrets.APP_URL }}/api/cron/expiry-reminders")
+          cat /tmp/response.txt
+          if [ "$STATUS" -ge 400 ]; then
+            echo "❌ Failed with status $STATUS"
+            exit 1
+          fi
+          echo "✅ Done with status $STATUS"
+

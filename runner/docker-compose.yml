@@ -1,0 +1,51 @@
+# Self-hosted GitHub runner for the gates workflow — the safe shape.
+#
+# What makes it safe:
+#   - EPHEMERAL=1 + restart: always  → one job per container, then destroyed
+#     and recreated clean. The clean-room property of hosted runners, locally.
+#   - NO /var/run/docker.sock mount  → a workflow job can never control the
+#     host's Docker. Mounting the socket is the tutorial shortcut that hands
+#     host root to CI; it is the single thing this file exists to avoid.
+#   - non-privileged, no host volumes  → nothing on the machine to reach.
+#   - Postgres rides alongside on the compose network, so gates never need
+#     docker-in-docker at all.
+#
+# Because there is no Docker inside, jobs that start containers themselves
+# (claude-fix, anything using `services:`) stay on GitHub-hosted runners.
+# gates.yml detects which runner it is on and connects accordingly.
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: opsmind_test
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # not exposed to the host — only the runner network sees it
+    networks: [ci]
+
+  runner:
+    image: myoung34/github-runner:ubuntu-noble
+    restart: always            # ephemeral exit → fresh container, clean room
+    environment:
+      REPO_URL: https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}
+      ACCESS_TOKEN: ${RUNNER_PAT}          # fine-grained PAT, repo Administration: RW
+      RUNNER_NAME_PREFIX: opsmind
+      RUNNER_SCOPE: repo
+      EPHEMERAL: "1"
+      LABELS: ${LABELS_OVERRIDE:-self-hosted,linux,opsmind}
+      # the runner has no Docker; Postgres is reachable by service name
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/opsmind_test
+    depends_on:
+      postgres:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    networks: [ci]
+
+networks:
+  ci:

@@ -1,0 +1,51 @@
+name: Database Backup
+
+on:
+  schedule:
+    - cron: "0 2 * * *"   # 6:00 AM UAE (UTC+4) — daily
+  workflow_dispatch:        # allow manual trigger
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install PostgreSQL client
+        run: sudo apt-get install -y postgresql-client
+
+      - name: Install AWS CLI
+        run: pip install awscli --quiet
+
+      - name: Dump database
+        env:
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+        run: |
+          FILENAME="opsmind-backup-$(date +%Y-%m-%d).sql.gz"
+          pg_dump "$DATABASE_URL" | gzip > "$FILENAME"
+          echo "FILENAME=$FILENAME" >> $GITHUB_ENV
+
+      - name: Upload to S3
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+          S3_BUCKET: ${{ secrets.S3_BACKUP_BUCKET }}
+        run: |
+          aws s3 cp "$FILENAME" "s3://$S3_BUCKET/db-backups/$FILENAME"
+          echo "✅ Uploaded $FILENAME to s3://$S3_BUCKET/db-backups/"
+
+      - name: Cleanup old backups (keep 30 days)
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+          S3_BUCKET: ${{ secrets.S3_BACKUP_BUCKET }}
+        run: |
+          CUTOFF=$(date -d "30 days ago" +%Y-%m-%d)
+          aws s3 ls "s3://$S3_BUCKET/db-backups/" | while read -r line; do
+            FILE=$(echo "$line" | awk '{print $4}')
+            FILEDATE=$(echo "$FILE" | grep -oP '\d{4}-\d{2}-\d{2}')
+            if [[ "$FILEDATE" < "$CUTOFF" ]]; then
+              aws s3 rm "s3://$S3_BUCKET/db-backups/$FILE"
+              echo "🗑️ Deleted old backup: $FILE"
+            fi
+          done

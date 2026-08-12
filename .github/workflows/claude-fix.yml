@@ -1,0 +1,45 @@
+name: claude-fix
+
+# When the gates fail on a pull request, attempt a fix automatically. Bounded:
+# one attempt per failure, and it may not touch tests, gates or CI — an agent
+# fixing a red build by weakening the check is the failure mode this prevents.
+on:
+  workflow_run:
+    workflows: [gates]
+    types: [completed]
+
+jobs:
+  fix:
+    if: github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_branch }}
+      - uses: anthropics/claude-code-action@v1
+        with:
+          # Authenticates with your Claude subscription. Generate once with
+          # `claude setup-token` locally, save as the CLAUDE_CODE_OAUTH_TOKEN
+          # repository secret. To use API billing instead, replace this line
+          # with: anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          claude_args: '--model claude-opus-4-8'
+          prompt: |
+            The gates failed on this branch. Read the failing run's logs, fix
+            the cause, and push to the same branch.
+
+            Constraints, without exception:
+            - Do not modify anything under tests/, scripts/ or .github/
+            - Do not add eslint-disable, ts-ignore or --no-verify
+            - Do not lower a coverage threshold
+            - If the correct fix requires changing a test or a gate, stop and
+              comment on the PR explaining why instead of doing it
+
+            If the failure is a differential difference, do not resolve it.
+            Comment with the difference and its cause, and stop.

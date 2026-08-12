@@ -1,0 +1,25 @@
+# DISABLED until an ANTHROPIC_API_KEY exists — this action authenticates with
+# an API key only, not a subscription token. To enable: add the key as a repo
+# secret and rename this file to security-review.yml. Until then, the local
+# reviewer subagent and the gates carry the security checks.
+name: security-review
+
+# Anthropic's security scanner: injection, authz bypass, secrets, data
+# exposure. Findings arrive as inline comments; high severity should be
+# treated as a failed gate even though the action itself does not block.
+on:
+  pull_request:
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: anthropics/claude-code-security-review@main
+        with:
+          claude-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          comment-pr: true
