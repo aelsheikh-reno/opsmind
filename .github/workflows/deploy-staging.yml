@@ -1,0 +1,72 @@
+name: deploy-staging
+
+# Deployment is pull-shaped — see "VM 2 · opsmind-stg" in runner/PROXMOX.md:
+# the job runs ON the staging VM, where a second runner carries the label
+# `staging`. That is the entire delivery mechanism — no SSH key, no scp, no
+# registry, no docker context, nothing to leak.
+#
+# `runs-on` is a list, and a list means EVERY label must match, so only the
+# staging runner (installed natively on that VM with
+# `./config.sh --labels self-hosted,linux,staging`) can take this job.
+# A bare `self-hosted` would also match the ci-runner VM, which deliberately has
+# no docker.sock (runner/docker-compose.yml) and holds the gates workload:
+# deploying there would be broken and would put a gates job next to the staging
+# database.
+#
+# No secret is read, written or echoed here. The stack's credentials live in an
+# env file on the VM — see "VM 2 · opsmind-stg" in runner/PROXMOX.md; this
+# workflow only checks that it exists. Nothing is passed in from GitHub Actions
+# secrets.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+env:
+  COMPOSE_FILE: docker-compose.staging.yml
+  STAGING_ENV_FILE: /srv/opsmind/staging.env
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, linux, staging]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the VM env file is present
+        run: |
+          # Existence and non-emptiness only — the contents are never read,
+          # printed or copied anywhere. Failing here is much better than
+          # booting the stack on defaults.
+          if [ ! -s "$STAGING_ENV_FILE" ]; then
+            echo "::error::$STAGING_ENV_FILE is missing or empty on this VM — refusing to deploy"
+            exit 1
+          fi
+
+      - name: Build the app image
+        run: docker compose -f "$COMPOSE_FILE" build --pull app
+
+      - name: Migrate, then start
+        # `up` blocks on the migrate service exiting 0 and aborts if it does
+        # not, so `prisma migrate deploy` runs before the app starts on every
+        # deploy. No Node toolchain is needed on the VM: the build, the client
+        # generation and the migration all happen inside the image.
+        run: docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
+
+      - name: Smoke-check through nginx
+        run: |
+          for i in $(seq 1 30); do
+            curl -fsS -o /dev/null http://localhost/ && exit 0
+            sleep 2
+          done
+          echo "::error::staging did not answer on http://localhost/ after 60s"
+          docker compose -f "$COMPOSE_FILE" ps
+          exit 1
+
+      - name: Drop dangling images
+        if: always()
+        run: docker image prune -f
