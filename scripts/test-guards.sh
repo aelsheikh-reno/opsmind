@@ -29,6 +29,15 @@ cases = [
  (W, {"tool_input":{"file_path":"prisma/schema.prisma","content":"isPaid Boolean"}}, True, "isPaid blocked"),
  (W, {"tool_input":{"file_path":"lib/x.ts","content":"// eslint-disable"}},        True,  "eslint-disable blocked"),
  (W, {"tool_input":{"file_path":"lib/x.ts","content":"export const x = 1"}},       False, "normal code allowed"),
+ # the tests/ exemption: a test may NAME the database package (asserting it is
+ # installed, reading the legacy schema) without the substring check firing.
+ # The narrow exemption is only safe while the surrounding cases still block, so
+ # both directions are pinned here — a future edit that widens it fails loudly.
+ (W, {"tool_input":{"file_path":"tests/scaffold/toolchain.test.ts","content":"@prisma/client"}},      False, "tests may name the db package"),
+ (W, {"tool_input":{"file_path":"/abs/repo/tests/differential/harness.ts","content":"@/lib/db"}},     False, "tests exemption works on an absolute path"),
+ (W, {"tool_input":{"file_path":"lib/modules/p/tax.ts","content":"@prisma/client"}},                  True,  "db in lib still blocked after the exemption"),
+ (W, {"tool_input":{"file_path":"app/api/x/route.ts","content":"@prisma/client"}},                    True,  "db in a route still blocked after the exemption"),
+ (W, {"tool_input":{"file_path":"tests/x.test.ts","content":"// eslint-disable"}},                    True,  "tests are exempt from the db check only, not the others"),
 ]
 ok = all(probe(*c) for c in cases)
 r = subprocess.run(["bash", W], input="not json", capture_output=True, text=True)

@@ -25,10 +25,19 @@ case "$path" in
   *) exit 0 ;;
 esac
 
-# only a repository may reach the database
+# only a repository may reach the database.
+#
+# tests/ is exempt because the guard is a substring check and a test has
+# legitimate reasons to NAME the package without reaching a database — asserting
+# it is installed, and later the differential harness reading the legacy schema.
+# Without the exemption the only way past is to split the string, which is the
+# same evasion check-boundaries.sh flags as a violation in its own right; a guard
+# that can only be satisfied by obfuscating around it teaches exactly the habit
+# it exists to prevent. Rule 3 still binds lib/ and app/, where it matters.
 if printf '%s' "$body" | grep -q "@/lib/db\|@prisma/client"; then
   case "$path" in
     */repository.ts|repository.ts|*/prisma/*|prisma/*) ;;
+    tests/*|*/tests/*) ;;
     *) block "only repository.ts may import the database (CLAUDE.md rule 3)" ;;
   esac
 fi

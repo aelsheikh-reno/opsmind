@@ -44,8 +44,32 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 20, cache: npm }
       - run: npm ci
-      - run: npx prisma generate
-      - run: npx prisma migrate deploy
+
+      # Prisma 5 exits 1 on a schema with no models, and phase 0 deliberately
+      # has none — the kernel entities arrive with kernel-schema-base. Skip both
+      # steps until a model exists rather than blocking the scaffold on a client
+      # there is nothing to generate. From the first model onwards this runs and
+      # fails exactly as before; it is a bootstrap guard, not a relaxation.
+      - name: Prisma client and migrations
+        run: |
+          # A missing schema must not read as "no models". That would skip
+          # migrate deploy silently and run the tests against an unmigrated
+          # database with a green check — the one failure direction that hides.
+          # Both layouts are matched so moving to prisma/schema/*.prisma later
+          # cannot disable generation by deleting schema.prisma.
+          schemas=$(ls prisma/schema.prisma prisma/schema/*.prisma 2>/dev/null || true)
+          if [ -z "$schemas" ]; then
+            echo "::error::no .prisma schema found under prisma/ — refusing to skip generate and migrate deploy"
+            exit 1
+          fi
+          # POSIX classes, not \s and \w: those are GNU extensions and this also
+          # runs on the self-hosted runner.
+          if grep -qhE '^[[:space:]]*model[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\{' $schemas; then
+            npx prisma generate
+            npx prisma migrate deploy
+          else
+            echo "no models declared yet — skipping generate/deploy (phase 0)"
+          fi
       - name: Verify the guards still fire
         run: ./scripts/test-guards.sh
       - name: Run all gates

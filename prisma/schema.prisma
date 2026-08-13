@@ -1,0 +1,12 @@
+// Datasource and generator only. The kernel entities (person, document,
+// entity, jurisdiction, regime, enrolment, fx, audit) arrive in the
+// `kernel-schema-base` task — do not add models here.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
