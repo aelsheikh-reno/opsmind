@@ -61,21 +61,63 @@ rather than a reveal.
 
 **Deployment is pull-shaped and needs no SSH keys anywhere:** a second runner
 on *this* VM carries the label `staging`, and the deploy workflow simply runs
-where that label is. Same compose stack, one changed line:
+where that label is.
+
+**This runner is installed natively on the VM, not in a container** — unlike
+the gates runner. The deploy job's entire job is to run `docker compose` on
+this machine, and `runner/docker-compose.yml` deliberately gives its runner no
+Docker at all. The two cannot both hold: a containerised runner here would have
+to mount `/var/run/docker.sock`, which the rule at the bottom of this document
+forbids outright. Installing the runner on the host instead keeps that rule
+literally true — there is no job container for the socket to be mounted into —
+and jobs use the host's Docker directly.
 
 ```bash
-# runner/.env on THIS VM — add:
-LABELS_OVERRIDE=self-hosted,linux,staging
+# on opsmind-stg, as a non-root user in the docker group
+mkdir -p ~/actions-runner && cd ~/actions-runner
+curl -o runner.tar.gz -L https://github.com/actions/runner/releases/latest/download/actions-runner-linux-x64.tar.gz
+tar xzf runner.tar.gz
+./config.sh --url https://github.com/<owner>/opsmind \
+            --token <registration token from repo Settings → Actions → Runners> \
+            --labels self-hosted,linux,staging \
+            --name opsmind-stg --unattended
+sudo ./svc.sh install && sudo ./svc.sh start
 ```
 
-and in its `docker-compose.yml`, set `LABELS: ${LABELS_OVERRIDE}` for the
-runner service. The gates runner and the staging runner never share a machine,
-so a gates job can never touch the staging database.
+The trade this makes is explicit: the gates runner is ephemeral and rebuilt
+clean after every job, and this one is not — it persists between deploys. That
+is acceptable *here* and nowhere else, because this VM exists to hold a running
+application and its database between deploys anyway; a clean room would defeat
+its purpose. It is snapshotted and disposable at the VM level instead, which is
+the rollback that matters for it.
 
-The application compose file, Dockerfile and deploy workflow do not exist yet —
-they are the `staging-deploy` task in the backlog, built by the pipeline itself
-right after the scaffold. Application secrets live in an env file on this VM,
-never in the repository.
+Say the other half of that trade out loud: a natively installed runner whose
+user is in the `docker` group has host-root-equivalent access to Docker, which
+is *broader* than the socket mount the rule below forbids, not narrower. The
+privilege moved onto the host runner; it was not removed. What makes it
+acceptable is the blast radius rather than the permission — this VM is
+dedicated to staging, snapshotted and disposable, holds no production data, and
+only the deploy workflow targets the `staging` label, so nothing else ever runs
+here to abuse it. Made deliberately, on this machine, on those conditions; on a
+machine where any of them stops being true, it is the mistake the last section
+names.
+
+The gates runner and the staging runner never share a machine, so a gates job
+can never touch the staging database. Keep the `staging` label off every other
+runner: the deploy workflow pins `runs-on: [self-hosted, linux, staging]`, and
+a second machine carrying that label is the one way the deploy could land
+somewhere it should not.
+
+The application stack is `docker-compose.staging.yml` at the repository root —
+Postgres, the app, and nginx in front of it, plus a `migrate` service that must
+run `prisma migrate deploy` to completion before the app container is created.
+Its image builds here from the repo `Dockerfile` rather than being pulled, so
+there is no registry credential on this VM to hold or rotate.
+`.github/workflows/deploy-staging.yml` drives all of it on every push to main,
+pinned to the `staging` label above. Application secrets live in an env file on
+this VM, `/srv/opsmind/staging.env`, never in the repository: compose reads it
+with `env_file` and the workflow only checks that it exists, so an absent file
+stops the deploy loudly instead of booting the stack on defaults.
 
 **Backups:** schedule a nightly `vzdump` of this VM in Proxmox (Datacenter →
 Backup). Once anonymised-but-realistic data lives here, that job is your

@@ -1,0 +1,118 @@
+# The OpsMind staging stack. Runs on the opsmind-stg VM (runner/PROXMOX.md),
+# brought up by .github/workflows/deploy-staging.yml on every merge to main.
+#
+# NO SECRET APPEARS IN THIS FILE, and none is passed in from GitHub Actions.
+# Every credential comes from the env file below, which lives on the VM and is
+# never committed — see "VM 2 · opsmind-stg" in runner/PROXMOX.md. There are
+# deliberately no fallback values: a `POSTGRES_PASSWORD: postgres` default would
+# be a secret in the repository with extra steps, and would let the stack boot
+# with a password anyone can read. If the env file is absent, `docker compose`
+# refuses to do anything with this file at all — the loud failure is the point.
+#
+# /srv/opsmind/staging.env on the VM must define:
+#   POSTGRES_USER, POSTGRES_DB, POSTGRES_PASSWORD
+#   DATABASE_URL   postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@postgres:5432/$POSTGRES_DB?schema=public
+#   NEXTAUTH_URL, NEXTAUTH_SECRET
+#
+# A literal dollar sign is written `$$` throughout: Compose interpolates both
+# $VAR and ${VAR}, so an unescaped nginx variable would be silently blanked.
+
+name: opsmind-staging
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    env_file: [/srv/opsmind/staging.env]
+    volumes: [opsmind-staging-db:/var/lib/postgresql/data]
+    # No published port: nginx is the only way into this stack from the VM.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # Migrations are a service of their own rather than a step inside the app
+  # container or — worse — a sleep: `app` declares
+  # `migrate: condition: service_completed_successfully`, so the app container
+  # is not created until `prisma migrate deploy` has exited 0, and `up` aborts
+  # if it exits non-zero. The ordering is structural, on every deploy.
+  #
+  # It runs the app image (built by the `app` service below, which Compose
+  # builds before it creates any container) so the schema and migrations it
+  # applies are exactly the ones the app was built from. prisma-step.sh is the
+  # phase-0 empty-schema guard — see Dockerfile.
+  migrate:
+    image: opsmind-app:staging
+    restart: "no"
+    env_file: [/srv/opsmind/staging.env]
+    command: ["prisma-step.sh", "migrate", "deploy"]
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  app:
+    image: opsmind-app:staging
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: [/srv/opsmind/staging.env]
+    depends_on:
+      postgres: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports: ["80:80"]
+    depends_on:
+      app: { condition: service_healthy }
+    configs:
+      - source: nginx-staging
+        target: /etc/nginx/nginx.conf
+
+# Inline rather than a mounted file: this stack ships three files and no more.
+# Requires Compose v2.23+ (`content:`), which get.docker.com installs.
+configs:
+  nginx-staging:
+    content: |
+      events { worker_connections 1024; }
+      http {
+        server_tokens off;
+
+        # Staging is plain HTTP on the lab network: no public DNS and no ACME,
+        # so there is nothing here to terminate TLS with. Production TLS is a
+        # separate concern and is not modelled by pretending here.
+        server {
+          listen 80;
+          server_name _;
+          client_max_body_size 25m;
+
+          location /_next/static/ {
+            proxy_pass http://app:3000;
+            add_header Cache-Control "public, max-age=31536000, immutable";
+          }
+
+          location / {
+            proxy_pass         http://app:3000;
+            proxy_http_version 1.1;
+            proxy_set_header   Upgrade $$http_upgrade;
+            proxy_set_header   Connection 'upgrade';
+            proxy_set_header   Host $$host;
+            proxy_set_header   X-Real-IP $$remote_addr;
+            proxy_set_header   X-Forwarded-For $$proxy_add_x_forwarded_for;
+            proxy_set_header   X-Forwarded-Proto $$scheme;
+            proxy_read_timeout 300s;
+            proxy_send_timeout 300s;
+          }
+        }
+      }
+
+volumes:
+  opsmind-staging-db:
