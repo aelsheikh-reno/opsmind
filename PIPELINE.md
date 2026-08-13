@@ -56,6 +56,30 @@ needs, what it produces, and how it is proven done.
 `risk` drives routing. `money` and `compliance` tasks require a differential
 test against the legacy system and cannot auto-merge without one.
 
+A node may also carry a **size waiver**, which raises that one task's
+`size-total` budget and nothing else's:
+
+```yaml
+  size_total: 1800
+  size_waiver_reason: >
+    why this task's line count is legitimate rather than a task that should
+    have been split
+```
+
+**Only Ahmed grants a waiver.** An agent that hits the ceiling stops and
+proposes a split — that is what CLAUDE.md's 400-line rule asks for, and it is
+the behaviour the gate exists to force. An agent adding `size_total` to its own
+node to get past a failing gate is weakening the gate, and the reviewer fails
+the review when it sees one that no decision in the conversation authorised.
+
+The waiver is read from the committed `tasks/backlog.yaml` only, never from the
+uncommitted `.task-current.yaml`, so it always appears in the diff a reviewer
+reads. `size-impl` is never waivable: an oversized *implementation* is exactly
+what the budget exists to catch, and no volume of tests justifies one. A value
+below the default tightens the budget rather than raising it. A waiver that is
+malformed, empty, or carries no reason fails the gate — an unexplained waiver
+is one that has already been granted.
+
 A scheduler walks the graph: any task whose dependencies are merged is
 available, and independent tasks run in parallel in separate git worktrees.
 
@@ -99,7 +123,17 @@ Nothing merges until every gate passes. Gates are scripts, not judgements.
 | `coverage` | 90% on anything computing money or dates; 70% elsewhere |
 | `differential` | Output matches the legacy system on the golden dataset, or the difference is explicitly approved |
 | `security` | `claude-code-security-review` finds nothing high |
-| `size` | Diff under 400 lines, or the task is split |
+| `size-impl` | Implementation under 400 added lines, or the task is split. Never waivable |
+| `size-total` | Whole diff under 800 added lines, unless the node carries a `size_total` waiver Ahmed granted |
+
+Two size budgets rather than one, because a single number cannot serve both
+jobs. `size-impl` forces a task to split, and an oversized task shows up in
+implementation lines. `size-total` is a backstop on the whole PR. Tests count
+only against the total, and the guard harness counts as tests: under one budget,
+thorough tests compete with implementation for the same allowance, and the
+cheapest way to pass is to write fewer of them — which would have the gate
+paying an agent to skimp on exactly what CLAUDE.md calls non-negotiable.
+Lockfiles are excluded from both.
 
 The differential gate is the one that makes autonomy defensible. A `money` task
 merging without it is the failure mode that produces a wrong payslip.

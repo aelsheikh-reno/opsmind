@@ -58,7 +58,7 @@
       - "The new build's own `@` alias still resolves to the repository root"
       - "Coverage measures this build's code, not the legacy oracle it loads"
   risk: low
-  status: todo
+  status: done
   note: >
     reference/legacy/lib/fx.ts opens with `import { prisma } from "@/lib/prisma"`
     and the vitest alias points "@" at the NEW repo root, so a legacy module
@@ -82,7 +82,7 @@
       - "Tolerance is an integer count of minor units, so the rounding boundary is exact"
       - "A value it cannot compare structurally is reported, never silently called equal"
   risk: low
-  status: todo
+  status: done
   note: >
     Tolerance is expressed in minor units (fils, piastres) as an integer, not a
     decimal fraction: comparing `Math.abs(b - a) <= 0.01` classifies four
@@ -105,7 +105,7 @@
       - "A legacy module that cannot load fails loudly — never a stub, never an empty module"
       - "Golden dataset is anonymised — no real salary, passport or Emirates ID"
   risk: low
-  status: todo
+  status: done
   note: >
     Build this before any module. It is the only oracle for business
     correctness, and every money task depends on it.
@@ -147,7 +147,7 @@
       - "Nothing else moves out of the implementation measurement"
       - "The 400 and 800 budgets are unchanged"
   risk: low
-  status: todo
+  status: done
   note: >
     size-impl excludes tests/ by path, so scripts/test-guards.sh — a harness
     whose only job is verifying the guards — is measured as implementation.
@@ -157,11 +157,43 @@
     gate-size-waiver task measured 413 impl lines against 400, 276 of them
     probes. This corrects where the line is drawn, not where the budget sits.
 
+- id: gate-size-waiver
+  title: Let a task record a reasoned size-total waiver on its node
+  phase: 0
+  depends_on: [gate-size-impl-scope]
+  spec: PIPELINE.md#the-gates
+  produces:
+    - scripts/gate.sh
+    - scripts/test-guards.sh
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "size_total on a backlog node raises that task's total budget and nothing else's"
+      - "The waiver is read from the committed backlog, never from the uncommitted .task-current.yaml"
+      - "A task with no size_total keeps the 800 default, and size-impl's 400 is never overridable"
+      - "An active waiver is printed with its value and its reason — it is never silent"
+  risk: low
+  status: todo
+  note: >
+    staging-deploy came in at 308 implementation lines against its 400 budget
+    and 1578 total against 800 — 1270 of that a single test file, of which ~450
+    is parsing machinery any split would have to carry into both halves. The
+    800 backstop is the wrong shape for a config task, where proving a property
+    about a Dockerfile costs more lines than the Dockerfile. Ahmed's decision,
+    2026-08-13: make the waiver data on the task, reviewable in the diff,
+    rather than raise the budget for everyone or weaken the gate.
+
 - id: staging-deploy
   title: Staging deployment to the Proxmox VM
   phase: 0
-  depends_on: [scaffold-project]
+  depends_on: [gate-size-waiver]
   spec: runner/PROXMOX.md
+  size_total: 1800
+  size_waiver_reason: >
+    1270 of the 1578 lines are tests/deploy/staging-deploy.test.ts, which must
+    parse a Dockerfile, a compose file and a workflow to prove anything at all;
+    ~450 lines of that is shared parsing machinery. Implementation is 308
+    against the unchanged 400 budget.
   produces:
     - Dockerfile
     - docker-compose.staging.yml
