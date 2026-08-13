@@ -30,15 +30,69 @@
       - "Next.js 16, React 19, TypeScript strict, Prisma, vitest + coverage installed"
       - "@vitest/coverage-v8 present so the coverage gate can run"
   risk: low
-  status: todo
+  status: done
   note: >
     Nothing else can run before this exists. Copy the lint boundary rules from
     templates/eslint.config.mjs verbatim — they are the enforcement layer.
 
-- id: harness-differential
-  title: Differential test harness against the legacy system
+# The harness was built as one node and came in at ~1660 lines against the 800
+# line size budget — 352 of implementation and 1117 of tests, which is the ratio
+# CLAUDE.md's testing policy asks for on the only oracle in the repository.
+# Rather than waive the budget on the first task that would ever cite the
+# precedent, it is split into three. The last node keeps the id
+# `harness-differential` so kernel-schema-base's dependency stays valid; it is
+# now satisfied transitively.
+
+- id: harness-vitest-legacy-alias
+  title: Keep the legacy oracle from resolving into the new build
   phase: 0
   depends_on: [scaffold-project]
+  spec: PIPELINE.md#the-problem-this-design-solves
+  produces:
+    - vitest.config.ts
+    - tests/config/legacy-alias.test.ts
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "A legacy module's `@/...` import resolves inside reference/legacy/, never into the new build"
+      - "The new build's own `@` alias still resolves to the repository root"
+      - "Coverage measures this build's code, not the legacy oracle it loads"
+  risk: low
+  status: todo
+  note: >
+    reference/legacy/lib/fx.ts opens with `import { prisma } from "@/lib/prisma"`
+    and the vitest alias points "@" at the NEW repo root, so a legacy module
+    loaded by the harness would bind to the code under test and the differential
+    test would compare the candidate against itself. Latent only until this build
+    grows a lib/prisma — fix it before any module lands, not after.
+
+- id: harness-diff-fields
+  title: Field-by-field diff with a classified cause
+  phase: 0
+  depends_on: [harness-vitest-legacy-alias]
+  spec: PIPELINE.md#the-problem-this-design-solves
+  produces:
+    - tests/differential/diff-fields.ts
+    - tests/differential/diff-fields.test.ts
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "Recurses objects and arrays, reporting every differing leaf with a dot/bracket path"
+      - "Each difference carries a specific cause and a concrete detail naming the values"
+      - "Tolerance is an integer count of minor units, so the rounding boundary is exact"
+      - "A value it cannot compare structurally is reported, never silently called equal"
+  risk: low
+  status: todo
+  note: >
+    Tolerance is expressed in minor units (fils, piastres) as an integer, not a
+    decimal fraction: comparing `Math.abs(b - a) <= 0.01` classifies four
+    identical one-fils differences two different ways depending on binary
+    representation. Ahmed's decision, 2026-08-13.
+
+- id: harness-differential
+  title: Differential runner against the legacy system
+  phase: 0
+  depends_on: [harness-diff-fields]
   spec: PIPELINE.md#the-problem-this-design-solves
   produces:
     - tests/differential/harness.ts
@@ -47,7 +101,8 @@
     gates: [lint, types, tests]
     assertions:
       - "Runs the same input through legacy and new code and diffs field by field"
-      - "Reports a difference with its cause, not just that one exists"
+      - "One case failing or throwing never stops the run or hides the others"
+      - "A legacy module that cannot load fails loudly — never a stub, never an empty module"
       - "Golden dataset is anonymised — no real salary, passport or Emirates ID"
   risk: low
   status: todo
