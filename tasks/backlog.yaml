@@ -110,6 +110,30 @@
     Build this before any module. It is the only oracle for business
     correctness, and every money task depends on it.
 
+- id: gate-size-impl-scope
+  title: Count the guard harness as tests, not as implementation
+  phase: 0
+  depends_on: [scaffold-project]
+  spec: PIPELINE.md#the-gates
+  produces:
+    - scripts/gate.sh
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "scripts/test-guards.sh is excluded from size-impl and still counted in size-total"
+      - "Nothing else moves out of the implementation measurement"
+      - "The 400 and 800 budgets are unchanged"
+  risk: low
+  status: todo
+  note: >
+    size-impl excludes tests/ by path, so scripts/test-guards.sh — a harness
+    whose only job is verifying the guards — is measured as implementation.
+    gate.sh's own comment says tests are kept out of that budget because
+    otherwise thorough tests compete with implementation and the cheapest way
+    to pass is to write fewer of them. That is exactly what happens here: the
+    gate-size-waiver task measured 413 impl lines against 400, 276 of them
+    probes. This corrects where the line is drawn, not where the budget sits.
+
 - id: staging-deploy
   title: Staging deployment to the Proxmox VM
   phase: 0
