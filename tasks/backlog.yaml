@@ -110,6 +110,29 @@
     Build this before any module. It is the only oracle for business
     correctness, and every money task depends on it.
 
+- id: harness-sub-minor-cause
+  title: Give a sub-minor-unit gap its own cause
+  phase: 0
+  depends_on: [harness-differential]
+  spec: PIPELINE.md#the-problem-this-design-solves
+  produces:
+    - tests/differential/diff-fields.ts
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "A gap finer than minorUnitScale reports a cause distinct from rounding"
+      - "No consumer can filter it away as tolerated noise"
+  risk: money
+  status: todo
+  note: >
+    diffFields reports a gap finer than the scale as `rounding` with a gap of
+    zero. Kuwait and Bahrain use three-decimal currencies, so at the default
+    minorUnitScale of 100 a genuine one-fils KWD or BHD discrepancy lands there.
+    Nothing is lost today — the difference is reported, both raw values sit on
+    the record, and matched is strict — but the two are conflated, and a
+    consumer that treats `rounding` as tolerated noise would drop a real gap.
+    Deferred deliberately rather than reopening a merged, reviewed PR.
+
 - id: gate-size-impl-scope
   title: Count the guard harness as tests, not as implementation
   phase: 0
