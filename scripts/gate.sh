@@ -99,6 +99,18 @@ run "coverage" "npx vitest run --coverage --coverage.thresholds.lines=$cov"
 # on exactly what CLAUDE.md calls non-negotiable. A bloated implementation still
 # fails on size-impl regardless of how few tests accompany it.
 #
+# scripts/test-guards.sh is test code that happens to sit outside tests/: it
+# does nothing but assert the guards still block what they claim to, and
+# gates.yml runs it as a step of its own. Counted as implementation it caused
+# precisely the damage the split exists to prevent — gate-size-waiver measured
+# 413 impl lines against the 400 limit with 276 of them guard probes, so the
+# cheapest way to pass was to stop probing the guards, and a guard that has
+# stopped firing is invisible until the day it mattered. The one file is named
+# rather than scripts/ or a *test* pattern: gate.sh, check-boundaries.sh and
+# the guards themselves are implementation and must stay measured, and a
+# pattern would silently exempt whatever a later task happens to name. It is
+# excluded from size-impl only; size-total still counts every one of its lines.
+#
 # Lockfiles are excluded from both: generated, not authored, unsplittable across
 # PRs, and required by npm ci — counting them made phase 0 unpassable by any
 # code change at all. The gate measures what a human has to review.
@@ -112,7 +124,7 @@ base="${GATE_BASE:-origin/main}"
 git rev-parse --verify -q "$base" >/dev/null || git fetch -q origin main 2>/dev/null || true
 if git rev-parse --verify -q "$base" >/dev/null; then
   added() { git diff --numstat "$base..." -- ':(top)' "${nolock[@]}" "$@" 2>/dev/null | awk '{a+=$1} END {print a+0}'; }
-  impl=$(added ':(top,exclude)tests/'); total=$(added)
+  impl=$(added ':(top,exclude)tests/' ':(top,exclude)scripts/test-guards.sh'); total=$(added)
   run "size-impl"  "test $impl -lt 400  || { echo 'implementation is $impl added lines, limit 400 — split the task'; false; }"
   run "size-total" "test $total -lt 800 || { echo 'whole diff is $total added lines, limit 800 — split the task'; false; }"
 else
