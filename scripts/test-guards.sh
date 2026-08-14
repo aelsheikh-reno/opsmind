@@ -38,6 +38,11 @@ cases = [
  (W, {"tool_input":{"file_path":"lib/modules/p/tax.ts","content":"@prisma/client"}},                  True,  "db in lib still blocked after the exemption"),
  (W, {"tool_input":{"file_path":"app/api/x/route.ts","content":"@prisma/client"}},                    True,  "db in a route still blocked after the exemption"),
  (W, {"tool_input":{"file_path":"tests/x.test.ts","content":"// eslint-disable"}},                    True,  "tests are exempt from the db check only, not the others"),
+ # vitest.config.ts is exempt so the legacy oracle can be aliased to the client
+ # generated from the LEGACY schema. Both directions pinned: the exemption is one
+ # filename, and domain code must still be refused.
+ (W, {"tool_input":{"file_path":"vitest.config.ts","content":"alias @prisma/client for legacy"}},   False, "vitest.config.ts may name the client package"),
+ (W, {"tool_input":{"file_path":"lib/modules/payroll/calc.ts","content":"@prisma/client"}},         True,  "domain code naming the client is still blocked"),
 ]
 ok = all(probe(*c) for c in cases)
 r = subprocess.run(["bash", W], input="not json", capture_output=True, text=True)

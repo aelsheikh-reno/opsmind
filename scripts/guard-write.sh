@@ -34,10 +34,27 @@ esac
 # same evasion check-boundaries.sh flags as a violation in its own right; a guard
 # that can only be satisfied by obfuscating around it teaches exactly the habit
 # it exists to prevent. Rule 3 still binds lib/ and app/, where it matters.
+# Why each exemption is here: none of them is domain code. Rule 3 exists to stop
+# domain logic reaching the database anywhere but a repository, and every entry
+# below is a place that must NAME the client without being domain logic.
+#
+#   repository.ts   the one file rule 3 actually permits to reach the database
+#   prisma/         schema and generator tooling; naming the client is its job
+#   tests/          a test may assert the package is installed, or read the
+#                   legacy schema, without touching a database
+#   vitest.config.ts  build/test configuration. It aliases the client package so
+#                   legacy oracles resolve the client generated from the LEGACY
+#                   schema rather than this build's — configuring resolution, not
+#                   importing a database. One filename, deliberately: not a
+#                   pattern and not a directory, so nothing else in the root can
+#                   inherit the exemption by sitting beside it.
+#
+# check-boundaries.sh is untouched. The CI-side rule is correct as it stands.
 if printf '%s' "$body" | grep -q "@/lib/db\|@prisma/client"; then
   case "$path" in
     */repository.ts|repository.ts|*/prisma/*|prisma/*) ;;
     tests/*|*/tests/*) ;;
+    vitest.config.ts|*/vitest.config.ts) ;;
     *) block "only repository.ts may import the database (CLAUDE.md rule 3)" ;;
   esac
 fi

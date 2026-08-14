@@ -555,3 +555,44 @@
 
     ADR-027 is skipped here deliberately: it is claimed by kernel-schema-base,
     in flight, and is already cited from three documents on that branch.
+
+- id: harness-legacy-prisma-client
+  title: Give the legacy oracle its own Prisma client
+  phase: 0
+  depends_on: [harness-differential]
+  spec: PIPELINE.md#the-problem-this-design-solves
+  produces:
+    - prisma/generate-legacy-client.mjs
+    - vitest.config.ts
+    - scripts/guard-write.sh
+    - .github/workflows/gates.yml
+    - tests/config/legacy-prisma-client.test.ts
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "A legacy module reaching the client resolves the client generated from the legacy schema, with its 38 models"
+      - "The new build's own client is unaffected and never resolves to the legacy one"
+      - "reference/legacy/lib/fx.ts loads through loadLegacyModule and computes"
+      - "A missing legacy client throws, and never falls back to this build's client"
+  risk: low
+  status: todo
+  note: >
+    The generated client package name resolves to whichever client was
+    generated last, and that is this build's. From the moment the new schema
+    grew its first model, a legacy oracle bound to a client without the legacy
+    tables — reference/legacy/lib/fx.ts reads `prisma.setting` and
+    `prisma.payrollRun`, neither of which exists there. The oracle stops being
+    an oracle and the differential test it feeds proves nothing.
+
+    Latent since scaffold and invisible by luck: with no models to generate the
+    import failed outright, so harness-differential's own "a legacy module that
+    cannot load fails loudly" guard passed for the wrong reason.
+    kernel-schema-base added the first models, that guard fired, and this is
+    what it was pointing at.
+
+    reference/legacy/ is read-only, so the legacy schema cannot gain an output
+    path. Its text is copied to generated/ and the output added there.
+
+    guard-write.sh gains one exempt filename, vitest.config.ts, so the alias can
+    name the package it aliases. One filename, not a directory or a pattern;
+    check-boundaries.sh is untouched. Ahmed's decision, 2026-08-14.

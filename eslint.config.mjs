@@ -7,7 +7,10 @@ import nextTs from "eslint-config-next/typescript";
 export default defineConfig([
   ...nextVitals,
   ...nextTs,
-  globalIgnores([".next/**", "out/**", "build/**", "next-env.d.ts", "reference/**"]),
+  // generated/** holds the Prisma client built from the legacy schema by
+  // prisma/generate-legacy-client.mjs — generator output, never authored and
+  // never committed, alongside .next/** and build/**.
+  globalIgnores([".next/**", "out/**", "build/**", "generated/**", "next-env.d.ts", "reference/**"]),
 
   // 1 · modules are reached through their index; the database through repositories
   {
