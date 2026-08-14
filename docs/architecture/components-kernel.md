@@ -7,8 +7,8 @@
 | Component | What it is | Target changes vs current code |
 |---|---|---|
 | **Person** | Staff identity — HR record, payroll subject, claimant, project resource in one | + managerId (org chart, required to resolve approvers) · + person-level enrolments (SI and tax identifiers per jurisdiction) |
-| **Document** | Files and extracted metadata. Evidence, never the record itself (Rule 07) | + direction inbound|outbound — fixes supplier bills counted as income ([ADR-025](decisions.md#adr-025)) |
-| **LegalEntity** | Any organisation — yours, clients, vendors | + roles self|client|vendor; stops being auto-created from fuzzy name matches |
+| **Document** | Files and extracted metadata. Evidence, never the record itself (Rule 07) | + direction inbound\|outbound — fixes supplier bills counted as income ([ADR-025](decisions.md#adr-025)) |
+| **LegalEntity** | Any organisation — yours, clients, vendors | + roles self\|client\|vendor; stops being auto-created from fuzzy name matches |
 | **Jurisdiction** | The country, plus its business calendar (Sun–Thu, per-country holidays) | Calendar becomes first-class — deadline maths cannot be UTC arithmetic |
 | **Regime** | The law: jurisdiction × obligation type — rates, brackets, thresholds, deadline days | New; extracted from hardcoded values and TaxesClient |
 | **JurisdictionEnrolment** | An entity's standing under a regime: TRN/identifier, frequency, anchor, activeFrom/To, evidencing certificate | Replaces VatConfig + TaxConfig; unique per (entity, regime); needed for counterparties too — a UAE VAT invoice carries the customer's TRN |

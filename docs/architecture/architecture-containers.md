@@ -23,8 +23,8 @@ Nothing inside the internal network is publicly reachable, and no satellite touc
 | Authorization | capability | in-process module | own deploy |
 | Connection Manager | adapter | in-process module | own deploy |
 | Zoho · Drive · FX adapters | adapters | in-process modules | own deploy |
-| PostgreSQL | store | one schema, written only by the core |
-| Object storage | store | documents, receipts, backups |
+| PostgreSQL | store | one schema, written only by the core |   |
+| Object storage | store | documents, receipts, backups |   |
 
 
 > **Note** — Day-one topology is **four deployables**, not thirteen ([ADR-021](decisions.md#adr-021)). Everything else is built behind its target interface as an in-process module — `registerDeadline()` is the same call whether the deadline monitor is a folder or a container — and the deployment seam moves later, per service, when a second product needs it or a contractor owns it.

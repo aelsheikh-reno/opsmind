@@ -30,69 +30,15 @@
       - "Next.js 16, React 19, TypeScript strict, Prisma, vitest + coverage installed"
       - "@vitest/coverage-v8 present so the coverage gate can run"
   risk: low
-  status: done
+  status: todo
   note: >
     Nothing else can run before this exists. Copy the lint boundary rules from
     templates/eslint.config.mjs verbatim — they are the enforcement layer.
 
-# The harness was built as one node and came in at ~1660 lines against the 800
-# line size budget — 352 of implementation and 1117 of tests, which is the ratio
-# CLAUDE.md's testing policy asks for on the only oracle in the repository.
-# Rather than waive the budget on the first task that would ever cite the
-# precedent, it is split into three. The last node keeps the id
-# `harness-differential` so kernel-schema-base's dependency stays valid; it is
-# now satisfied transitively.
-
-- id: harness-vitest-legacy-alias
-  title: Keep the legacy oracle from resolving into the new build
+- id: harness-differential
+  title: Differential test harness against the legacy system
   phase: 0
   depends_on: [scaffold-project]
-  spec: PIPELINE.md#the-problem-this-design-solves
-  produces:
-    - vitest.config.ts
-    - tests/config/legacy-alias.test.ts
-  done_when:
-    gates: [lint, types, tests]
-    assertions:
-      - "A legacy module's `@/...` import resolves inside reference/legacy/, never into the new build"
-      - "The new build's own `@` alias still resolves to the repository root"
-      - "Coverage measures this build's code, not the legacy oracle it loads"
-  risk: low
-  status: done
-  note: >
-    reference/legacy/lib/fx.ts opens with `import { prisma } from "@/lib/prisma"`
-    and the vitest alias points "@" at the NEW repo root, so a legacy module
-    loaded by the harness would bind to the code under test and the differential
-    test would compare the candidate against itself. Latent only until this build
-    grows a lib/prisma — fix it before any module lands, not after.
-
-- id: harness-diff-fields
-  title: Field-by-field diff with a classified cause
-  phase: 0
-  depends_on: [harness-vitest-legacy-alias]
-  spec: PIPELINE.md#the-problem-this-design-solves
-  produces:
-    - tests/differential/diff-fields.ts
-    - tests/differential/diff-fields.test.ts
-  done_when:
-    gates: [lint, types, tests]
-    assertions:
-      - "Recurses objects and arrays, reporting every differing leaf with a dot/bracket path"
-      - "Each difference carries a specific cause and a concrete detail naming the values"
-      - "Tolerance is an integer count of minor units, so the rounding boundary is exact"
-      - "A value it cannot compare structurally is reported, never silently called equal"
-  risk: low
-  status: done
-  note: >
-    Tolerance is expressed in minor units (fils, piastres) as an integer, not a
-    decimal fraction: comparing `Math.abs(b - a) <= 0.01` classifies four
-    identical one-fils differences two different ways depending on binary
-    representation. Ahmed's decision, 2026-08-13.
-
-- id: harness-differential
-  title: Differential runner against the legacy system
-  phase: 0
-  depends_on: [harness-diff-fields]
   spec: PIPELINE.md#the-problem-this-design-solves
   produces:
     - tests/differential/harness.ts
@@ -101,140 +47,19 @@
     gates: [lint, types, tests]
     assertions:
       - "Runs the same input through legacy and new code and diffs field by field"
-      - "One case failing or throwing never stops the run or hides the others"
-      - "A legacy module that cannot load fails loudly — never a stub, never an empty module"
+      - "Reports a difference with its cause, not just that one exists"
       - "Golden dataset is anonymised — no real salary, passport or Emirates ID"
   risk: low
-  status: done
+  status: todo
   note: >
     Build this before any module. It is the only oracle for business
     correctness, and every money task depends on it.
 
-- id: harness-sub-minor-cause
-  title: Give a sub-minor-unit gap its own cause
-  phase: 0
-  depends_on: [harness-differential]
-  spec: PIPELINE.md#the-problem-this-design-solves
-  produces:
-    - tests/differential/diff-fields.ts
-  done_when:
-    gates: [lint, types, tests]
-    assertions:
-      - "A gap finer than minorUnitScale reports a cause distinct from rounding"
-      - "No consumer can filter it away as tolerated noise"
-  risk: money
-  status: todo
-  note: >
-    diffFields reports a gap finer than the scale as `rounding` with a gap of
-    zero. Kuwait and Bahrain use three-decimal currencies, so at the default
-    minorUnitScale of 100 a genuine one-fils KWD or BHD discrepancy lands there.
-    Nothing is lost today — the difference is reported, both raw values sit on
-    the record, and matched is strict — but the two are conflated, and a
-    consumer that treats `rounding` as tolerated noise would drop a real gap.
-    Deferred deliberately rather than reopening a merged, reviewed PR.
-
-- id: harness-exact-minor-scaling
-  phase: 0
-  title: Scale to minor units exactly, so the classification matches the rule
-  depends_on: [harness-sub-minor-cause]
-  spec: PIPELINE.md#the-problem-this-design-solves
-  produces:
-    - tests/differential/diff-fields.ts
-    - tests/differential/diff-fields.test.ts
-    - tests/differential/harness.ts        # comments only — they described the old mechanism
-    - tests/differential/harness.test.ts   # ditto, plus cases for the corrected classification
-    - tests/golden/README.md               # ditto — it described the old mechanism
-  done_when:
-    gates: [lint, types, tests]
-    assertions:
-      - "Two values less than one minor unit apart report sub-minor-unit, whether or not they round to the same integer"
-      - "Two values exactly one minor unit apart never report sub-minor-unit, at any magnitude a payslip reaches"
-      - "The gap in minor units is the true gap — no pair is inflated or collapsed by the scaling"
-      - "No float arithmetic decides a classification"
-  risk: money
-  status: todo
-  note: >
-    Resolves the predicate question harness-sub-minor-cause escalated. Ahmed's
-    decision, 2026-08-14: the implementation follows the assertion already
-    approved on that node — a gap finer than minorUnitScale is what the cause
-    keys on — rather than the "both sides round to the same integer" proxy that
-    was actually built.
-
-    The proxy and the rule come apart because `Math.round(x * scale)` is a
-    float multiply. 0.135 and 0.145 are exactly one minor unit apart yet
-    collapse to a gap of 0, while 0.145 and 0.155 inflate to a gap of 2;
-    11.25% of x.xx5 pairs misreport in one direction or the other. The
-    inflation half is a pre-existing bug in the rounding / value-mismatch
-    boundary, not only in the new cause, so this fixes both.
-
-    A magnitude test does not work either: 0.145 - 0.135 is 0.009999999999999981
-    in binary, so `|b - a| * scale < 1` calls an exactly-one-unit pair
-    sub-minor. Scale exactly instead — shift the decimal point on each value's
-    round-trip string and compare as integers — which is what
-    harness-diff-fields promised with "no float in the decision" and did not
-    deliver.
-
-- id: gate-size-impl-scope
-  title: Count the guard harness as tests, not as implementation
-  phase: 0
-  depends_on: [scaffold-project]
-  spec: PIPELINE.md#the-gates
-  produces:
-    - scripts/gate.sh
-  done_when:
-    gates: [lint, types, tests]
-    assertions:
-      - "scripts/test-guards.sh is excluded from size-impl and still counted in size-total"
-      - "Nothing else moves out of the implementation measurement"
-      - "The 400 and 800 budgets are unchanged"
-  risk: low
-  status: done
-  note: >
-    size-impl excludes tests/ by path, so scripts/test-guards.sh — a harness
-    whose only job is verifying the guards — is measured as implementation.
-    gate.sh's own comment says tests are kept out of that budget because
-    otherwise thorough tests compete with implementation and the cheapest way
-    to pass is to write fewer of them. That is exactly what happens here: the
-    gate-size-waiver task measured 413 impl lines against 400, 276 of them
-    probes. This corrects where the line is drawn, not where the budget sits.
-
-- id: gate-size-waiver
-  title: Let a task record a reasoned size-total waiver on its node
-  phase: 0
-  depends_on: [gate-size-impl-scope]
-  spec: PIPELINE.md#the-gates
-  produces:
-    - scripts/gate.sh
-    - scripts/test-guards.sh
-  done_when:
-    gates: [lint, types, tests]
-    assertions:
-      - "size_total on a backlog node raises that task's total budget and nothing else's"
-      - "The waiver is read from the committed backlog, never from the uncommitted .task-current.yaml"
-      - "A task with no size_total keeps the 800 default, and size-impl's 400 is never overridable"
-      - "An active waiver is printed with its value and its reason — it is never silent"
-  risk: low
-  status: done
-  note: >
-    staging-deploy came in at 308 implementation lines against its 400 budget
-    and 1578 total against 800 — 1270 of that a single test file, of which ~450
-    is parsing machinery any split would have to carry into both halves. The
-    800 backstop is the wrong shape for a config task, where proving a property
-    about a Dockerfile costs more lines than the Dockerfile. Ahmed's decision,
-    2026-08-13: make the waiver data on the task, reviewable in the diff,
-    rather than raise the budget for everyone or weaken the gate.
-
 - id: staging-deploy
   title: Staging deployment to the Proxmox VM
   phase: 0
-  depends_on: [gate-size-waiver]
+  depends_on: [scaffold-project]
   spec: runner/PROXMOX.md
-  size_total: 1800
-  size_waiver_reason: >
-    1270 of the 1578 lines are tests/deploy/staging-deploy.test.ts, which must
-    parse a Dockerfile, a compose file and a workflow to prove anything at all;
-    ~450 lines of that is shared parsing machinery. Implementation is 308
-    against the unchanged 400 budget.
   produces:
     - Dockerfile
     - docker-compose.staging.yml
@@ -247,7 +72,7 @@
       - "prisma migrate deploy runs on every deploy before the app starts"
       - "No secret appears in the compose file or the workflow — all via an env file on the VM"
   risk: low
-  status: done
+  status: todo
   note: >
     This is what makes the parallel build visible: every merge lands on the
     lab staging VM where the team can try it while the old system still runs.
@@ -256,7 +81,11 @@
   title: Prisma schema for the kernel entities
   phase: 1
   depends_on: [harness-differential]
-  spec: docs/architecture/components-kernel.md
+  spec: docs/architecture/data-model.md
+  also_read:
+    - docs/architecture/components-kernel.md   # what each entity is for
+    - docs/architecture/data-vocabulary.md     # commitment / open item / settlement
+    - docs/architecture/decisions.md           # ADR-014, ADR-015, ADR-017, ADR-025
   legacy_reference: reference/legacy/prisma/schema.prisma
   produces:
     - prisma/schema.prisma
@@ -270,16 +99,7 @@
       - "JurisdictionEnrolment is unique on (legalEntityId, regimeId)"
       - "Jurisdiction carries a business calendar with a weekend mask"
   risk: compliance
-  status: blocked
-  note: >
-    Blocked 2026-08-14: `spec: docs/architecture/components-kernel.md` does not
-    exist. `docs/` has never been committed — `git log --all -- docs/` is empty
-    and it is not gitignored. PIPELINE.md calls the architecture site the
-    specification, and CLAUDE.md forbids taking structure from the legacy
-    schema ("its structure is what this build exists to replace"), so the four
-    assertions below are the only input and they constrain a schema without
-    specifying one. Building this would mean an agent inventing the kernel data
-    model. Needs Ahmed to supply or point at the spec.
+  status: todo
 
 - id: module-deadlines
   title: Deadline monitor — the reference module
@@ -298,14 +118,137 @@
       - "Thresholds are data in settings, not constants in code"
       - "Registering a deadline already inside a threshold evaluates immediately"
   risk: compliance
-  status: blocked
+  status: todo
   note: >
     Built first among modules because it is small and exercises every pattern
     the other six copy: module interface, repository boundary, business
     calendar, and the alert contract.
 
-    Blocked 2026-08-14 for the same reason as kernel-schema-base, and twice
-    over: its own spec `docs/architecture/components-core-deadline-monitor.md`
-    is missing too, and its dependency is blocked. The boundary rule it must
-    satisfy (CLAUDE.md rule 1) cites `docs/architecture/data-ownership.md`,
-    also missing.
+- id: kernel-entities
+  title: Kernel entities — Person, Document, LegalEntity, Jurisdiction, Regime, Enrolment
+  phase: 1
+  depends_on: [kernel-schema-base]
+  spec: docs/architecture/components-kernel.md
+  also_read:
+    - docs/architecture/data-model.md          # field-level shapes
+  legacy_reference: reference/legacy/prisma/schema.prisma
+  produces:
+    - lib/kernel/*/{index,repository}.ts
+    - tests/kernel/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "Person carries managerId and supports per-jurisdiction enrolments"
+      - "Jurisdiction exposes a business calendar with weekend mask and holidays"
+      - "Regime holds rates, brackets and deadline days as data, not constants"
+      - "Every kernel repository declares its tables with // owns:"
+  risk: low
+  status: todo
+
+- id: kernel-registry-fx
+  title: Document Type Registry, FX store, Audit log
+  phase: 1
+  depends_on: [kernel-entities]
+  spec: docs/architecture/components-kernel.md
+  legacy_reference: reference/legacy/lib/doc-types.ts
+  produces:
+    - lib/kernel/registry/
+    - lib/kernel/fx/
+    - lib/kernel/audit/
+    - tests/kernel/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage, differential]
+    assertions:
+      - "Document types carry field schema, retention policy and ingestion rules as data"
+      - "FX rates live in their own table with an asOf date; snapshots are never recomputed"
+      - "Audit entries are append-only; erasure redacts rather than deletes"
+  risk: money
+  status: todo
+
+- id: money-spine
+  title: Commitment, open item and settlement
+  phase: 2
+  depends_on: [kernel-registry-fx]
+  spec: docs/architecture/data-vocabulary.md
+  legacy_reference: reference/legacy/lib/wallet.ts
+  produces:
+    - lib/modules/finance/
+    - tests/modules/finance/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage, differential]
+    assertions:
+      - "An open item balance is derived from settlements, never stored"
+      - "A converted commitment leaves the forecast so nothing is double counted"
+      - "Partial settlements are supported and carry an fx snapshot and recordedBy"
+      - "No isPaid boolean exists anywhere"
+  risk: money
+  status: todo
+
+- id: module-payroll
+  title: Payroll — effective-dated terms, statutory deductions, prorata
+  phase: 3
+  depends_on: [money-spine, module-deadlines]
+  spec: docs/architecture/components-core-payroll.md
+  legacy_reference: reference/legacy/lib/{prorata,tax}.ts
+  produces:
+    - lib/modules/payroll/
+    - tests/modules/payroll/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage, differential]
+    assertions:
+      - "Salary terms are effective-dated rows; a raise never rewrites a paid period"
+      - "Egyptian brackets and UAE gratuity come from Regime data, not code"
+      - "Prorata handles a mid-month joiner and leaver in the same period"
+      - "Monthly generation is idempotent"
+  risk: money
+  status: todo
+
+- id: module-projects
+  title: Projects — structure, timesheets, milestones
+  phase: 3
+  depends_on: [kernel-entities]
+  spec: docs/architecture/components-core-projects.md
+  produces:
+    - lib/modules/projects/
+    - tests/modules/projects/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "Completing a milestone produces a billable position; nothing is invoiced automatically"
+      - "Team membership is queryable for instance-level authorization"
+  risk: low
+  status: todo
+
+- id: module-expenses
+  title: Expenses — lifecycle plus the public claim portal
+  phase: 3
+  depends_on: [money-spine]
+  spec: docs/architecture/components-core-expenses.md
+  produces:
+    - lib/modules/expenses/
+    - tests/modules/expenses/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "Claim tokens are single-use, expiring, and independent of the identity provider"
+      - "The claim endpoint is rate limited"
+      - "Approval thresholds are policy in work items, not roles"
+  risk: compliance
+  status: todo
+
+- id: module-billing
+  title: Billing — billable positions to Zoho handoff
+  phase: 3
+  depends_on: [module-projects, money-spine]
+  spec: docs/architecture/components-core-billing.md
+  produces:
+    - lib/modules/billing/
+    - tests/modules/billing/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "Only a project manager moves a position to ready"
+      - "OpsMind never issues an invoice; handoff stops at Zoho"
+      - "Stale pending positions are registered as deadlines"
+  risk: money
+  status: todo

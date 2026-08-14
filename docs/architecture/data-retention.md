@@ -20,6 +20,10 @@
 
 | Field | Type / values | Why |
 |---|---|---|
+| `retentionYears` | integer · default 7 | Corporate tax governs where the same invoice serves both regimes |
+| `retentionBasis` | end_of_financial_year \| end_of_tax_period \| document_date | What the clock counts from — it differs per statute |
+| `legalHold` | boolean | Blocks purge regardless of age, for disputes and investigations |
+| `erasureMode` | redact_personal \| full_delete | How a data-subject erasure request is honoured for this type |
 
 
 ## Why 7 as the default

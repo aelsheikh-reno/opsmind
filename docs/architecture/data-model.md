@@ -24,6 +24,13 @@
 
 | Field | Type / values | Why |
 |---|---|---|
+| `documentId` | → Document | The contract that created this schedule |
+| `dueDate` | date |   |
+| `amount, currency` | decimal, ISO-4217 |   |
+| `confidence` | contracted \| expected \| provisional | How firm the obligation is; drives the forecast tier |
+| `status` | pending → converted \| cancelled | **converted** leaves the forecast, so nothing is counted twice |
+| ~~isPaid~~ | boolean | Removed — payment state becomes a Settlement row |
+| ~~fxRateSnapshot~~ | decimal | Removed — belongs to the settlement, not the promise |
 
 
 #### `SalaryTerm`
@@ -32,6 +39,12 @@
 
 | Field | Type / values | Why |
 |---|---|---|
+| `contractId` | → contract |   |
+| `effectiveFrom` | date | When this version of the terms starts |
+| `effectiveTo` | date \| null | null means current; rows are never edited in place |
+| `amount, currency` | decimal, ISO-4217 |   |
+| `components` | JSON | Allowances and their individual treatment |
+| `reason` | hire \| uplift \| promotion \| indexation | Why the terms changed — visible in payroll history |
 
 
 #### `OpenItem`
@@ -40,6 +53,12 @@
 
 | Field | Type / values | Why |
 |---|---|---|
+| `entityRef` | reference | What is owed against |
+| `direction` | inbound \| outbound | Receivable or payable — one table, both directions |
+| `amount, currency` | decimal, ISO-4217 |   |
+| `dueDate` | date | Drives ageing buckets and the deadline monitor |
+| `balance` | derived | amount − Σ settlements. Never stored, so partials cannot drift |
+| `externalRef` | string \| null | The Zoho identifier where the item was issued there |
 
 
 #### `Settlement`
@@ -48,6 +67,15 @@
 
 | Field | Type / values | Why |
 |---|---|---|
+| `entityRef` | open_item \| expense \| payroll_entry \| tax_filing | What was paid |
+| `direction` | inbound \| outbound |   |
+| `amount, currency` | decimal, ISO-4217 | Partial amounts are normal, not exceptional |
+| `fxRateSnapshot` | decimal | The rate at settlement — a processed month never changes retroactively |
+| `settledAt` | timestamp |   |
+| `method` | enum | Bank transfer, card, cash, offset |
+| `zohoRef` | string \| null | Set once the push succeeds; null means still queued |
+| `documentId` | → Document \| null | The receipt, as evidence |
+| `recordedBy` | → User | An actor, not an AI extraction |
 
 
 #### `TaxFiling`
@@ -56,6 +84,14 @@
 
 | Field | Type / values | Why |
 |---|---|---|
+| `enrolmentId` | → JurisdictionEnrolment | Which registration this filing belongs to |
+| `periodStart, periodEnd` | date | The period being filed for |
+| `dueDate` | date | Computed from the regime, business-day aware |
+| `estimatedAmount` | decimal | **Forecasting only** — the authoritative return is computed in Zoho |
+| `status` | pending \| filed \| paid |   |
+| `filedAt` | timestamp \| null |   |
+| `documentId` | → Document \| null | The submitted return, as evidence |
+| `@@unique` | (enrolmentId, periodStart) | One filing per registration per period, enforced |
 
 
 #### `BillablePosition`
@@ -64,6 +100,12 @@
 
 | Field | Type / values | Why |
 |---|---|---|
+| `projectId, milestoneId, serviceId` | → Projects | What was delivered |
+| `amount, currency` | decimal, ISO-4217 |   |
+| `expectedDate` | date | When it should be invoiced |
+| `confidence` | contracted \| expected \| provisional | Feeds the inflow forecast |
+| `status` | pending → ready → handed_off → issued | Only a PM makes the first transition |
+| `externalRef` | string \| null | The Zoho invoice once issued |
 
 
 ## Kernel additions
@@ -74,6 +116,8 @@
 
 | Field | Type / values | Why |
 |---|---|---|
+| `managerId` | → Person | Org chart — required to resolve who approves what |
+| `PersonEnrolment` | new relation | Social insurance and tax identifiers, per jurisdiction, with validity dates |
 
 
 #### `Document`
@@ -82,6 +126,7 @@
 
 | Field | Type / values | Why |
 |---|---|---|
+| `direction` | inbound \| outbound \| null | Nullable during backfill; the fix for supplier bills counted as income (ADR-025) |
 
 
 #### `LegalEntity`
@@ -90,6 +135,7 @@
 
 | Field | Type / values | Why |
 |---|---|---|
+| `role` | self \| client \| vendor | Stops entities being auto-created from fuzzy name matches |
 
 
 #### `Jurisdiction`
@@ -98,6 +144,7 @@
 
 | Field | Type / values | Why |
 |---|---|---|
+| `BusinessCalendar` | weekend mask + holidays[] | Sunday–Thursday in the Gulf; deadline maths cannot be UTC arithmetic |
 
 
 #### `Regime`
@@ -106,6 +153,10 @@
 
 | Field | Type / values | Why |
 |---|---|---|
+| `jurisdictionId` | → Jurisdiction |   |
+| `obligationType` | vat \| corporate_tax \| social_insurance \| … |   |
+| `rate, deadlineDays` | decimal, integer | Extracted from hardcoded values in the current build |
+| `thresholds, brackets` | JSON | Egyptian income tax bands, registration thresholds |
 
 
 #### `JurisdictionEnrolment`
@@ -114,6 +165,12 @@
 
 | Field | Type / values | Why |
 |---|---|---|
+| `legalEntityId, regimeId` | → LegalEntity, → Regime | Applies to counterparties too — a UAE invoice carries the customer's TRN |
+| `identifier` | string | TRN or equivalent registration number |
+| `frequency, anchor` | enum, date | Monthly or quarterly, and what the period aligns to |
+| `activeFrom, activeTo` | date | Registration is not permanent |
+| `sourceDocumentId` | → Document | The certificate, as evidence |
+| `@@unique` | (legalEntityId, regimeId) | One registration per entity per regime |
 
 
 #### `DocumentType`
@@ -122,6 +179,10 @@
 
 | Field | Type / values | Why |
 |---|---|---|
+| `type, label, category` | string |   |
+| `fields` | JSON | The extraction schema handed to the parser on every call |
+| `retentionYears, retentionBasis` | integer, enum | See retention |
+| `erasureMode` | redact_personal \| full_delete |   |
 
 
 #### `FxRate`
@@ -130,6 +191,9 @@
 
 | Field | Type / values | Why |
 |---|---|---|
+| `base, quote` | ISO-4217 |   |
+| `rate` | decimal |   |
+| `asOf` | date | Snapshots are taken from here and never recomputed |
 
 
 #### `Scenario · ScenarioEvent`
@@ -138,6 +202,8 @@
 
 | Field | Type / values | Why |
 |---|---|---|
+| `ownerId` | → User | Scenarios become shareable and auditable rather than per-browser |
+| `events` | rows | Hypothetical hires, delays, price changes overlaid on the forecast |
 
 
 ## Views
@@ -148,6 +214,12 @@
 
 | Field | Type / values | Why |
 |---|---|---|
+| `entity_type, entity_id` | reference | What this row points at |
+| `title, snippet` | text | What the user sees in results |
+| `section` | enum | Filtered at query time against the caller's live grants |
+| `legal_entity_id` | reference | Entity-scope filtering |
+| `search_vector` | tsvector (GIN) |   |
+| `—` |   | Sensitive fields never enter this index, so a search bug cannot leak salaries |
 
 
 #### `commitment_forecast`
@@ -156,4 +228,11 @@
 
 | Field | Type / values | Why |
 |---|---|---|
+| `source_module` | enum | Which schedule table the row came from |
+| `entity_ref` | reference |   |
+| `due_date, amount, currency` | date, decimal, ISO-4217 |   |
+| `direction` | inbound \| outbound |   |
+| `confidence` | contracted \| expected \| provisional | The three certainty tiers shown in the cash view |
+| `status` | pending only | Converted commitments are excluded — this is what prevents double counting |
+| `refreshed_at` | timestamp | Displayed in the UI rather than pretending to be live |
 
