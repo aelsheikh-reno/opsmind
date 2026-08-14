@@ -1070,3 +1070,29 @@
   note: >
     The two Finance tables outside the money spine. Small, but they feed the
     cash view, so they are money-tagged.
+- id: gate-size-total-default
+  title: Raise the whole-PR backstop to 1500
+  phase: 0
+  depends_on: [gate-size-generated-sql]
+  spec: PIPELINE.md#the-gates
+  produces:
+    - scripts/gate.sh
+    - scripts/test-guards.sh
+    - docs/architecture/decisions.md
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "size-total defaults to 1500"
+      - "size-impl is still 400 and still cannot be raised by a node"
+      - "A per-task size_total still raises or lowers only that task's total budget"
+      - "A waiver without a reason, or with a non-numeric value, still fails closed"
+  risk: low
+  status: todo
+  note: >
+    Five of fifteen substantive tasks had to waive an 800 backstop that was
+    calibrated before documentation and generated DDL were excluded from
+    size-impl, and before the testing policy had produced a suite. Every waiver
+    was tests, DDL or prose; none was implementation, and size-impl has never
+    been waived at all. A budget waived a third of the time stops being read,
+    and the reasons had grown longer than several of the diffs they excused.
+    Recorded as ADR-029.

@@ -107,19 +107,19 @@ fi
 # size-impl's 400 is never overridable — nothing below assigns impl_budget. An
 # oversized implementation is precisely what this gate exists to force a split
 # on, and the waiver is justified only by test volume. A node may set size_total
-# below 800 to tighten its own budget — the value on the node is taken as
+# below the default to tighten its own budget — the value on the node is taken as
 # written — but the default never rises by itself.
 #
 # Two ways to fail closed, both loud:
 #   * a size_total that is not a positive integer, INCLUDING an empty value. A
 #     key someone typed and left blank is a mistake, not a deliberate no-op, and
-#     a typo must neither delete a budget nor silently fall back to 800.
+#     a typo must neither delete a budget nor silently fall back to the default.
 #   * a size_total with no size_waiver_reason. The whole case for a per-task
 #     waiver over a global raise is that it is reviewable, and a number with no
 #     argument attached is exactly what a reviewer cannot evaluate. It costs one
 #     line to explain; refusing to grant it unexplained is the point.
 impl_budget=400
-total_budget=800
+total_budget=1500
 waiver_line=""
 waiver_error=""
 size_branch="${GITHUB_HEAD_REF:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)}"
@@ -250,7 +250,13 @@ run "coverage" "npx vitest run --coverage --coverage.thresholds.lines=$cov"
 #
 #   size-impl   400  — the real limit. Its purpose is to force a task to split,
 #                      and an oversized task shows up in implementation lines.
-#   size-total  800  — a backstop on the whole PR.
+#                      Never waived, in the whole history of this repository.
+#   size-total  1500 — a backstop on the whole PR. Was 800, raised on evidence:
+#                      five of fifteen substantive tasks had to waive it, every
+#                      waiver was tests, generated DDL or prose, and none was
+#                      implementation. A budget waived that often stops being
+#                      read, and the reasons were growing longer than the diffs
+#                      they excused (ADR-029).
 #
 # Tests are counted only against the total. Under a single 400 budget, thorough
 # tests compete with implementation for the same allowance, and the cheapest way

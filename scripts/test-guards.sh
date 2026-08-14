@@ -117,7 +117,7 @@ def waiver_claim(out):
     for line in out.splitlines():
         if re.search(r"waiv", line, re.I):
             for n in re.findall(r"[0-9]+", line):
-                if n not in ("400", "800"):
+                if n not in ("400", "1500"):
                     return line.strip()
     return None
 
@@ -147,7 +147,7 @@ FIXTURE = """# fixture task graph for scripts/test-guards.sh — not the real ba
   title: A task that records a reasoned size waiver
   phase: 0
   depends_on: []
-  size_total: 1500
+  size_total: 2500
   size_waiver_reason: "PROBEWAIVERREASON7Q3 the shared parsing machinery a split would duplicate"
   produces:
     - nothing
@@ -227,31 +227,31 @@ out, code = gate_summary("task/probe-plain", cwd=sb)
 check("sandbox harness resolves the task from the fixture backlog",
       code == 0 and "probe-plain" in out, "exit %s: %s" % (code, out))
 
-# assertion: a task with no size_total keeps the 800 default
-check("a task with no size_total resolves the 800 total budget",
-      shows(out, 800) and not shows(out, 1500) and not shows(out, 1800), out)
+# assertion: a task with no size_total keeps the default (1500 since ADR-029)
+check("a task with no size_total resolves the default total budget",
+      shows(out, 1500) and not shows(out, 2500) and not shows(out, 1800), out)
 # assertion: ...and nothing else's — a neighbour's waiver never leaks in
 check("another node's waiver never leaks into an unwaived task",
-      shows(out, 800) and "PROBEWAIVERREASON7Q3" not in out
-      and not shows(out, 1500), out)
+      shows(out, 1500) and "PROBEWAIVERREASON7Q3" not in out
+      and not shows(out, 2500), out)
 # assertion: an active waiver is never silent — so no waiver is never announced.
 # Each absence is anchored to the budget it should have resolved instead, so a
 # gate that prints nothing at all fails here rather than passing vacuously.
 claim = waiver_claim(out)
 check("an unwaived task announces no waiver value",
-      claim is None and shows(out, 800), str(claim) + " :: " + out)
+      claim is None and shows(out, 1500), str(claim) + " :: " + out)
 
 # assertion: size_total raises that task's total budget, printed with its reason
 out, code = gate_summary("task/probe-waived", cwd=sb)
 check("size_total on a node raises that task's total budget",
-      shows(out, 1500), out)
+      shows(out, 2500), out)
 check("an active waiver prints its reason, not just its number",
       "PROBEWAIVERREASON7Q3" in out, out)
 
 # a node may tighten its own budget; the default must never silently rise
 out, code = gate_summary("task/probe-tight", cwd=sb)
 check("a size_total below the default takes the lower value",
-      shows(out, 300) and not shows(out, 800), out)
+      shows(out, 300) and not shows(out, 1500), out)
 
 # assertion: size-impl's 400 is never overridable by any node field
 out, code = gate_summary("task/probe-impl-override", cwd=sb)
@@ -266,13 +266,13 @@ check("size-impl stays 400 however a node spells the override",
 sb2 = sandbox(FIXTURE, task_current=PLANTED % "probe-plain")
 out, code = gate_summary("task/probe-plain", cwd=sb2)
 check("a waiver present only in .task-current.yaml is not honoured",
-      shows(out, 800) and not shows(out, 9000)
+      shows(out, 1500) and not shows(out, 9000)
       and "PROBEFROMTASKCURRENT9K" not in out, "exit %s: %s" % (code, out))
 
 sb3 = sandbox(FIXTURE, task_current=PLANTED % "probe-waived")
 out, code = gate_summary("task/probe-waived", cwd=sb3)
 check(".task-current.yaml cannot raise a budget the backlog already sets",
-      shows(out, 1500) and not shows(out, 9000), "exit %s: %s" % (code, out))
+      shows(out, 2500) and not shows(out, 9000), "exit %s: %s" % (code, out))
 
 # a malformed value fails loudly; it never falls back to the default and never
 # disables the check
@@ -285,7 +285,7 @@ for value, name in (("eighteen hundred", "non-numeric text"),
           "exit %s: %s" % (code, out))
 
 # An empty value is malformed, not absent. A key someone bothered to type and
-# left blank is a mistake, and defaulting it to 800 hides the mistake behind a
+# left blank is a mistake, and defaulting it to 1500 hides the mistake behind a
 # budget that happens to be the one it would have had anyway.
 sbe = sandbox(one_node_fixture(
     "probe-empty", ["size_total:",
@@ -327,8 +327,8 @@ check("the committed waiver is printed with its recorded reason",
       "staging-deploy.test.ts" in out, out)
 
 out, code = gate_summary("task/gate-size-waiver")
-check("a neighbouring task on the same backlog keeps the 800 default",
-      shows(out, 800) and not shows(out, 1800), out)
+check("a neighbouring task on the same backlog keeps the default budget",
+      shows(out, 1500) and not shows(out, 1800), out)
 
 # --- the size MEASUREMENT, against a real diff -------------------------------
 # Everything above probes budget RESOLUTION through --summary, which never
@@ -407,10 +407,10 @@ check("a docs-heavy change under the backstop passes size-total too",
 # charged in full to the backstop. Documentation is untaxed, not unmeasured —
 # without this the exclusion could have been written into both budgets and
 # every probe above would still pass.
-out = measure({"docs/architecture/data-model.md": 900,
+out = measure({"docs/architecture/data-model.md": 1600,
                "lib/modules/deadlines/calendar.ts": 40})
 check("size-total still counts every documentation line",
-      "FAIL" in size_lines(out, "size-total") and shows(out, 940), out)
+      "FAIL" in size_lines(out, "size-total") and shows(out, 1640), out)
 check("...while that same change stays clear of size-impl",
       size_lines(out, "size-impl").endswith("pass"), out)
 
@@ -450,10 +450,10 @@ check("generated migration DDL is outside the implementation budget",
 # 900 lines of DDL beside 40 of schema: untaxed by size-impl, still charged in
 # full to the backstop. Without this the exclusion could have been written into
 # both budgets and every other probe here would still pass.
-big = measure({"prisma/migrations/20260101000000_x/migration.sql": 900,
+big = measure({"prisma/migrations/20260101000000_x/migration.sql": 1600,
                "prisma/schema.prisma": 40})
 check("...but size-total still counts every line of it",
-      "FAIL" in size_lines(big, "size-total") and shows(big, 940), big)
+      "FAIL" in size_lines(big, "size-total") and shows(big, 1640), big)
 check("...while that same change stays clear of size-impl",
       size_lines(big, "size-impl").endswith("pass"), big)
 
