@@ -123,7 +123,7 @@
       - "A gap finer than minorUnitScale reports a cause distinct from rounding"
       - "No consumer can filter it away as tolerated noise"
   risk: money
-  status: todo
+  status: done
   note: >
     diffFields reports a gap finer than the scale as `rounding` with a gap of
     zero. Kuwait and Bahrain use three-decimal currencies, so at the default
@@ -152,7 +152,7 @@
       - "The gap in minor units is the true gap — no pair is inflated or collapsed by the scaling"
       - "No float arithmetic decides a classification"
   risk: money
-  status: todo
+  status: done
   note: >
     Resolves the predicate question harness-sub-minor-cause escalated. Ahmed's
     decision, 2026-08-14: the implementation follows the assertion already
@@ -256,7 +256,11 @@
   title: Prisma schema for the kernel entities
   phase: 1
   depends_on: [harness-differential]
-  spec: docs/architecture/components-kernel.md
+  spec: docs/architecture/data-model.md
+  also_read:
+    - docs/architecture/components-kernel.md   # what each entity is for
+    - docs/architecture/data-vocabulary.md     # commitment / open item / settlement
+    - docs/architecture/decisions.md           # ADR-014, ADR-015, ADR-017, ADR-025
   legacy_reference: reference/legacy/prisma/schema.prisma
   produces:
     - prisma/schema.prisma
@@ -270,16 +274,13 @@
       - "JurisdictionEnrolment is unique on (legalEntityId, regimeId)"
       - "Jurisdiction carries a business calendar with a weekend mask"
   risk: compliance
-  status: blocked
+  status: todo
   note: >
-    Blocked 2026-08-14: `spec: docs/architecture/components-kernel.md` does not
-    exist. `docs/` has never been committed — `git log --all -- docs/` is empty
-    and it is not gitignored. PIPELINE.md calls the architecture site the
-    specification, and CLAUDE.md forbids taking structure from the legacy
-    schema ("its structure is what this build exists to replace"), so the four
-    assertions below are the only input and they constrain a schema without
-    specifying one. Building this would mean an agent inventing the kernel data
-    model. Needs Ahmed to supply or point at the spec.
+    Unblocked 2026-08-14: the architecture specification is committed and the
+    spec pointer now names `data-model.md`, which carries the field-level
+    shapes, rather than `components-kernel.md`, which says what each entity is
+    for. Both are listed — read the model for structure and the component page
+    for intent.
 
 - id: module-deadlines
   title: Deadline monitor — the reference module
@@ -298,14 +299,139 @@
       - "Thresholds are data in settings, not constants in code"
       - "Registering a deadline already inside a threshold evaluates immediately"
   risk: compliance
-  status: blocked
+  status: todo
   note: >
     Built first among modules because it is small and exercises every pattern
     the other six copy: module interface, repository boundary, business
     calendar, and the alert contract.
 
-    Blocked 2026-08-14 for the same reason as kernel-schema-base, and twice
-    over: its own spec `docs/architecture/components-core-deadline-monitor.md`
-    is missing too, and its dependency is blocked. The boundary rule it must
-    satisfy (CLAUDE.md rule 1) cites `docs/architecture/data-ownership.md`,
-    also missing.
+    Unblocked 2026-08-14 with kernel-schema-base: its own spec and the
+    `data-ownership.md` the boundary rule cites are both committed now.
+- id: kernel-entities
+  title: Kernel entities — Person, Document, LegalEntity, Jurisdiction, Regime, Enrolment
+  phase: 1
+  depends_on: [kernel-schema-base]
+  spec: docs/architecture/components-kernel.md
+  also_read:
+    - docs/architecture/data-model.md          # field-level shapes
+  legacy_reference: reference/legacy/prisma/schema.prisma
+  produces:
+    - lib/kernel/*/{index,repository}.ts
+    - tests/kernel/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "Person carries managerId and supports per-jurisdiction enrolments"
+      - "Jurisdiction exposes a business calendar with weekend mask and holidays"
+      - "Regime holds rates, brackets and deadline days as data, not constants"
+      - "Every kernel repository declares its tables with // owns:"
+  risk: low
+  status: todo
+
+- id: kernel-registry-fx
+  title: Document Type Registry, FX store, Audit log
+  phase: 1
+  depends_on: [kernel-entities]
+  spec: docs/architecture/components-kernel.md
+  legacy_reference: reference/legacy/lib/doc-types.ts
+  produces:
+    - lib/kernel/registry/
+    - lib/kernel/fx/
+    - lib/kernel/audit/
+    - tests/kernel/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage, differential]
+    assertions:
+      - "Document types carry field schema, retention policy and ingestion rules as data"
+      - "FX rates live in their own table with an asOf date; snapshots are never recomputed"
+      - "Audit entries are append-only; erasure redacts rather than deletes"
+  risk: money
+  status: todo
+
+- id: money-spine
+  title: Commitment, open item and settlement
+  phase: 2
+  depends_on: [kernel-registry-fx]
+  spec: docs/architecture/data-vocabulary.md
+  legacy_reference: reference/legacy/lib/wallet.ts
+  produces:
+    - lib/modules/finance/
+    - tests/modules/finance/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage, differential]
+    assertions:
+      - "An open item balance is derived from settlements, never stored"
+      - "A converted commitment leaves the forecast so nothing is double counted"
+      - "Partial settlements are supported and carry an fx snapshot and recordedBy"
+      - "No isPaid boolean exists anywhere"
+  risk: money
+  status: todo
+
+- id: module-payroll
+  title: Payroll — effective-dated terms, statutory deductions, prorata
+  phase: 3
+  depends_on: [money-spine, module-deadlines]
+  spec: docs/architecture/components-core-payroll.md
+  legacy_reference: reference/legacy/lib/{prorata,tax}.ts
+  produces:
+    - lib/modules/payroll/
+    - tests/modules/payroll/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage, differential]
+    assertions:
+      - "Salary terms are effective-dated rows; a raise never rewrites a paid period"
+      - "Egyptian brackets and UAE gratuity come from Regime data, not code"
+      - "Prorata handles a mid-month joiner and leaver in the same period"
+      - "Monthly generation is idempotent"
+  risk: money
+  status: todo
+
+- id: module-projects
+  title: Projects — structure, timesheets, milestones
+  phase: 3
+  depends_on: [kernel-entities]
+  spec: docs/architecture/components-core-projects.md
+  produces:
+    - lib/modules/projects/
+    - tests/modules/projects/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "Completing a milestone produces a billable position; nothing is invoiced automatically"
+      - "Team membership is queryable for instance-level authorization"
+  risk: low
+  status: todo
+
+- id: module-expenses
+  title: Expenses — lifecycle plus the public claim portal
+  phase: 3
+  depends_on: [money-spine]
+  spec: docs/architecture/components-core-expenses.md
+  produces:
+    - lib/modules/expenses/
+    - tests/modules/expenses/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "Claim tokens are single-use, expiring, and independent of the identity provider"
+      - "The claim endpoint is rate limited"
+      - "Approval thresholds are policy in work items, not roles"
+  risk: compliance
+  status: todo
+
+- id: module-billing
+  title: Billing — billable positions to Zoho handoff
+  phase: 3
+  depends_on: [module-projects, money-spine]
+  spec: docs/architecture/components-core-billing.md
+  produces:
+    - lib/modules/billing/
+    - tests/modules/billing/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "Only a project manager moves a position to ready"
+      - "OpsMind never issues an invoice; handoff stops at Zoho"
+      - "Stale pending positions are registered as deadlines"
+  risk: money
+  status: todo

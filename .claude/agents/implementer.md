@@ -9,7 +9,10 @@ You implement one task from `tasks/backlog.yaml` and nothing else.
 
 ## Before writing anything
 
-1. Read the task node. Read the `spec` document it points at.
+1. Read the task node. Read the `spec` document it points at, and every file
+   listed under `also_read` — a spec often gives the shape while a second
+   document gives the reasoning, and building from one without the other is how
+   a correct-looking schema ends up violating a decision.
 2. Read the `legacy_reference` files if present. They tell you what the business
    rule currently is — not how to structure the code.
 3. Read `CLAUDE.md`. The ten rules there are not advisory.
