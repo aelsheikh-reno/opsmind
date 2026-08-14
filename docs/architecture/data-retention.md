@@ -30,6 +30,12 @@
 
 UAE corporate tax requires seven years from the end of the financial year; VAT requires five from the end of the tax period; because the same invoice serves both regimes, the longer period governs. Real estate records run longer, and a pending refund application extends the clock by up to two years under the 2026 procedures update. **The values are configurable per type precisely because they vary by statute and change — confirm the numbers with the accountant; the architecture only guarantees they are data, not code.**
 
+> **Note** — **The registry is not versioned; the audit entry snapshots the policy that was applied.** `DocumentType` keeps only its latest actor and timestamp. When a purge or an erasure runs, the retention years, the basis and the erasure mode **in force at that moment** are copied onto the audit entry it writes (`appliedRetentionYears`, `appliedRetentionBasis`, `appliedErasureMode`).
+>
+> That answers *"what policy governed this action"* without versioning a configuration table. The question is only ever asked about an action that already happened — a record destroyed, a subject erased — and the current row of a config table cannot answer it however carefully it is versioned. The audit log is already append-only, so the snapshot inherits that guarantee for free, and copying rather than joining means the entry still reads correctly after the type is edited or deleted. Ahmed's decision, 2026-08-14.
+>
+> The cost, stated plainly: you cannot ask *"what was this type's retention on some date"* when no purge ran that day. That question is not the one the law asks.
+
 ## Mechanics
 
 - A scheduled purge job selects records past their computed retention date, skipping legal holds; every purge writes an audit entry.
