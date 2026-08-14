@@ -423,31 +423,72 @@
     one artifact the reviewer is told to check. Surfaced when the architecture
     specification measured 1992 markdown lines against the non-overridable 400.
     Recorded as ADR-026.
-- id: kernel-entities
-  title: Kernel entities — Person, Document, LegalEntity, Jurisdiction, Regime, Enrolment
+- id: kernel-entities-law
+  title: Kernel entities — Jurisdiction, its calendar, Regime and Enrolment
   phase: 1
   depends_on: [kernel-schema-people-registry]
   spec: docs/architecture/components-kernel.md
   also_read:
-    - docs/architecture/data-model.md          # field-level shapes
+    - docs/architecture/data-model.md
   legacy_reference: reference/legacy/prisma/schema.prisma
   produces:
-    - lib/kernel/*/{index,repository}.ts
+    - lib/kernel/{jurisdiction,regime,enrolment}/{index,repository}.ts
     - tests/kernel/
   done_when:
     gates: [lint, types, boundaries, tests, coverage]
     assertions:
-      - "Person carries managerId and supports per-jurisdiction enrolments"
       - "Jurisdiction exposes a business calendar with weekend mask and holidays"
       - "Regime holds rates, brackets and deadline days as data, not constants"
       - "Every kernel repository declares its tables with // owns:"
   risk: low
   status: todo
+  note: >
+    The first half of kernel-entities, split on size. The six components
+    measured 728 implementation lines against a budget that cannot be waived,
+    and stripping every comment and every blank line from all twelve files
+    leaves 397 — three under the limit. So the trade ADR-026 and ADR-028 make
+    available elsewhere is not available here: there is nothing to buy, the
+    surface is simply larger than one node.
+
+    The seam is the one prisma/schema.prisma already draws and
+    components-kernel.md already orders: the law and the calendar, then the
+    parties. This half imports nothing from the other. Each assertion lands
+    wholly inside one node rather than being divided — which is what made this
+    split acceptable where the kernel schema's was not.
+
+- id: kernel-entities-parties
+  title: Kernel entities — Person, Document and LegalEntity
+  phase: 1
+  depends_on: [kernel-entities-law]
+  spec: docs/architecture/components-kernel.md
+  also_read:
+    - docs/architecture/data-model.md
+  legacy_reference: reference/legacy/prisma/schema.prisma
+  produces:
+    - lib/kernel/{person,document,legal-entity}/{index,repository}.ts
+    - tests/kernel/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "Person carries managerId and supports per-jurisdiction enrolments"
+      - "Every kernel repository declares its tables with // owns:"
+  risk: low
+  status: todo
+  note: >
+    The second half, and it must land second: person/index.ts type-imports
+    ObligationType from the regime component, because the law's closed
+    vocabulary belongs with the law.
+
+    PersonEnrolment lives under person/ rather than enrolment/.
+    components-kernel.md lists person-level enrolments as a feature OF Person,
+    data-model.md lists PersonEnrolment as a relation on Person, and this
+    node's assertion is phrased about Person. JurisdictionEnrolment is its own
+    component and stays in enrolment/.
 
 - id: kernel-registry-fx
   title: Document Type Registry, FX store, Audit log
   phase: 1
-  depends_on: [kernel-entities]
+  depends_on: [kernel-entities-parties]
   spec: docs/architecture/components-kernel.md
   legacy_reference: reference/legacy/lib/doc-types.ts
   produces:
@@ -509,7 +550,7 @@
 - id: module-projects
   title: Projects — structure, timesheets, milestones
   phase: 3
-  depends_on: [kernel-entities, shapes-projects]
+  depends_on: [kernel-entities-parties, shapes-projects]
   spec: docs/architecture/components-core-projects.md
   produces:
     - lib/modules/projects/
