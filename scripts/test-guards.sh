@@ -315,6 +315,114 @@ out, code = gate_summary("task/gate-size-waiver")
 check("a neighbouring task on the same backlog keeps the 800 default",
       shows(out, 800) and not shows(out, 1800), out)
 
+# --- the size MEASUREMENT, against a real diff -------------------------------
+# Everything above probes budget RESOLUTION through --summary, which never
+# measures anything. The exclusions are a different mechanism — a list of git
+# pathspecs — and resolution passing says nothing about whether they match what
+# they claim to. ADR-026 stops charging documentation to the 400-line code
+# budget, and an exclusion that silently over-matched would stop charging code
+# too, which is the failure this gate exists to prevent. So these run gate.sh's
+# full path over a throwaway repository with a real two-commit diff.
+#
+# The node toolchain is stubbed: the sandbox has no node_modules, so lint, types
+# and the vitest runs would fail on their own account and prove nothing about
+# the measurement. Only the size lines are read.
+def size_lines(out, gate):
+    for line in out.splitlines():
+        if line.startswith(gate):
+            return line.strip()
+    return ""
+
+def measure(files):
+    """Commit `files` (path -> line count) onto a base; return gate.sh output."""
+    d = tempfile.mkdtemp(prefix="gate-size-measure-")
+    SANDBOXES.append(d)
+    shutil.copytree(os.path.join(REPO, "scripts"), os.path.join(d, "scripts"))
+    os.mkdir(os.path.join(d, "tasks"))
+    with open(os.path.join(d, "tasks", "backlog.yaml"), "w") as f:
+        f.write(FIXTURE)
+    stub = os.path.join(d, "stub-bin")
+    os.mkdir(stub)
+    for tool in ("npx", "npm"):
+        p = os.path.join(stub, tool)
+        with open(p, "w") as f:
+            f.write("#!/bin/sh\nexit 0\n")
+        os.chmod(p, 0o755)
+
+    def git(*a):
+        subprocess.run(["git"] + list(a), cwd=d, capture_output=True, text=True)
+    git("init", "-q")
+    git("config", "user.email", "guards@opsmind.test")
+    git("config", "user.name", "guards")
+    git("add", "-A")
+    git("commit", "-qm", "base")
+    base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=d,
+                          capture_output=True, text=True).stdout.strip()
+    for path, count in files.items():
+        full = os.path.join(d, path)
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, "w") as f:
+            f.write("".join("line %d\n" % i for i in range(count)))
+    git("add", "-A")
+    git("commit", "-qm", "change")
+
+    env = dict(os.environ)
+    env["GATE_BASE"] = base
+    env["GITHUB_HEAD_REF"] = "task/probe-plain"
+    env["PATH"] = stub + os.pathsep + env["PATH"]
+    r = subprocess.run(["bash", "scripts/gate.sh"], cwd=d, env=env,
+                       capture_output=True, text=True, timeout=180)
+    return r.stdout + r.stderr
+
+# 600 lines of specification beside 40 lines of code. Under ADR-026 the prose is
+# the reviewer's business, not the code budget's: size-impl sees only the 40.
+out = measure({"docs/architecture/data-model.md": 600,
+               "lib/modules/deadlines/calendar.ts": 40})
+impl_line, total_line = size_lines(out, "size-impl"), size_lines(out, "size-total")
+check("a docs-heavy change passes size-impl on its code alone",
+      impl_line.endswith("pass"), impl_line or out)
+check("markdown outside docs/ is documentation too",
+      size_lines(measure({"lib/modules/deadlines/README.md": 600,
+                          "lib/modules/deadlines/calendar.ts": 40}),
+                 "size-impl").endswith("pass"), out)
+check("a docs-heavy change under the backstop passes size-total too",
+      total_line.endswith("pass"), total_line or out)
+
+# 900 prose lines beside 40 of code: excluded from the code budget, still
+# charged in full to the backstop. Documentation is untaxed, not unmeasured —
+# without this the exclusion could have been written into both budgets and
+# every probe above would still pass.
+out = measure({"docs/architecture/data-model.md": 900,
+               "lib/modules/deadlines/calendar.ts": 40})
+check("size-total still counts every documentation line",
+      "FAIL" in size_lines(out, "size-total") and shows(out, 940), out)
+check("...while that same change stays clear of size-impl",
+      size_lines(out, "size-impl").endswith("pass"), out)
+
+# The half that must still fail. An exclusion that leaked would show up here.
+out = measure({"lib/modules/deadlines/calendar.ts": 460})
+impl_line = size_lines(out, "size-impl")
+check("an oversized implementation still fails size-impl",
+      "FAIL" in impl_line, impl_line or out)
+check("the failure names the real implementation count",
+      shows(out, 460), out)
+
+# Prose must not buy an oversized implementation any headroom either.
+out = measure({"docs/architecture/data-model.md": 600,
+               "lib/modules/deadlines/calendar.ts": 460})
+check("documentation never masks an oversized implementation",
+      "FAIL" in size_lines(out, "size-impl"), out)
+
+# tests/ and the guard harness keep the exemption they already had.
+check("tests/ stays out of size-impl",
+      size_lines(measure({"tests/modules/deadlines/calendar.test.ts": 600,
+                          "lib/modules/deadlines/calendar.ts": 40}),
+                 "size-impl").endswith("pass"), out)
+check("scripts/test-guards.sh stays out of size-impl",
+      size_lines(measure({"scripts/test-guards.sh": 600,
+                          "lib/modules/deadlines/calendar.ts": 40}),
+                 "size-impl").endswith("pass"), out)
+
 for d in SANDBOXES:
     shutil.rmtree(d, ignore_errors=True)
 

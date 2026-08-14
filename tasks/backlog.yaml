@@ -309,3 +309,30 @@
     is missing too, and its dependency is blocked. The boundary rule it must
     satisfy (CLAUDE.md rule 1) cites `docs/architecture/data-ownership.md`,
     also missing.
+
+- id: gate-size-docs-exclusion
+  title: Keep documentation out of the implementation budget
+  phase: 0
+  depends_on: [scaffold-project]
+  spec: PIPELINE.md#the-gates
+  produces:
+    - scripts/gate.sh
+    - docs/architecture/decisions.md
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "size-impl excludes docs/**, **/*.md, tests/** and scripts/test-guards.sh"
+      - "size-total still counts documentation, and stays waivable per task via size_total"
+      - "The 400 impl budget and the 800 total default are unchanged"
+      - "The assumption that markdown carries no executable content is recorded at the exclusion"
+  risk: low
+  status: todo
+  note: >
+    CLAUDE.md requires a behaviour change and its documentation in the same PR,
+    and the reviewer fails a PR that lets the docs drift. Charging prose to the
+    code budget therefore penalises every task that correctly updates its spec,
+    and makes not updating the docs the cheapest way to pass — the same perverse
+    incentive gate-size-impl-scope removed for the guard harness, aimed at the
+    one artifact the reviewer is told to check. Surfaced when the architecture
+    specification measured 1992 markdown lines against the non-overridable 400.
+    Recorded as ADR-026.
