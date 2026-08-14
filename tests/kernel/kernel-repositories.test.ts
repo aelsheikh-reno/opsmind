@@ -74,29 +74,22 @@ const KERNEL_TABLES = [
   "AuditEntry",
 ];
 
-// The three this node names — "Jurisdiction, its calendar, Regime and
-// Enrolment" — expanded to the tables they are made of. Jurisdiction's calendar
-// is two tables (BusinessCalendar, BusinessHoliday) because data-model.md:151
-// gives it "weekend mask + holidays[]". "Enrolment" here is the entity-level
-// JurisdictionEnrolment of components-kernel.md:14; the person-level enrolments
-// of :9 belong to Person and travel with kernel-entities-parties.
-// The tables THIS node's components are made of. kernel-entities was split on
-// size — 728 implementation lines against a budget that cannot be waived — into
-// the law and the parties, and the tests were cut at the same seam as the code
-// rather than one seam apart. Person, PersonEnrolment, Document and LegalEntity
-// arrive with kernel-entities-parties, along with the cases that assert them;
-// they are named below so the list reads as scoped rather than as forgotten,
-// and so restoring them is one edit when that node lands.
+// Every table the kernel entities are made of, both halves of the split now
+// landed. Jurisdiction's calendar is two tables because data-model.md:151 gives
+// it "weekend mask + holidays[]", and enrolment is two because
+// components-kernel.md:9 adds person-level enrolments alongside the
+// entity-level JurisdictionEnrolment of :14.
 const IN_SCOPE_TABLES = [
+  "Person",
+  "PersonEnrolment",
+  "Document",
+  "LegalEntity",
   "Jurisdiction",
   "BusinessCalendar",
   "BusinessHoliday",
   "Regime",
   "JurisdictionEnrolment",
 ];
-
-/** Declared by kernel-entities-parties. Restore into IN_SCOPE_TABLES with it. */
-const PARTIES_TABLES = ["Person", "PersonEnrolment", "Document", "LegalEntity"];
 
 // The other owners' rows of data-ownership.md:24-30. A kernel repository naming
 // one of these has claimed a table it does not own, which is rule 1 broken in
@@ -280,25 +273,15 @@ describe("every kernel repository declares its tables with // owns:", () => {
     expect(shared).toEqual([]);
   });
 
-  it("covers every table this node's components are made of", () => {
+  it("covers every table the kernel entities are made of", () => {
     // A table nobody declares is a table no repository may touch, which means
-    // the entity has no way in or out of the database. Scoped to this half of
-    // the split; the parties tables are asserted by the node that builds them.
+    // the entity has no way in or out of the database.
     const declared = allDeclared().map((table) => table.toLowerCase());
     const missing = IN_SCOPE_TABLES.filter((table) => !declared.includes(table.toLowerCase()));
     expect(
       missing,
       `no kernel repository declares these. Declared: ${allDeclared().join(", ") || "nothing"}`,
     ).toEqual([]);
-  });
-
-  it("does not silently claim the tables the other half will bring", () => {
-    // The counterpart to the scoping above. If this node ever declares a
-    // parties table, the split has leaked and the seam is not where the note
-    // says it is.
-    const declared = allDeclared().map((table) => table.toLowerCase());
-    const early = PARTIES_TABLES.filter((table) => declared.includes(table.toLowerCase()));
-    expect(early, "this node declares a table that belongs to kernel-entities-parties").toEqual([]);
   });
 });
 

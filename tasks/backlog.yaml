@@ -451,7 +451,7 @@
       - "Regime holds rates, brackets and deadline days as data, not constants"
       - "Every kernel repository declares its tables with // owns:"
   risk: low
-  status: todo
+  status: done
   note: >
     The first half of kernel-entities, split on size. The six components
     measured 728 implementation lines against a budget that cannot be waived,
@@ -1138,7 +1138,7 @@
       - "A per-task size_total still raises or lowers only that task's total budget"
       - "A waiver without a reason, or with a non-numeric value, still fails closed"
   risk: low
-  status: todo
+  status: done
   note: >
     Five of fifteen substantive tasks had to waive an 800 backstop that was
     calibrated before documentation and generated DDL were excluded from
@@ -1255,7 +1255,7 @@
     assertions:
       - "Both nodes read done, flipped by scripts/mark-task-done.sh"
   risk: low
-  status: todo
+  status: done
   note: >
     A node only because a branch without one takes the strict path and fails
     coverage — see gate-coverage-strict-path below.
@@ -1304,7 +1304,7 @@
       - "Every consumer test file passes unchanged"
       - "The public contract is preserved name for name"
   risk: low
-  status: todo
+  status: done
   note: >
     The reader was hand-rolled: a 187-line character scanner, a seven-state mode
     machine, brace and template depth bookkeeping, a regex-versus-division
@@ -1325,3 +1325,33 @@
     kernel-regime-data.test.ts were read as genuine exports of VAT_RATE = 0.05
     and vatDeadlineDays = 28. Signatures were silently truncated at a brace in a
     return type, and a type alias swallowed the declaration that followed it.
+
+- id: reader-public-surface-precision
+  title: publicDeclarations over-reports a module's public surface
+  phase: 0
+  depends_on: [kernel-source-compiler-api]
+  spec: PIPELINE.md#the-gates
+  produces:
+    - tests/kernel/kernel-source.ts
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "A module's surface is what its index.ts actually exports, named or starred"
+      - "A function the repository exports but index.ts does not name is not on the surface"
+  risk: low
+  status: todo
+  note: >
+    RECORDED, NOT BUILT. It does not let incorrect data ship and does not let a
+    red gate merge, so under the stopping rule it waits behind product work.
+
+    publicDeclarations follows `from "./repository"` and takes the target file
+    whole, so it cannot tell `export { a }` from `export *`: it reports every
+    exported function in the repository whether index.ts names it or not. Found
+    on kernel-entities-parties, where a test built on it stayed green after both
+    enrolment functions were removed from the export block — the surface had
+    lost the API and the sweep could not see it.
+
+    That test now reads the export list directly, so nothing depends on the
+    over-reporting today. Every FUTURE test built on publicDeclarations inherits
+    the blind spot silently, which is why this is written down rather than left
+    in a review thread.
