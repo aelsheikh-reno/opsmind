@@ -43,11 +43,29 @@ Run task `$1` from `tasks/backlog.yaml` through the full pipeline.
    question for Ahmed.
 
 10. **Merge policy by risk.**
-    - `risk: low` → enable auto-merge so the PR lands the moment CI is green:
-      `gh pr merge --auto --squash --delete-branch`
-    - `risk: money` or `compliance` → never auto-merge. Instead:
+    - `risk: low` → merge once CI is green, and merge ONLY through the guard:
+
+      ```
+      ./scripts/merge-when-green.sh <pr-number> squash
+      ```
+
+      Never call `gh api .../merge` or `gh pr merge` directly. The script
+      re-reads the verdict immediately before merging and refuses on anything
+      that is not SUCCESS, failing closed if it cannot read one at all. This is
+      not ceremony: on #30 a polling loop treated a FAILURE verdict as a reason
+      to stop waiting rather than a reason to stop, and the next command merged
+      a red gate into main. There is no branch protection catching that
+      server-side.
+    - `risk: money` or `compliance` → never merge. Instead:
       `gh pr comment --body "risk: <risk> — waiting for Ahmed's review"`
       and leave the PR open. Human adjudication is the point of the tag.
+
+11. **Flip the status.** After a merge succeeds, set that node's `status: done`
+    on main as a follow-up commit. Change ONLY the status line of the node just
+    merged — anchor on the node id, never on the first occurrence of a field
+    name, and confirm the diff touches exactly one line before committing.
+    `tasks/backlog.yaml` has two writers, and a scripted edit anchored on a
+    field name destroyed `staging-deploy`'s waiver reason in #30.
 
 Report at the end: task id, outcome, gates, and anything needing a human. If the
 pipeline stopped, say at which step and why.

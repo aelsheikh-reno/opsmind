@@ -1174,3 +1174,39 @@
     demands, so a branch that resolves no risk fails the coverage gate outright.
     Every fix from here needs a node until the kernel repositories are covered
     or the strict floor is reconsidered.
+
+- id: gate-merge-verdict
+  title: A red gate must block a merge
+  phase: 0
+  depends_on: [gate-empty-diff]
+  spec: PIPELINE.md#the-gates
+  produces:
+    - scripts/merge-when-green.sh
+    - scripts/test-guards.sh
+    - .claude/commands/build-task.md
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "The verdict is re-read immediately before merging, never trusted from earlier"
+      - "Any conclusion that is not SUCCESS refuses the merge and names which"
+      - "An unreadable verdict, or none at all, fails closed"
+      - "build-task merges only through the guard, never through gh directly"
+  risk: low
+  status: todo
+  note: >
+    On #30 the gates reported FAILURE, the polling loop watching them treated
+    FAILURE as a terminal state to stop waiting on, and the next command merged
+    without re-reading anything. Terminal-and-failed and terminal-and-passed
+    shared a code path. A red gate reached main, and the guard that caught the
+    defect — "the committed waiver is printed with its recorded reason" — had
+    fired by name and been ignored.
+
+    There is no branch protection catching this server-side, so the merge step
+    itself has to read the verdict. Making it a script rather than a rule in
+    prose is the point: a rule depends on whoever is holding it next.
+
+    Verified by making it refuse. Fifteen probes cover FAILURE, CANCELLED,
+    TIMED_OUT, ACTION_REQUIRED, SKIPPED, STALE, still-pending, no checks at all,
+    one red among green, a non-OPEN pull request, unreadable JSON and a verdict
+    with no state — and a real pull request with a deliberately failing test was
+    opened, refused with exit 1, and closed unmerged.

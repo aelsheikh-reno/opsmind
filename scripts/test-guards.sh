@@ -466,6 +466,69 @@ check("generated DDL never masks an oversized schema",
       "FAIL" in size_lines(measure({"prisma/migrations/20260101000000_x/migration.sql": 600,
                                     "prisma/schema.prisma": 460}), "size-impl"), out)
 
+# --- a red gate must block a merge -------------------------------------------
+# The guarantee the whole pipeline rests on, and the one that failed. On #30 the
+# gates reported FAILURE, the loop watching them treated FAILURE as a terminal
+# state to stop waiting on, and the next command merged without re-reading
+# anything: terminal-and-failed and terminal-and-passed shared a code path.
+# There is no branch protection catching this server-side, so scripts/merge-
+# when-green.sh is the only thing between a red gate and main.
+#
+# MERGE_VERDICT_JSON injects the payload, so every refusal is probed here rather
+# than needing a live red pull request on every run.
+def merge_verdict(payload):
+    """Run the merge guard against a supplied verdict; return (output, code)."""
+    env = dict(os.environ)
+    env["MERGE_VERDICT_JSON"] = payload
+    r = subprocess.run(["bash", "scripts/merge-when-green.sh", "999"], cwd=REPO,
+                       env=env, capture_output=True, text=True, timeout=60)
+    return (r.stdout + r.stderr, r.returncode)
+
+GREEN = ('{"state":"OPEN","mergeStateStatus":"CLEAN","statusCheckRollup":'
+         '[{"name":"gates","conclusion":"SUCCESS"},{"name":"review","conclusion":"SUCCESS"}]}')
+def one_check(conclusion, merge_state="CLEAN", key="conclusion"):
+    return ('{"state":"OPEN","mergeStateStatus":"%s","statusCheckRollup":'
+            '[{"name":"gates","%s":"%s"}]}' % (merge_state, key, conclusion))
+
+out, code = merge_verdict(GREEN)
+check("a green verdict is permitted to merge", code == 0, "exit %s: %s" % (code, out))
+
+# Every not-SUCCESS state refuses, and NAMES itself — "it failed" and "it never
+# ran" send a reader to different places.
+for conclusion in ("FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "SKIPPED", "STALE"):
+    out, code = merge_verdict(one_check(conclusion, "BLOCKED"))
+    check("a %s check refuses the merge, by name" % conclusion,
+          code == 1 and conclusion in out, "exit %s: %s" % (code, out))
+
+out, code = merge_verdict(one_check("PENDING", "BLOCKED", key="state"))
+check("a check still running refuses the merge", code == 1, "exit %s: %s" % (code, out))
+
+out, code = merge_verdict('{"state":"OPEN","mergeStateStatus":"CLEAN","statusCheckRollup":[]}')
+check("no checks at all refuses — silence is not a pass",
+      code == 1 and "no gates" in out, "exit %s: %s" % (code, out))
+
+out, code = merge_verdict('{"state":"OPEN","mergeStateStatus":"CLEAN","statusCheckRollup":'
+                          '[{"name":"gates","conclusion":"SUCCESS"},{"name":"review","conclusion":"FAILURE"}]}')
+check("one red check among green ones still refuses",
+      code == 1 and "review=FAILURE" in out, "exit %s: %s" % (code, out))
+
+# Fail closed: an unreadable verdict is not an absent objection.
+for label, payload in (("unreadable JSON", "not json at all"),
+                       ("a verdict with no state", "{}")):
+    out, code = merge_verdict(payload)
+    check("%s fails closed rather than merging" % label,
+          code == 2, "exit %s: %s" % (code, out))
+
+out, code = merge_verdict('{"state":"MERGED","mergeStateStatus":"CLEAN","statusCheckRollup":'
+                          '[{"name":"gates","conclusion":"SUCCESS"}]}')
+check("a pull request that is not OPEN refuses", code == 1, "exit %s: %s" % (code, out))
+
+# The pipeline must route through the guard rather than around it.
+build_task = open(os.path.join(REPO, ".claude/commands/build-task.md")).read()
+check("build-task merges only through the guard",
+      "merge-when-green.sh" in build_task
+      and "gh pr merge --auto" not in build_task, build_task[-400:])
+
 # --- migrations must survive .gitignore --------------------------------------
 # `prisma migrate deploy` applies committed migration files and nothing else. It
 # runs in gates.yml and again on every staging deploy, so a migration.sql that
