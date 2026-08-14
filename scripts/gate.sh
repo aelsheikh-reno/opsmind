@@ -175,6 +175,68 @@ run "lint"   "npx eslint ."
 run "types"  "npx tsc --noEmit"
 run "tests"  "npx vitest run"
 
+# ---- test count: a ratchet, so the suite cannot quietly shrink ---------------
+# Every other gate answers "did what ran pass". None answers "did everything
+# still run". A file whose import breaks reports its neighbours green, a
+# describe block lost in a merge resolution leaves no trace, and a refactor can
+# drop cases without touching a line anyone reads. tests/baseline.json holds the
+# floor; this fails on a DECREASE only, so adding tests never blocks anyone.
+#
+# The count is the runtime total, not a grep for `it(`. Static counting misses
+# the failure this exists for — a file that still declares forty tests but no
+# longer loads declares them to nobody — and it miscounts `it.each` tables,
+# which expand at run time.
+#
+# A task that legitimately removes tests records `test_count_waiver` on its
+# backlog node with a reason, resolved the same way and from the same committed
+# file as size_total. A waived floor is printed with its reason; it is never
+# silent.
+test_baseline=$(sed -n 's/.*"tests"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' tests/baseline.json 2>/dev/null | head -1)
+if [[ -z "$test_baseline" ]]; then
+  printf '%-14s' "test-count"; echo "FAIL"
+  echo "    tests/baseline.json is missing or has no numeric \"tests\" — refusing to skip the ratchet"
+  fail=1
+else
+  count_waiver=""
+  if [[ -f tasks/backlog.yaml && "$size_branch" == task/* ]]; then
+    if declared=$(from_backlog "${size_branch#task/}" test_count_waiver); then
+      reason=$(from_backlog "${size_branch#task/}" test_count_waiver_reason)
+      reason="${reason#"${reason%%[![:space:]]*}"}"; reason="${reason%"${reason##*[![:space:]]}"}"
+      if [[ ! "$declared" =~ ^[0-9]+$ ]]; then
+        printf '%-14s' "test-count"; echo "FAIL"
+        echo "    test_count_waiver: '$declared' is not a number; refusing to guess a floor"
+        fail=1; test_baseline=""
+      elif [[ -z "$reason" ]]; then
+        printf '%-14s' "test-count"; echo "FAIL"
+        echo "    test_count_waiver=$declared with no test_count_waiver_reason — an unexplained"
+        echo "    shrink is exactly what this gate exists to surface"
+        fail=1; test_baseline=""
+      else
+        count_waiver="task '${size_branch#task/}' lowers the floor to $declared — $reason"
+        test_baseline="$declared"
+      fi
+    fi
+  fi
+  if [[ -n "$test_baseline" ]]; then
+    [[ -n "$count_waiver" ]] && printf '%-14s%s\n' "count-waiver" "$count_waiver"
+    actual=$(npx vitest run --reporter=json --outputFile=/dev/stdout 2>/dev/null \
+             | sed -n 's/.*"numTotalTests"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -1)
+    if [[ -z "$actual" ]]; then
+      printf '%-14s' "test-count"; echo "FAIL"
+      echo "    could not read a test count from vitest — refusing to pass a gate that measured nothing"
+      fail=1
+    elif (( actual < test_baseline )); then
+      printf '%-14s' "test-count"; echo "FAIL"
+      echo "    $actual tests, floor is $test_baseline — $((test_baseline - actual)) fewer than the base."
+      echo "    If that is deliberate, record test_count_waiver on the task with a reason."
+      fail=1
+    else
+      run "test-count" "true"
+      (( actual > test_baseline )) && echo "    $actual tests against a floor of $test_baseline — bump tests/baseline.json to keep the ratchet tight"
+    fi
+  fi
+fi
+
 printf '%-14s%s\n' "risk" "$risk  (from $risk_source)"
 case "$risk" in
   money|compliance) cov=90 ;;
