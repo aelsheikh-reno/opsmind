@@ -451,7 +451,7 @@
       - "Regime holds rates, brackets and deadline days as data, not constants"
       - "Every kernel repository declares its tables with // owns:"
   risk: low
-  status: todo
+  status: done
   note: >
     The first half of kernel-entities, split on size. The six components
     measured 728 implementation lines against a budget that cannot be waived,
