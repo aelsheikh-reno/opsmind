@@ -1228,7 +1228,7 @@
       - "It reverts its own edit when it refuses"
       - "build-task flips status only through it"
   risk: low
-  status: todo
+  status: done
   note: >
     Six occurrences of the status lag and three /next selections that returned
     already-built work. Writing the flip into build-task.md as an instruction
