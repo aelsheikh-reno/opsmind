@@ -60,12 +60,18 @@ Run task `$1` from `tasks/backlog.yaml` through the full pipeline.
       `gh pr comment --body "risk: <risk> — waiting for Ahmed's review"`
       and leave the PR open. Human adjudication is the point of the tag.
 
-11. **Flip the status.** After a merge succeeds, set that node's `status: done`
-    on main as a follow-up commit. Change ONLY the status line of the node just
-    merged — anchor on the node id, never on the first occurrence of a field
-    name, and confirm the diff touches exactly one line before committing.
+11. **Flip the status**, and only through the script:
+
+    ```
+    ./scripts/mark-task-done.sh <task-id>
+    ```
+
+    Never edit `status:` by hand or with a one-off script. It anchors on the
+    node id, edits that node's status line and nothing else, and reverts itself
+    if the resulting diff is anything other than one changed line in one file.
     `tasks/backlog.yaml` has two writers, and a scripted edit anchored on a
-    field name destroyed `staging-deploy`'s waiver reason in #30.
+    field name destroyed `staging-deploy`'s waiver reason in #30 — twelve nodes
+    away from the one it meant. Commit the result to main as a follow-up.
 
 Report at the end: task id, outcome, gates, and anything needing a human. If the
 pipeline stopped, say at which step and why.

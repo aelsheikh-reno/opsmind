@@ -1210,3 +1210,35 @@
     one red among green, a non-OPEN pull request, unreadable JSON and a verdict
     with no state — and a real pull request with a deliberately failing test was
     opened, refused with exit 1, and closed unmerged.
+
+- id: gate-mark-task-done
+  title: The status flip is a script, and it touches one line
+  phase: 0
+  depends_on: [gate-merge-verdict]
+  spec: PIPELINE.md#the-gates
+  produces:
+    - scripts/mark-task-done.sh
+    - scripts/test-guards.sh
+    - .claude/commands/build-task.md
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "It anchors on the node id, never on a field name"
+      - "It refuses an unknown id, a node already done, and any diff other than one changed line"
+      - "It reverts its own edit when it refuses"
+      - "build-task flips status only through it"
+  risk: low
+  status: todo
+  note: >
+    Six occurrences of the status lag and three /next selections that returned
+    already-built work. Writing the flip into build-task.md as an instruction
+    was the previous answer, and the merge bug settled what an instruction in
+    that file is worth: it said merge only when green, and a red gate reached
+    main anyway.
+
+    Deliberately narrow, because tasks/backlog.yaml has two writers and a
+    scripted edit anchoring on the file's FIRST size_waiver_reason destroyed
+    staging-deploy's — twelve nodes from the one it meant. This anchors on the
+    node id, edits inside that node's block, then checks the damage rather than
+    trusting itself: anything other than one changed line in one file is
+    reverted and refused.
