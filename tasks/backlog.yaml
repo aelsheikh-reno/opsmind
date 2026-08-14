@@ -665,3 +665,39 @@
 
     Subject matter overlaps kernel-entities and kernel-registry-fx, which build
     the lib/kernel/ code over these tables; this node is the schema they need.
+
+- id: gate-test-count
+  title: A ratchet so the suite cannot quietly shrink
+  phase: 0
+  depends_on: [scaffold-project]
+  spec: PIPELINE.md#the-gates
+  produces:
+    - scripts/gate.sh
+    - scripts/test-guards.sh
+    - tests/baseline.json
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "A drop in the runtime test count fails the gate, naming the shortfall"
+      - "A deleted test file and a file whose import breaks both fail it"
+      - "test_count_waiver lowers the floor only for the task that records it, and only with a reason"
+      - "A missing baseline, an unreadable count or a waiver without a reason fails closed"
+  risk: low
+  status: todo
+  note: >
+    Every other gate answers "did what ran pass". None answers "did everything
+    still run". A file whose import breaks reports its neighbours green, a
+    describe block lost in a merge resolution leaves no trace, and a refactor
+    can drop cases without touching a line anyone reads.
+
+    The count is the runtime total from vitest, not a grep for `it(`. Static
+    counting misses the case this exists for — a file that still declares forty
+    tests but no longer loads declares them to nobody — and it miscounts
+    `it.each` tables, which expand at run time.
+
+    Audited before building it: the count never decreased across any merged
+    commit on main (109 to 230 over twelve merges), so nothing has shipped on a
+    shrunken suite. The near-miss that prompted this was transient in an
+    uncommitted tree, and the `tests` gate would have caught it — a grep filter
+    hid the failure line, not the gate. This is defence in depth, not a hole
+    being closed.
