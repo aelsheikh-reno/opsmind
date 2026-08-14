@@ -1304,7 +1304,7 @@
       - "Every consumer test file passes unchanged"
       - "The public contract is preserved name for name"
   risk: low
-  status: todo
+  status: done
   note: >
     The reader was hand-rolled: a 187-line character scanner, a seven-state mode
     machine, brace and template depth bookkeeping, a regex-versus-division
