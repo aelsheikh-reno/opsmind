@@ -1255,7 +1255,7 @@
     assertions:
       - "Both nodes read done, flipped by scripts/mark-task-done.sh"
   risk: low
-  status: todo
+  status: done
   note: >
     A node only because a branch without one takes the strict path and fails
     coverage — see gate-coverage-strict-path below.
