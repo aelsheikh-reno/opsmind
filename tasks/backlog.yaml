@@ -289,7 +289,7 @@
       - "JurisdictionEnrolment is unique on (legalEntityId, regimeId)"
       - "Jurisdiction carries a business calendar with a weekend mask"
   risk: compliance
-  status: todo
+  status: done
   note: >
     Unblocked 2026-08-14: the architecture specification is committed. The spec
     pointer names data-model.md, which carries the field-level shapes, rather
@@ -514,7 +514,7 @@
       - "The graph records what has merged, and no node's status is invented"
       - "decisions.md keeps ADR-026, which landed ahead of it with the gate change"
   risk: low
-  status: todo
+  status: done
   note: >
     The specification was committed on task/harness-exact-minor-scaling, a
     branch named for a task that merged as #10, and could not land while
