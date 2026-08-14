@@ -44,6 +44,8 @@ Acknowledgement pauses paging but never closes: if the resolve window lapses whi
 ## Resolution semantics — the load-bearing rule
 
 - **Absence from a completed report resolves.** The run evaluated everything; this fingerprint was not breached. Affirmative, not inferred.
+- **Completeness is scoped, and the scope is declared.** A run may be complete for part of its domain and not the rest. The deadline monitor evaluates jurisdiction by jurisdiction: if one jurisdiction has no business calendar it cannot be scored, and the run continues without it. Absence then resolves **only within the scopes the run declares complete**. Alerts in an incomplete scope stay open, are marked STALE, and are never resolved by absence — the run did not look, and not looking is not the same as finding nothing.
+- **A partial run is never presented as whole.** The alternative — aborting so the report is either total or absent — takes every jurisdiction dark for one bad calendar, which is a larger failure than the one it avoids. Reporting the healthy scopes and naming the broken one is the honest shape, and the missing calendar raises its own misconfiguration alert so the gap is visible rather than merely survivable. Ahmed's decision, 2026-08-14.
 - **No report at all never resolves.** The alerts freeze open as STALE and the engine — acting as a source about its own inputs — raises one source-dark alert per dark source, escalated to engineering. A dead watcher can flag alerts unconfirmed but can never close them.
 - **fire_only sources** (integrations that cannot report clean) are declared as such and get quiet-window auto-resolve as the accepted degraded mode.
 
