@@ -208,6 +208,22 @@ run "coverage" "npx vitest run --coverage --coverage.thresholds.lines=$cov"
 # pattern would silently exempt whatever a later task happens to name. It is
 # excluded from size-impl only; size-total still counts every one of its lines.
 #
+# Documentation is excluded from size-impl for the reason the split exists at
+# all. CLAUDE.md requires a behaviour change and its documentation in the same
+# PR, and the reviewer fails a PR that lets the docs drift from the code. If
+# prose is charged to the code budget, then every task that correctly updates
+# its spec pays for doing so out of the allowance meant to force a split, and
+# the cheapest way to pass the gate becomes leaving the documentation alone —
+# the same perverse incentive that tests/ and test-guards.sh were exempted to
+# avoid, pointed at the one artifact the reviewer is instructed to check.
+#
+# The exclusion assumes markdown never carries executable content. That holds
+# today: nothing in this repository extracts and runs fenced code blocks, and no
+# tool treats a .md file as a source of behaviour. Should that ever change —
+# literate tests, a doc-driven fixture, generated code committed inside a fence —
+# markdown stops being prose the gate can safely stop measuring, and this
+# exclusion has to be revisited rather than trusted.
+#
 # Lockfiles are excluded from both: generated, not authored, unsplittable across
 # PRs, and required by npm ci — counting them made phase 0 unpassable by any
 # code change at all. The gate measures what a human has to review.
@@ -225,7 +241,11 @@ base="${GATE_BASE:-origin/main}"
 git rev-parse --verify -q "$base" >/dev/null || git fetch -q origin main 2>/dev/null || true
 if git rev-parse --verify -q "$base" >/dev/null; then
   added() { git diff --numstat "$base..." -- ':(top)' "${nolock[@]}" "$@" 2>/dev/null | awk '{a+=$1} END {print a+0}'; }
-  impl=$(added ':(top,exclude)tests/' ':(top,exclude)scripts/test-guards.sh'); total=$(added)
+  # docs/ covers the specification tree; *.md catches prose that lives beside
+  # the code it describes — a module README is documentation wherever it sits.
+  # Both are size-impl only: size-total below still counts every line.
+  impl=$(added ':(top,exclude)docs/' ':(top,exclude)*.md' \
+               ':(top,exclude)tests/' ':(top,exclude)scripts/test-guards.sh'); total=$(added)
   run "size-impl"  "test $impl -lt $impl_budget || { echo 'implementation is $impl added lines, limit $impl_budget — split the task'; false; }"
   run "size-total" "test $total -lt $total_budget || { echo 'whole diff is $total added lines, limit $total_budget — split the task'; false; }"
 else
