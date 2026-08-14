@@ -231,15 +231,10 @@
   spec: runner/PROXMOX.md
   size_total: 1800
   size_waiver_reason: >
-    960 of ~2100 test lines are tests/kernel/kernel-source.ts and its fixtures,
-    the reader the // owns: assertion depends on — a claim about source
-    structure no runtime test can make. Implementation is ~400 against the
-    unchanged 400, and this reason counts itself. Review judged the waiver
-    larger than the work justifies, because the reader is hand-rolled and
-    typescript is already a devDependency; granted once, on the condition that
-    replacing it is settled before kernel-entities-parties reuses it. The full
-    argument is in the PR.
-
+    1270 of the 1578 lines are tests/deploy/staging-deploy.test.ts, which must
+    parse a Dockerfile, a compose file and a workflow to prove anything at all;
+    ~450 lines of that is shared parsing machinery. Implementation is 308
+    against the unchanged 400 budget.
   produces:
     - Dockerfile
     - docker-compose.staging.yml
