@@ -322,6 +322,26 @@ nolock=(':(top,exclude)*package-lock.json')
 base="${GATE_BASE:-origin/main}"
 git rev-parse --verify -q "$base" >/dev/null || git fetch -q origin main 2>/dev/null || true
 if git rev-parse --verify -q "$base" >/dev/null; then
+  # An empty diff is not a pass. The size gates measure `$base...HEAD`, so a
+  # branch with nothing committed measures zero and every budget reports green
+  # having weighed nothing — which is exactly how a 450-line task once reported
+  # size-impl pass against a 400 limit. "Nothing changed" and "nothing
+  # committed" are different mistakes and must not print the same word.
+  #
+  # Checked with --quiet rather than the added-line count: a diff that only
+  # deletes lines adds zero and is emphatically not empty.
+  if git diff --quiet "$base..." 2>/dev/null; then
+    printf '%-14s' "diff"; echo "FAIL"
+    if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
+      echo "    nothing is committed — $base...HEAD is empty while $(git status --porcelain | wc -l | tr -d ' ') file(s) sit uncommitted."
+      echo "    Every gate below would measure an empty tree. Commit, then re-run."
+    else
+      echo "    the diff against $base is empty and the tree is clean — this task produced nothing."
+      echo "    A task that changes nothing has not been done; it has been skipped."
+    fi
+    fail=1
+  fi
+
   added() { git diff --numstat "$base..." -- ':(top)' "${nolock[@]}" "$@" 2>/dev/null | awk '{a+=$1} END {print a+0}'; }
   # docs/ covers the specification tree; *.md catches prose that lives beside
   # the code it describes — a module README is documentation wherever it sits.

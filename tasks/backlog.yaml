@@ -701,3 +701,35 @@
     uncommitted tree, and the `tests` gate would have caught it — a grep filter
     hid the failure line, not the gate. This is defence in depth, not a hole
     being closed.
+
+- id: gate-empty-diff
+  title: An empty diff is not a pass
+  phase: 0
+  depends_on: [scaffold-project]
+  spec: PIPELINE.md#the-gates
+  produces:
+    - scripts/gate.sh
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "An empty diff against the base fails the gate"
+      - "Nothing-committed and nothing-changed report differently, and the first counts the uncommitted files"
+      - "A diff that only deletes lines is not treated as empty"
+      - "The gates below it are unaffected when a diff exists"
+  risk: low
+  status: todo
+  note: >
+    The size gates measure `$base...HEAD`, so a branch with nothing committed
+    measures zero and every budget reports green having weighed nothing. That
+    is not hypothetical: kernel-schema-base reported size-impl pass against the
+    non-overridable 400 while actually standing at 450, because the work was
+    staged and not committed, and the number went into a waiver reason before a
+    reviewer caught it.
+
+    Checked with `git diff --quiet` rather than the added-line count, because a
+    diff that only deletes lines adds zero and is emphatically not empty.
+
+    The two cases print differently on purpose. "Nothing committed" is a
+    process slip with an obvious fix and names how many files are waiting;
+    "nothing changed" on a clean tree means the task produced nothing at all,
+    which is a different conversation.
