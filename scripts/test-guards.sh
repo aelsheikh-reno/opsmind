@@ -423,6 +423,34 @@ check("scripts/test-guards.sh stays out of size-impl",
                           "lib/modules/deadlines/calendar.ts": 40}),
                  "size-impl").endswith("pass"), out)
 
+# --- generated migration DDL is not implementation ---------------------------
+# ADR-028. The exclusion has to be narrow or it becomes a way to smuggle
+# hand-written SQL past the budget, so the negative case is pinned as hard as
+# the positive one: a .sql anywhere outside prisma/migrations/ is authored work
+# and must stay measured.
+out = measure({"prisma/migrations/20260101000000_x/migration.sql": 600,
+               "prisma/schema.prisma": 40})
+check("generated migration DDL is outside the implementation budget",
+      size_lines(out, "size-impl").endswith("pass"), out)
+# 900 lines of DDL beside 40 of schema: untaxed by size-impl, still charged in
+# full to the backstop. Without this the exclusion could have been written into
+# both budgets and every other probe here would still pass.
+big = measure({"prisma/migrations/20260101000000_x/migration.sql": 900,
+               "prisma/schema.prisma": 40})
+check("...but size-total still counts every line of it",
+      "FAIL" in size_lines(big, "size-total") and shows(big, 940), big)
+check("...while that same change stays clear of size-impl",
+      size_lines(big, "size-impl").endswith("pass"), big)
+
+check("a hand-written .sql outside prisma/migrations/ is still implementation",
+      "FAIL" in size_lines(measure({"scripts/backfill-direction.sql": 460}),
+                           "size-impl"), out)
+check("a .sql directly under prisma/ is still implementation",
+      "FAIL" in size_lines(measure({"prisma/seed.sql": 460}), "size-impl"), out)
+check("generated DDL never masks an oversized schema",
+      "FAIL" in size_lines(measure({"prisma/migrations/20260101000000_x/migration.sql": 600,
+                                    "prisma/schema.prisma": 460}), "size-impl"), out)
+
 # --- migrations must survive .gitignore --------------------------------------
 # `prisma migrate deploy` applies committed migration files and nothing else. It
 # runs in gates.yml and again on every staging deploy, so a migration.sql that
