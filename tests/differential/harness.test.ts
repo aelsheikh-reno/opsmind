@@ -106,15 +106,18 @@ describe("runDifferential — diffing and the strictness of `matched`", () => {
 
   // The single most valuable test in this file. Kuwait and Bahrain price in
   // three-decimal currencies, so a real one-fils gap is finer than the default
-  // minor-unit scale of 100: it scales to the same integer and diffFields
-  // returns cause `rounding` with a gap of 0. If `matched` were anything but
-  // strict, two live jurisdictions would be silently wrong on every payslip.
-  it("does NOT match a `rounding` difference — sub-minor-unit KWD, or inside a tolerance", async () => {
+  // minor-unit scale of 100: it scales to the same integer, so the gap measured
+  // in minor units is 0. It carries its own cause `sub-minor-unit` rather than
+  // `rounding`, precisely so no consumer can drop it as tolerated noise — and
+  // `matched` stays strict, because if it did not, two live jurisdictions would
+  // be silently wrong on every payslip.
+  it("does NOT match a sub-minor-unit KWD gap, nor a difference inside a tolerance", async () => {
     const subMinor = await runDifferential(pairSpec([
       ["KWD one fils", { amount: 1234.567, currency: "KWD" }, { amount: 1234.568, currency: "KWD" }],
     ]));
     expect(subMinor.results[0].differences).toHaveLength(1);
-    expect(subMinor.results[0].differences[0].cause).toBe("rounding");
+    expect(subMinor.results[0].differences[0].cause).toBe("sub-minor-unit");
+    expect(subMinor.results[0].differences[0].cause).not.toBe("rounding");
     expect(subMinor.results[0].differences[0].path).toBe("amount");
     expect(subMinor.results[0].matched).toBe(false);
     expect(subMinor.matched).toBe(0);
@@ -128,6 +131,26 @@ describe("runDifferential — diffing and the strictness of `matched`", () => {
     expect(tolerated.results[0].matched).toBe(false);
     expect(tolerated.failed).toBe(1);
     expectConsistent(tolerated);
+  });
+
+  // Assertion 2 at the harness level: a tolerance is the one lever a caller has,
+  // and no setting of it may make the KWD case match or turn the difference into
+  // something a rounding filter would swallow.
+  it("keeps a sub-minor-unit KWD gap failing at every tolerance, generous ones included", async () => {
+    for (const toleranceMinorUnits of [0, 1, 5, 1_000_000]) {
+      const report = await runDifferential(
+        pairSpec([["KWD one fils", { amount: 1234.567 }, { amount: 1234.568 }]], { toleranceMinorUnits }),
+      );
+      const label = `tolerance ${toleranceMinorUnits}`;
+      expect(report.results[0].differences, label).toHaveLength(1);
+      expect(report.results[0].differences[0].cause, label).toBe("sub-minor-unit");
+      expect(report.results[0].matched, label).toBe(false);
+      expect(report.matched, label).toBe(0);
+      expect(report.failed, label).toBe(1);
+      // A consumer discarding `rounding` as noise still has the real gap in hand.
+      expect(report.results[0].differences.filter((d) => d.cause !== "rounding"), label).toHaveLength(1);
+      expectConsistent(report);
+    }
   });
 
   it("forwards options to the diff — ignorePaths and minorUnitScale", async () => {
@@ -144,7 +167,15 @@ describe("runDifferential — diffing and the strictness of `matched`", () => {
     );
     expect(scaled.results[0].differences[0].cause).toBe("value-mismatch");
     expect(scaled.results[0].matched).toBe(false);
-    for (const report of [ignored, scaled]) expectConsistent(report);
+    // ...and a one-minor-unit gap at that scale is an ordinary rounding once a
+    // tolerance allows for it — still not a match.
+    const rounded = await runDifferential(
+      pairSpec([["KWD at fils scale", { amount: 1234.567 }, { amount: 1234.568 }]],
+        { minorUnitScale: 1000, toleranceMinorUnits: 1 }),
+    );
+    expect(rounded.results[0].differences[0].cause).toBe("rounding");
+    expect(rounded.results[0].matched).toBe(false);
+    for (const report of [ignored, scaled, rounded]) expectConsistent(report);
   });
 });
 
@@ -248,15 +279,32 @@ describe("formatReport", () => {
       cases: Object.keys(pairs).map((name) => ({ name, input: name })),
     });
     const text = formatReport(report);
-    // Without the raw values a `rounding` difference with a gap of 0 reads as
-    // "no difference", and the sub-minor-unit KWD case stops being honest.
-    for (const token of ["1234.567", "1234.568", "amount", "rounding", "KWD one fils",
+    // Without the raw values a difference whose gap measures 0 minor units reads
+    // as "no difference", and the sub-minor-unit KWD case stops being honest.
+    for (const token of ["1234.567", "1234.568", "amount", "sub-minor-unit", "KWD one fils",
       "egypt tax bracket", "tax", "band", "value-mismatch", "throwing case", "legacy-module-blew-up"]) {
       expect(text, token).toContain(token);
     }
     for (const failed of report.results.filter((r) => !r.matched)) {
       for (const difference of failed.differences) expect(text).toContain(difference.detail);
     }
+    expectConsistent(report);
+  });
+
+  it("prints a sub-minor-unit gap under its own cause, alongside a real rounding", async () => {
+    const report = await runDifferential(pairSpec([
+      ["KWD sub-minor", { amount: 1234.567 }, { amount: 1234.568 }],
+      ["AED one fils", { amount: 8000.33 }, { amount: 8000.34 }],
+    ], { toleranceMinorUnits: 1 }));
+    expect(byName(report, "KWD sub-minor").differences[0].cause).toBe("sub-minor-unit");
+    expect(byName(report, "AED one fils").differences[0].cause).toBe("rounding");
+    const text = formatReport(report);
+    for (const token of ["sub-minor-unit", "rounding", "KWD sub-minor", "AED one fils"]) {
+      expect(text, token).toContain(token);
+    }
+    // `matched` is strict for both: neither is tolerated away.
+    expect(report.matched).toBe(0);
+    expect(report.failed).toBe(2);
     expectConsistent(report);
   });
 

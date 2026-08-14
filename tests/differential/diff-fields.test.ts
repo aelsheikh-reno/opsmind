@@ -11,6 +11,12 @@
 //   3. tolerance in whole minor units         -> "tolerance"
 //   4. nothing silently equal                 -> "values it cannot compare",
 //      "cycles"
+//
+// Assertion map (tasks/backlog.yaml#harness-sub-minor-cause):
+//   1. a gap finer than minorUnitScale gets a cause distinct from rounding
+//      -> "sub-minor-unit gaps"
+//   2. no consumer can filter it away as tolerated noise
+//      -> "sub-minor-unit gaps" / tolerance-cannot-mask cases
 import { describe, expect, it } from "vitest";
 import { diffFields } from "@/tests/differential/diff-fields";
 import type { DiffOptions, DifferenceCause, FieldDifference } from "@/tests/differential/diff-fields";
@@ -19,7 +25,8 @@ import type { DiffOptions, DifferenceCause, FieldDifference } from "@/tests/diff
 // vocabulary changes, this file stops compiling rather than drifting quietly.
 const ALL_CAUSES: DifferenceCause[] = [
   "value-mismatch", "type-mismatch", "missing-in-candidate", "missing-in-legacy",
-  "array-length", "rounding", "date-mismatch", "unsupported-type", "cycle",
+  "array-length", "rounding", "sub-minor-unit", "date-mismatch", "unsupported-type",
+  "cycle",
 ];
 
 // ------------------------------------------------------------------ helpers --
@@ -332,6 +339,173 @@ describe("tolerance", () => {
   });
 });
 
+// ========================= harness-sub-minor-cause · a gap finer than scale ==
+
+describe("sub-minor-unit gaps", () => {
+  // Kuwait and Bahrain price in three-decimal currencies. Run against the
+  // default minorUnitScale of 100, a genuine one-fils KWD or BHD gap is finer
+  // than a minor unit: both sides scale to the same integer, so the gap in
+  // minor units is zero. Zero is inside every tolerance, which is exactly why
+  // it must not be called `rounding` — a consumer that drops rounding as
+  // tolerated noise would drop a real discrepancy on two live jurisdictions.
+  const SUB_MINOR: [number, number][] = [
+    [1234.567, 1234.568],   // the motivating KWD pair
+    [8000.331, 8000.332],
+    [12500.501, 12500.502],
+    [70.071, 70.072],
+    [0.001, 0.002],
+    [999999.991, 999999.992],
+    [-1234.567, -1234.568],
+    [-0.001, -0.002],
+  ];
+
+  it.each(SUB_MINOR)("classifies %d vs %d as sub-minor-unit at the default scale", (legacy, candidate) => {
+    expect(causeOf(legacy, candidate)).toBe("sub-minor-unit");
+    // Direction must not change the classification.
+    expect(causeOf(candidate, legacy)).toBe("sub-minor-unit");
+  });
+
+  // Assertion 2. A gap of zero minor units sits inside every tolerance, so a
+  // tolerance-driven classifier would call all of these `rounding`. None of
+  // these tolerances — including the default 0 — may reclassify or suppress it.
+  describe.each([0, 1, 2, 100, 1_000_000])("at toleranceMinorUnits %i", (toleranceMinorUnits) => {
+    it("still reports sub-minor-unit, never rounding and never nothing", () => {
+      for (const [legacy, candidate] of SUB_MINOR) {
+        const diffs = diffFields(legacy, candidate, { toleranceMinorUnits });
+        expect(diffs, `${legacy} vs ${candidate}`).toHaveLength(1);
+        expect(diffs[0].cause, `${legacy} vs ${candidate}`).toBe("sub-minor-unit");
+        expect(diffs[0].cause).not.toBe("rounding");
+      }
+    });
+  });
+
+  it("survives a consumer that filters `rounding` away as tolerated noise", () => {
+    const diffs = diffFields(
+      { kwd: 1234.567, aed: 8000.33 },
+      { kwd: 1234.568, aed: 8000.34 },
+      { toleranceMinorUnits: 1 },
+    );
+    expect(at(diffs, "aed").cause).toBe("rounding");
+    expect(at(diffs, "kwd").cause).toBe("sub-minor-unit");
+    // The whole point of the new cause: this filter must not be able to reach it.
+    expect(pathsOf(diffs.filter((d) => d.cause !== "rounding"))).toEqual(["kwd"]);
+  });
+
+  it("is a whole minor unit once the scale is right for a three-decimal currency", () => {
+    const fils = { minorUnitScale: 1000 };
+    expect(causeOf(1234.567, 1234.568, fils)).toBe("value-mismatch");
+    expect(causeOf(1234.567, 1234.568, { ...fils, toleranceMinorUnits: 0 })).toBe("value-mismatch");
+    expect(causeOf(1234.567, 1234.568, { ...fils, toleranceMinorUnits: 1 })).toBe("rounding");
+    expect(causeOf(1234.567, 1234.568, { ...fils, toleranceMinorUnits: 9 })).toBe("rounding");
+    expect(causeOf(1234.567, 1234.569, { ...fils, toleranceMinorUnits: 1 })).toBe("value-mismatch");
+  });
+
+  it("applies the new cause at whatever scale is configured, not only at 100", () => {
+    // A fourth decimal is sub-minor even for a correctly configured KWD run.
+    expect(causeOf(1234.5671, 1234.5672, { minorUnitScale: 1000 })).toBe("sub-minor-unit");
+    expect(causeOf(1234.5671, 1234.5672, { minorUnitScale: 1000, toleranceMinorUnits: 5 })).toBe("sub-minor-unit");
+    // A whole-unit scale: anything below a whole unit is sub-minor.
+    expect(causeOf(5.1, 5.2, { minorUnitScale: 1 })).toBe("sub-minor-unit");
+    expect(causeOf(5, 6, { minorUnitScale: 1, toleranceMinorUnits: 1 })).toBe("rounding");
+    expect(causeOf(5, 6, { minorUnitScale: 1 })).toBe("value-mismatch");
+  });
+
+  it("leaves the one-minor-unit boundary exactly where it was", () => {
+    expect(causeOf(1234.56, 1234.57, { toleranceMinorUnits: 1 })).toBe("rounding");
+    expect(causeOf(1234.56, 1234.57, { toleranceMinorUnits: 0 })).toBe("value-mismatch");
+    expect(causeOf(1234.56, 1234.57)).toBe("value-mismatch");
+    expect(causeOf(1234.56, 1234.58, { toleranceMinorUnits: 1 })).toBe("value-mismatch");
+    expect(causeOf(8000.33, 8000.34, { toleranceMinorUnits: 1 })).toBe("rounding");
+    expect(causeOf(8000.33, 8000.34, { toleranceMinorUnits: 0 })).toBe("value-mismatch");
+  });
+
+  it("reports a nested sub-minor-unit gap at its own path", () => {
+    const diffs = diffFields(
+      { payslip: { net: 1234.567, components: [{ amount: 8000.331 }, { amount: 70.07 }] } },
+      { payslip: { net: 1234.568, components: [{ amount: 8000.332 }, { amount: 70.08 }] } },
+      { toleranceMinorUnits: 1 },
+    );
+    expect(pathsOf(diffs)).toEqual([
+      "payslip.components[0].amount", "payslip.components[1].amount", "payslip.net",
+    ]);
+    expect(at(diffs, "payslip.net").cause).toBe("sub-minor-unit");
+    expect(at(diffs, "payslip.components[0].amount").cause).toBe("sub-minor-unit");
+    expect(at(diffs, "payslip.components[1].amount").cause).toBe("rounding");
+    // Bare array root, so the bracket path is exercised without an object above it.
+    expect(at(diffFields([1234.567], [1234.568]), "[0]").cause).toBe("sub-minor-unit");
+  });
+
+  it("names both raw values in the detail and carries them verbatim", () => {
+    const diff = single(diffFields(1234.567, 1234.568, { toleranceMinorUnits: 5 }));
+    expect(diff.cause).toBe("sub-minor-unit");
+    // Without the raw values a gap of zero minor units reads as "no difference".
+    expect(diff.detail).toContain("1234.567");
+    expect(diff.detail).toContain("1234.568");
+    expect(diff.legacy).toBe(1234.567);
+    expect(diff.candidate).toBe(1234.568);
+  });
+
+  it("gives a detail distinct from a rounding and from a value mismatch", () => {
+    const options = { toleranceMinorUnits: 1 };
+    const subMinor = single(diffFields(1234.567, 1234.568, options)).detail;
+    const rounding = single(diffFields(1234.56, 1234.57, options)).detail;
+    const mismatch = single(diffFields(1234.56, 1234.58, options)).detail;
+    expect(new Set([subMinor, rounding, mismatch]).size).toBe(3);
+    for (const detail of [subMinor, rounding, mismatch]) expect(detail.trim().length).toBeGreaterThan(0);
+  });
+
+  // A non-finite value, or one large enough that scaling it overflows to
+  // Infinity, also "scales to the same integer" as its counterpart. Those are
+  // not sub-minor gaps and must keep the classification they already had.
+  it("never sweeps a non-finite or overflowing gap into the new cause", () => {
+    const cases: [unknown, unknown][] = [
+      [Number.POSITIVE_INFINITY, 1e308],
+      [1e308, Number.POSITIVE_INFINITY],
+      [Number.NEGATIVE_INFINITY, -1e308],
+      [Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY],
+      [Number.NaN, 1234.567],
+      [1234.567, Number.NaN],
+      [1e307, 2e307], // both overflow to Infinity when scaled by 100
+    ];
+    for (const options of [undefined, { toleranceMinorUnits: 0 }, { toleranceMinorUnits: 1_000_000 }]) {
+      for (const [legacy, candidate] of cases) {
+        const cause = causeOf(legacy, candidate, options);
+        expect(cause, `${String(legacy)} vs ${String(candidate)}`).toBe("value-mismatch");
+      }
+    }
+  });
+
+  it("reports nothing at all when the amounts are equal, at any scale or tolerance", () => {
+    expect(diffFields(1234.567, 1234.567)).toEqual([]);
+    expect(diffFields({ net: 1234.567 }, { net: 1234.567 }, { toleranceMinorUnits: 0 })).toEqual([]);
+    expect(diffFields({ net: 1234.567 }, { net: 1234.567 }, { minorUnitScale: 1000 })).toEqual([]);
+    expect(diffFields(Number.NaN, Number.NaN, { minorUnitScale: 1000 })).toEqual([]);
+    expect(diffFields(0, -0, { minorUnitScale: 1000 })).toEqual([]);
+    expect(diffFields(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, { minorUnitScale: 1000 })).toEqual([]);
+    expect(diffFields(1e308, 1e308)).toEqual([]);
+  });
+
+  // The invariant, over a sweep of amounts that are awkward in binary: a third
+  // decimal at scale 100 is always the same cause, whatever the amount, whatever
+  // the direction, whatever the tolerance.
+  it("classifies every third-decimal gap identically across a sweep", () => {
+    const causes = new Set<DifferenceCause>();
+    let checked = 0;
+    for (let i = 1; i <= 150; i += 1) {
+      const base = Number((i * 137.77).toFixed(2));
+      const legacy = base + 0.001;
+      const candidate = base + 0.002;
+      for (const toleranceMinorUnits of [0, 1, 250]) {
+        causes.add(causeOf(legacy, candidate, { toleranceMinorUnits }));
+        causes.add(causeOf(candidate, legacy, { toleranceMinorUnits }));
+      }
+      checked += 1;
+    }
+    expect(checked).toBe(150);
+    expect([...causes]).toEqual(["sub-minor-unit"]);
+  });
+});
+
 describe("option validation", () => {
   const INVALID: [string, DiffOptions][] = [
     ["a fractional tolerance", { toleranceMinorUnits: 0.5 }],
@@ -439,11 +613,12 @@ describe("cycles", () => {
 // ================================================ assertion 2 · cause+detail ==
 
 describe("cause and detail", () => {
-  // One diff carrying seven distinct causes.
+  // One diff carrying eight distinct causes.
   const legacy = {
     typed: 1,
     valued: "alpha",
     rounded: 5.0,
+    subMinor: 1234.567,
     sized: [1, 2],
     dated: new Date("2026-08-14T00:00:00Z"),
     onlyLegacy: 42,
@@ -452,6 +627,7 @@ describe("cause and detail", () => {
     typed: "1",
     valued: "beta",
     rounded: 5.01,
+    subMinor: 1234.568,
     sized: [1],
     dated: new Date("2026-08-15T00:00:00Z"),
     onlyCandidate: 43,
@@ -462,6 +638,8 @@ describe("cause and detail", () => {
     expect(at(diffs, "typed").cause).toBe("type-mismatch");
     expect(at(diffs, "valued").cause).toBe("value-mismatch");
     expect(at(diffs, "rounded").cause).toBe("rounding");
+    // A gap finer than the scale sits beside a genuine rounding and stays apart from it.
+    expect(at(diffs, "subMinor").cause).toBe("sub-minor-unit");
     expect(at(diffs, "sized").cause).toBe("array-length");
     expect(at(diffs, "dated").cause).toBe("date-mismatch");
     expect(at(diffs, "onlyLegacy").cause).toBe("missing-in-candidate");
@@ -469,7 +647,7 @@ describe("cause and detail", () => {
   });
 
   it("gives every difference a non-empty detail, and never the same one twice", () => {
-    expect(diffs).toHaveLength(7);
+    expect(diffs).toHaveLength(8);
     for (const diff of diffs) expect(diff.detail.trim().length).toBeGreaterThan(0);
     // A generic message reused across causes would defeat assertion 2.
     expect(new Set(diffs.map((d) => d.detail)).size).toBe(diffs.length);
@@ -488,6 +666,8 @@ describe("cause and detail", () => {
     expect(at(diffs, "valued").candidate).toBe("beta");
     expect(at(diffs, "rounded").legacy).toBe(5.0);
     expect(at(diffs, "rounded").candidate).toBe(5.01);
+    expect(at(diffs, "subMinor").legacy).toBe(1234.567);
+    expect(at(diffs, "subMinor").candidate).toBe(1234.568);
   });
 
   it("distinguishes the detail of a rounding from that of a value mismatch", () => {
