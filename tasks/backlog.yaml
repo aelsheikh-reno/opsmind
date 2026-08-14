@@ -231,15 +231,10 @@
   spec: runner/PROXMOX.md
   size_total: 1800
   size_waiver_reason: >
-    960 of ~2100 test lines are tests/kernel/kernel-source.ts and its fixtures,
-    the reader the // owns: assertion depends on — a claim about source
-    structure no runtime test can make. Implementation is ~400 against the
-    unchanged 400, and this reason counts itself. Review judged the waiver
-    larger than the work justifies, because the reader is hand-rolled and
-    typescript is already a devDependency; granted once, on the condition that
-    replacing it is settled before kernel-entities-parties reuses it. The full
-    argument is in the PR.
-
+    1270 of the 1578 lines are tests/deploy/staging-deploy.test.ts, which must
+    parse a Dockerfile, a compose file and a workflow to prove anything at all;
+    ~450 lines of that is shared parsing machinery. Implementation is 308
+    against the unchanged 400 budget.
   produces:
     - Dockerfile
     - docker-compose.staging.yml
@@ -1152,3 +1147,30 @@
     been waived at all. A budget waived a third of the time stops being read,
     and the reasons had grown longer than several of the diffs they excused.
     Recorded as ADR-029.
+
+- id: fix-staging-deploy-waiver
+  title: Restore staging-deploy's waiver reason
+  phase: 0
+  depends_on: [kernel-entities-law]
+  spec: PIPELINE.md#the-gates
+  produces:
+    - tasks/backlog.yaml
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "staging-deploy's size_waiver_reason describes staging-deploy"
+      - "Every waived node has exactly one waiver reason, and it is its own"
+  risk: low
+  status: todo
+  note: >
+    A scripted edit in #30 anchored on the file's first size_waiver_reason,
+    which is staging-deploy's, and overwrote it with kernel-entities-law's text.
+    The guard "the committed waiver is printed with its recorded reason" caught
+    it; the merge went ahead anyway because the polling loop treated a FAILURE
+    verdict as a reason to stop waiting rather than a reason to stop.
+
+    It exists as a node rather than a chore branch for a second reason worth
+    recording: main's line coverage is now 84.41%, below the 90 the strict path
+    demands, so a branch that resolves no risk fails the coverage gate outright.
+    Every fix from here needs a node until the kernel repositories are covered
+    or the strict floor is reconsidered.
