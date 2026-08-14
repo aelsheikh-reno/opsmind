@@ -86,7 +86,7 @@
 |---|---|---|
 | `enrolmentId` | → JurisdictionEnrolment | Which registration this filing belongs to |
 | `periodStart, periodEnd` | date | The period being filed for |
-| `dueDate` | date | Computed from the regime, business-day aware |
+| `dueDate` | date | Computed from the regime: `periodEnd + Regime.deadlineDays` in plain **calendar** days, not rolled off a weekend. A statutory deadline does not move because the office is shut; the deadline monitor surfaces that it falls on a non-working day rather than shifting it |
 | `estimatedAmount` | decimal | **Forecasting only** — the authoritative return is computed in Zoho |
 | `status` | pending \| filed \| paid |   |
 | `filedAt` | timestamp \| null |   |
@@ -126,7 +126,7 @@
 
 | Field | Type / values | Why |
 |---|---|---|
-| `direction` | inbound \| outbound \| null | Nullable during backfill; the fix for supplier bills counted as income (ADR-025) |
+| `direction` | inbound \| outbound | **NOT NULL.** The fix for supplier bills counted as income. Cutover resolves direction before insert; an unresolvable row is held in migration tooling and never reaches this table ([ADR-027](decisions.md#adr-027)) |
 
 
 #### `LegalEntity`
@@ -154,7 +154,7 @@
 | Field | Type / values | Why |
 |---|---|---|
 | `jurisdictionId` | → Jurisdiction |   |
-| `obligationType` | vat \| corporate_tax \| social_insurance \| … |   |
+| `obligationType` | vat \| corporate_tax \| social_insurance \| … | A **closed set**, not a free string. The `…` means the set grows by migration as regimes are added; it does not mean any value is acceptable. An unvalidated type lets an extraction write `VAT`, `vat_uae` and `Vat` as three regimes no filing query reunites |
 | `rate, deadlineDays` | decimal, integer | Extracted from hardcoded values in the current build |
 | `thresholds, brackets` | JSON | Egyptian income tax bands, registration thresholds |
 
@@ -167,7 +167,7 @@
 |---|---|---|
 | `legalEntityId, regimeId` | → LegalEntity, → Regime | Applies to counterparties too — a UAE invoice carries the customer's TRN |
 | `identifier` | string | TRN or equivalent registration number |
-| `frequency, anchor` | enum, date | Monthly or quarterly, and what the period aligns to |
+| `frequency, anchor` | enum, date | monthly \| quarterly \| semiannual \| annual, and what the period aligns to. **annual is required** — UAE corporate tax is filed annually, so without it a CT registration is unrepresentable; semiannual lands with it rather than being discovered as the next gap |
 | `activeFrom, activeTo` | date | Registration is not permanent |
 | `sourceDocumentId` | → Document | The certificate, as evidence |
 | `@@unique` | (legalEntityId, regimeId) | One registration per entity per regime |

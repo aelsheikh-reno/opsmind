@@ -198,6 +198,8 @@
 
 ### ADR-025 · Invoice direction backfill: expand-migrate-contract, never guess
 
+> **Scope — superseded for this build.** This record applies to the **legacy database evolving in place**, where the system is in daily use and there is no window to stop and convert. The new build does not follow that path: it starts from its own schema, so there is no live table to expand and contract around. For the new schema, direction nullability is settled by [ADR-027](#adr-027), which keeps this record's "never guess" principle and drops its nullable phase. ADR-025 keeps its number and remains accurate for the track it describes.
+
 **Context.** Existing invoice documents lack direction; the wallet counts vendor bills as income. Some rows cannot be classified mechanically.
 
 **Decision.** Add nullable direction; backfill inbound where a vendor value exists, outbound where the project route matched clientName; leave the rest NULL, excluded from cash and queued as work items; NOT NULL when the queue drains.
@@ -211,6 +213,14 @@
 **Decision.** size-impl excludes `docs/`, `*.md`, `tests/` and `scripts/test-guards.sh`. size-total continues to count every line including documentation, and remains raisable per task by `size_total:` with a `size_waiver_reason:` on the backlog node. The exclusion assumes markdown never carries executable content; the assumption is recorded at the exclusion so it is visible if it stops being true.
 
 **Consequences.** Updating a spec alongside the code it describes is free, which is the behaviour the reviewer already enforces; prose volume still has to be justified once, against size-total, where a reviewer sees the waiver and its reason in the diff. The cost is that a doc-only PR is now bounded by nothing but the backstop, and that literate tests or generated code inside a fence would silently stop being measured.
+
+### ADR-027 · Direction is NOT NULL in the new schema; cutover resolves or quarantines
+
+**Context.** [ADR-025](#adr-025) makes `Document.direction` nullable so the legacy database can be backfilled in place while the system stays in use, and mandatory only once the review queue drains. That reasoning does not carry to this build, which starts from its own schema with no live table to expand and contract around — there is nothing here to backfill. Carrying the nullable phase across anyway would import a workaround for a problem this database does not have, and it contradicted the target shape twice over: CLAUDE.md's rule that money always carries a direction and is never inferred from context, and the kernel schema task's own approved assertion that the column is not nullable. A nullable column also has to be defended forever by every reader — each query, forecast and cash figure has to decide what a NULL means — long after the queue that justified it is empty.
+
+**Decision.** `Document.direction` is NOT NULL from the first migration of the new schema. There is no nullable phase and no later contract step. The cutover migration resolves direction before insert — inbound where a vendor value exists, outbound where the project route matched clientName — and a row it cannot resolve is **quarantined in the migration tooling and never inserted**, queued as a work item for a human. No enum member may stand in for the missing value: an `unknown` or `pending` direction is the nullable design wearing a different hat and is equally forbidden. ADR-025 keeps its number and stays authoritative for the legacy database evolving in place.
+
+**Consequences.** The target database can never hold a document whose direction is unknown, so no consumer downstream has to handle that case and the cash figure cannot be quietly wrong. The cost is real and falls on the import: it is harder to write, it needs a quarantine store and a review queue of its own outside the target tables, and **an unclassifiable row blocks its own migration until a human decides** — that row does not arrive late, it does not arrive at all until someone rules on it. That is the trade accepted deliberately: a slower, more manual cutover in exchange for a schema that cannot represent the ambiguity. If the quarantine queue turns out to be large enough to stall cutover, the answer is better resolution rules or more reviewers, not a nullable column.
 
 ### ADR-028 · Generated migration DDL is not implementation
 

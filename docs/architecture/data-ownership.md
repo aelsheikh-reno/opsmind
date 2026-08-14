@@ -18,7 +18,7 @@
 
 | Owner | Tables |
 |---|---|
-| Kernel | Person · Document · LegalEntity · Jurisdiction · Regime · JurisdictionEnrolment · DocumentType · IngestionRule · FxRate · User · AuditEntry · search_index (matview) |
+| Kernel | Person · PersonEnrolment · Document · LegalEntity · Jurisdiction · BusinessCalendar · BusinessHoliday · Regime · JurisdictionEnrolment · DocumentType · IngestionRule · FxRate · User · AuditEntry · search_index (matview) |
 | Payroll | PayrollRun · PayrollEntry · SalarySchedule · SalaryTerm |
 | Projects | Project · ProjectService · ProjectActivity · ProjectMilestone · Timesheet · TimesheetEntry · ProjectTeamMember · ProjectMemberAllocation · ProjectAiSuggestion · ProjectDocumentLink |
 | Expenses | Expense · ExpenseAttachment · PettyCashFloat · ClaimToken |

@@ -1,6 +1,17 @@
-// Datasource and generator only. The kernel entities (person, document,
-// entity, jurisdiction, regime, enrolment, fx, audit) arrive in the
-// `kernel-schema-base` task — do not add models here.
+// Kernel schema — target shapes from docs/architecture/data-model.md.
+//
+// Scope: the tables data-ownership.md assigns to the Kernel. Module-owned
+// tables (SalarySchedule, SalaryTerm, OpenItem, Settlement, TaxFiling,
+// BillablePosition, LeaseSchedule, LoanSchedule, Scenario, ScenarioEvent and
+// the Projects / Expenses tables) arrive with their modules.
+//
+// Money is never a float: every amount is Decimal, scaled to three decimal
+// places because KWD and BHD are three-decimal currencies (CLAUDE.md, money
+// and dates). Note that on Document, amount and currency are independently
+// optional — carried from the legacy shape, where a document may be filed
+// before its value is extracted. An amount without a currency is therefore
+// representable here and is a validation rule for ingestion, not a schema
+// constraint.
 
 generator client {
   provider = "prisma-client-js"
@@ -9,4 +20,231 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Shared vocabulary
+// ---------------------------------------------------------------------------
+
+/// Money and the documents that evidence it always state which way it flows;
+/// it is never inferred from context (ADR-027, CLAUDE.md rule 6). ADR-025
+/// describes the legacy database's nullable-then-backfill path and is scoped
+/// out of this build.
+enum Direction {
+  inbound
+  outbound
+}
+
+/// Stops legal entities being auto-created from fuzzy name matches.
+enum EntityRole {
+  self
+  client
+  vendor
+}
+
+/// The obligations a jurisdiction can impose. data-model.md:157 lists
+/// `vat | corporate_tax | social_insurance | ...`; the three named are the
+/// floor, and the list is extended by migration as regimes are added.
+enum ObligationType {
+  vat
+  corporate_tax
+  social_insurance
+}
+
+/// How often a registration files. data-model.md says "Monthly or quarterly",
+/// which is descriptive rather than exhaustive: UAE corporate tax is filed
+/// annually, so a registration for it is unrepresentable without `annual`.
+/// `semiannual` is included with it — Ahmed's decision, 2026-08-14 — so the
+/// realistic cadences are covered in one migration rather than discovered one
+/// gap at a time.
+enum EnrolmentFrequency {
+  monthly
+  quarterly
+  semiannual
+  annual
+}
+
+// ---------------------------------------------------------------------------
+// Jurisdiction, calendar and the law
+// ---------------------------------------------------------------------------
+
+model Jurisdiction {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  /// ISO 3166-1 alpha-2, e.g. "AE", "EG", "SA", "KW", "BH".
+  code      String   @unique
+  name      String
+
+  calendar BusinessCalendar?
+  regimes  Regime[]
+}
+
+/// The working week and the non-working days a deadline must step over.
+/// Deadline arithmetic reads this, never plain UTC days (CLAUDE.md rule 9).
+model BusinessCalendar {
+  id             String       @id @default(cuid())
+  jurisdictionId String       @unique
+  jurisdiction   Jurisdiction @relation(fields: [jurisdictionId], references: [id], onDelete: Cascade)
+
+  /// Non-working weekdays, encoded as day numbers where 0 = Sunday and
+  /// 6 = Saturday. The Gulf working week is Sunday-Thursday, so its mask is
+  /// [5, 6] — Friday and Saturday. No default: a calendar states its own week.
+  weekendMask Int[]
+
+  holidays BusinessHoliday[]
+}
+
+model BusinessHoliday {
+  id         String           @id @default(cuid())
+  calendarId String
+  calendar   BusinessCalendar @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+  date       DateTime         @db.Date
+  name       String
+
+  @@unique([calendarId, date])
+}
+
+/// The law itself: jurisdiction x obligation type, holding the rates, brackets
+/// and deadline days that were hardcoded in the previous build. Adding excise
+/// or a new country is a row here, never a migration (ADR-017).
+model Regime {
+  id             String       @id @default(cuid())
+  createdAt      DateTime     @default(now())
+  jurisdictionId String
+  jurisdiction   Jurisdiction @relation(fields: [jurisdictionId], references: [id], onDelete: Restrict)
+
+  /// A closed set, not a free string. data-model.md's trailing "..." means the
+  /// set grows, not that any value is acceptable: an unvalidated obligation
+  /// type lets an extraction write `VAT`, `vat_uae` and `Vat` as three distinct
+  /// regimes that no filing query would ever reunite. Adding an obligation is
+  /// therefore a migration. Ahmed's decision, 2026-08-14.
+  obligationType ObligationType
+  name           String
+
+  rate         Decimal @db.Decimal(9, 6)
+  /// Plain CALENDAR days after period end by which the filing is due. Not
+  /// business days, and not rolled forward off a weekend: legacy adds them
+  /// directly (`dueDate.setDate(dueDate.getDate() + filingDeadlineDays)` in
+  /// lib/tax.ts and lib/vat.ts) and that is the behaviour to match. UAE VAT is
+  /// 28 days; read as business days it would land about twelve days late,
+  /// which is a filing penalty.
+  ///
+  /// This is deliberately in tension with CLAUDE.md rule 9: a due date CAN
+  /// fall on a Friday or a public holiday. Ahmed's decision, 2026-08-14 — the
+  /// statutory deadline is the statutory deadline, and moving it because the
+  /// office is shut would misreport when the filing is actually late.
+  /// module-deadlines should surface that a deadline falls on a non-working
+  /// day, not silently shift it.
+  deadlineDays Int
+
+  /// Registration and exemption thresholds.
+  thresholds Json?
+  /// Banded rates, e.g. the Egyptian income tax bands.
+  brackets   Json?
+
+  enrolments JurisdictionEnrolment[]
+
+  @@index([jurisdictionId, obligationType])
+}
+
+// ---------------------------------------------------------------------------
+// Parties
+// ---------------------------------------------------------------------------
+
+model LegalEntity {
+  id        String     @id @default(cuid())
+  createdAt DateTime   @default(now())
+  name      String
+  country   String
+  currency  String?
+  active    Boolean    @default(true)
+  /// self | client | vendor — stated, never inferred from a name match.
+  role      EntityRole
+
+  documents  Document[]
+  enrolments JurisdictionEnrolment[]
+}
+
+/// An entity's standing under a regime: the registration number, how often it
+/// files and what the period aligns to. Applies to counterparties too — a UAE
+/// VAT invoice carries the customer's TRN. Replaces VatConfig + TaxConfig.
+model JurisdictionEnrolment {
+  id            String      @id @default(cuid())
+  createdAt     DateTime    @default(now())
+  legalEntityId String
+  legalEntity   LegalEntity @relation(fields: [legalEntityId], references: [id], onDelete: Cascade)
+  regimeId      String
+  regime        Regime      @relation(fields: [regimeId], references: [id], onDelete: Restrict)
+
+  /// TRN or the equivalent registration number.
+  identifier String
+  frequency  EnrolmentFrequency
+  /// What the filing period aligns to — periods are counted from this date.
+  anchor     DateTime           @db.Date
+
+  /// Registration is not permanent. A null activeTo means still registered.
+  activeFrom DateTime  @db.Date
+  activeTo   DateTime? @db.Date
+
+  /// The registration certificate, as evidence (CLAUDE.md rule 7). Optional:
+  /// the registration is the record, the certificate is proof of it, and the
+  /// proof can arrive after the number is known.
+  sourceDocumentId String?
+  sourceDocument   Document? @relation("EnrolmentCertificate", fields: [sourceDocumentId], references: [id], onDelete: Restrict)
+
+  @@unique([legalEntityId, regimeId])
+  @@index([regimeId])
+}
+
+// ---------------------------------------------------------------------------
+// Documents and the registry
+// ---------------------------------------------------------------------------
+
+/// Files and their extracted metadata. Evidence, never the record itself
+/// (CLAUDE.md rule 7). Payment state is not here: it is derived from
+/// Settlement rows owned by Finance (ADR-015).
+model Document {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  filename String
+  mimeType String
+  source   String  @default("upload")
+  status   String  @default("processing")
+  filePath String?
+  fileHash String?
+
+  /// Which way the value flows. Not nullable: a supplier bill counted as
+  /// income is the defect this closes (ADR-027, CLAUDE.md rule 6). An
+  /// arriving document whose direction cannot be determined becomes a work
+  /// item rather than a guessed row (CLAUDE.md rule 8).
+  direction Direction
+
+  /// Matches DocumentType.type in the registry.
+  docType    String?
+  confidence Float?
+  parties    String?
+  summary    String?
+  notes      String?
+
+  issueDate       DateTime?
+  expiryDate      DateTime?
+  renewalDeadline DateTime?
+
+  amount          Decimal? @db.Decimal(18, 3)
+  vatAmount       Decimal? @db.Decimal(18, 3)
+  currency        String?
+  paymentTerms    String?
+  poStatus        String?  @default("open")
+  referenceNumber String?
+  issuingCountry  String?
+
+  legalEntityId String?
+  legalEntity   LegalEntity? @relation(fields: [legalEntityId], references: [id], onDelete: SetNull)
+
+  enrolmentCertificate JurisdictionEnrolment[] @relation("EnrolmentCertificate")
+
+  @@index([docType])
+  @@index([direction])
+  @@index([expiryDate])
 }
