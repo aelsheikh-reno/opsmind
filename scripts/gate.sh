@@ -224,6 +224,26 @@ run "coverage" "npx vitest run --coverage --coverage.thresholds.lines=$cov"
 # markdown stops being prose the gate can safely stop measuring, and this
 # exclusion has to be revisited rather than trusted.
 #
+# Generated migration SQL is excluded from size-impl for the reason the
+# lockfile rule already states. `prisma/migrations/*/migration.sql` is the
+# byte-for-byte output of `prisma migrate diff` over schema.prisma: nobody wrote
+# it, nobody may hand-edit it without the next generate silently disagreeing,
+# and it cannot be split across PRs because a migration is atomic. Reviewing it
+# means reviewing the schema it came from, which IS counted. Charged to the code
+# budget it doubled the apparent cost of every schema line — kernel-schema-base
+# measured 450 against 400 with 224 lines of authored schema and 164 of DDL it
+# had no choice about, and the only ways to pass were to split a schema below
+# the entities its own assertions need or to delete explanatory comments.
+#
+# Unlike lockfiles this is excluded from size-impl ONLY. size-total still counts
+# every line, so a migration that rewrites half the database is still visible as
+# volume and still needs a reasoned waiver. The claim here is that generated DDL
+# is not implementation, not that it is free.
+#
+# The exclusion is deliberately narrow: `prisma/migrations/**/*.sql` and nothing
+# else. A .sql file anywhere else is hand-written — a view definition, a seed, a
+# backfill script — and is implementation that must stay measured.
+#
 # Lockfiles are excluded from both: generated, not authored, unsplittable across
 # PRs, and required by npm ci — counting them made phase 0 unpassable by any
 # code change at all. The gate measures what a human has to review.
@@ -245,6 +265,7 @@ if git rev-parse --verify -q "$base" >/dev/null; then
   # the code it describes — a module README is documentation wherever it sits.
   # Both are size-impl only: size-total below still counts every line.
   impl=$(added ':(top,exclude)docs/' ':(top,exclude)*.md' \
+               ':(top,exclude)prisma/migrations/**/*.sql' \
                ':(top,exclude)tests/' ':(top,exclude)scripts/test-guards.sh'); total=$(added)
   run "size-impl"  "test $impl -lt $impl_budget || { echo 'implementation is $impl added lines, limit $impl_budget — split the task'; false; }"
   run "size-total" "test $total -lt $total_budget || { echo 'whole diff is $total added lines, limit $total_budget — split the task'; false; }"

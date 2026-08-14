@@ -525,3 +525,33 @@
     `git add -n` is the probe rather than `git check-ignore`: check-ignore exits
     0 when the last matching rule is a negation, so it reports a re-included
     file as ignored.
+
+- id: gate-size-generated-sql
+  title: Keep generated migration DDL out of the implementation budget
+  phase: 0
+  depends_on: [gate-migrations-committable]
+  spec: PIPELINE.md#the-gates
+  produces:
+    - scripts/gate.sh
+    - scripts/test-guards.sh
+    - docs/architecture/decisions.md
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "size-impl excludes prisma/migrations/**/*.sql and nothing else that is .sql"
+      - "A hand-written .sql elsewhere, including directly under prisma/, is still measured"
+      - "size-total still counts generated DDL in full and stays waivable per task"
+      - "The 400 impl budget and the 800 total default are unchanged"
+  risk: low
+  status: todo
+  note: >
+    kernel-schema-base measured 450 implementation lines against the
+    non-overridable 400 after already being split once: 224 of authored schema
+    and 164 of migration DDL that `prisma migrate diff` generates from that
+    schema. All seven of its models are needed by its own four assertions, so
+    the only remaining splits were to fragment the assertion set or delete the
+    comments recording Ahmed's decisions. Same argument gate.sh already makes
+    for lockfiles — generated, not authored, unsplittable. Recorded as ADR-028.
+
+    ADR-027 is skipped here deliberately: it is claimed by kernel-schema-base,
+    in flight, and is already cited from three documents on that branch.
