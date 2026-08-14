@@ -173,7 +173,7 @@
       - "A task with no size_total keeps the 800 default, and size-impl's 400 is never overridable"
       - "An active waiver is printed with its value and its reason — it is never silent"
   risk: low
-  status: todo
+  status: done
   note: >
     staging-deploy came in at 308 implementation lines against its 400 budget
     and 1578 total against 800 — 1270 of that a single test file, of which ~450
@@ -206,7 +206,7 @@
       - "prisma migrate deploy runs on every deploy before the app starts"
       - "No secret appears in the compose file or the workflow — all via an env file on the VM"
   risk: low
-  status: todo
+  status: done
   note: >
     This is what makes the parallel build visible: every merge lands on the
     lab staging VM where the team can try it while the old system still runs.
@@ -229,7 +229,16 @@
       - "JurisdictionEnrolment is unique on (legalEntityId, regimeId)"
       - "Jurisdiction carries a business calendar with a weekend mask"
   risk: compliance
-  status: todo
+  status: blocked
+  note: >
+    Blocked 2026-08-14: `spec: docs/architecture/components-kernel.md` does not
+    exist. `docs/` has never been committed — `git log --all -- docs/` is empty
+    and it is not gitignored. PIPELINE.md calls the architecture site the
+    specification, and CLAUDE.md forbids taking structure from the legacy
+    schema ("its structure is what this build exists to replace"), so the four
+    assertions below are the only input and they constrain a schema without
+    specifying one. Building this would mean an agent inventing the kernel data
+    model. Needs Ahmed to supply or point at the spec.
 
 - id: module-deadlines
   title: Deadline monitor — the reference module
@@ -248,8 +257,14 @@
       - "Thresholds are data in settings, not constants in code"
       - "Registering a deadline already inside a threshold evaluates immediately"
   risk: compliance
-  status: todo
+  status: blocked
   note: >
     Built first among modules because it is small and exercises every pattern
     the other six copy: module interface, repository boundary, business
     calendar, and the alert contract.
+
+    Blocked 2026-08-14 for the same reason as kernel-schema-base, and twice
+    over: its own spec `docs/architecture/components-core-deadline-monitor.md`
+    is missing too, and its dependency is blocked. The boundary rule it must
+    satisfy (CLAUDE.md rule 1) cites `docs/architecture/data-ownership.md`,
+    also missing.
