@@ -9,7 +9,8 @@
 /** Why two values differ. One cause per difference — never a generic "unequal". */
 export type DifferenceCause =
   | "value-mismatch" | "type-mismatch" | "missing-in-candidate" | "missing-in-legacy"
-  | "array-length" | "rounding" | "date-mismatch" | "unsupported-type" | "cycle";
+  | "array-length" | "rounding" | "sub-minor-unit" | "date-mismatch" | "unsupported-type"
+  | "cycle";
 
 /** One differing leaf. `path` is dot/bracket notation; `""` at a scalar root. */
 export type FieldDifference = {
@@ -95,18 +96,47 @@ function requireInteger(value: number, name: string, min: number): number {
  * candidate has — so a failing differential case reads the same way twice.
  *
  * Tolerance is an integer count of minor units, and both numbers are scaled and
- * rounded to integers before the comparison, so the boundary is exact by
- * construction: at exactly `toleranceMinorUnits` the cause is `rounding`, at one
- * more it is `value-mismatch`, with no float in the decision. The previous
- * attempt compared `Math.abs(b - a) <= 0.01` and classified four identical
- * one-fils gaps two different ways depending on binary representation.
+ * rounded to integers before the comparison: at a gap of 1 or more minor units,
+ * up to and including exactly `toleranceMinorUnits`, the cause is `rounding`; at
+ * one more it is `value-mismatch`. The previous attempt compared
+ * `Math.abs(b - a) <= 0.01` and classified four identical one-fils gaps two
+ * different ways depending on binary representation.
  *
- * Two deliberate consequences of that rule:
+ * Two known limits of that scaling, recorded here rather than worked around
+ * because whether the predicate should change is a business-rule question:
  *
- *  - A pair finer than the scale (1234.567 vs 1234.568 at scale 100) rounds to
- *    the same minor unit, so the gap is 0 and it is reported as `rounding` even
- *    at the default tolerance of 0. It is still reported — sub-minor-unit noise
- *    is named as such, never silently dropped.
+ *  - The COMPARISON is integer, but the scaling multiply `a * scale` is
+ *    floating point, so a value whose scaled form lands on a `.5` boundary can
+ *    round to the neighbouring minor unit. `0.135 * 100` is exactly 13.5 and
+ *    rounds up to 14; `0.145 * 100` is 14.499999999999998 and rounds down to
+ *    14 — two values exactly one minor unit apart, computed as a gap of 0.
+ *    This moves the `rounding` / `value-mismatch` boundary as well, not only
+ *    the `sub-minor-unit` one. A gap of N is what was computed, not a
+ *    guarantee about the distance between the two raw values.
+ *  - Above roughly `Number.MAX_SAFE_INTEGER / scale` (about 9.0e13 at scale
+ *    100) the scaled values lose integer precision, so a genuine multi-unit gap
+ *    can collapse to 0 and be reported as `sub-minor-unit`. No payslip or
+ *    invoice reaches that magnitude and nothing here handles it; it is written
+ *    down so that it is not a silent surprise if it ever shows up.
+ *
+ * Two deliberate consequences of the rule:
+ *
+ *  - A pair that rounds to the SAME integer minor unit (1234.567 vs 1234.568 at
+ *    scale 100, both 123457) has a gap of 0. That is NOT `rounding`: it gets its
+ *    own cause, `sub-minor-unit`, at every tolerance including 0, because the
+ *    tolerance comparison cannot distinguish it from agreement. KWD and BHD are
+ *    three-decimal currencies, so at the default scale of 100 a genuine one-fils
+ *    difference can land here, and a consumer that treats `rounding` as
+ *    tolerated noise must not be able to drop it along with the noise.
+ *
+ *    Landing on the same integer is what the cause keys on — being finer than
+ *    the scale is neither necessary nor sufficient. The converse does not hold:
+ *    a sub-scale pair that straddles a rounding boundary lands on two integers
+ *    (1234.564 vs 1234.566 give 123456 and 123457), so it reports a gap of 1 —
+ *    `value-mismatch` at tolerance 0, `rounding` at tolerance 1 or more — even
+ *    though it is the same size of difference as the pair above. Which of the
+ *    two behaviours is intended is part of the same open question as the limits
+ *    recorded above.
  *  - The scale applies to every number in the tree, money or not. A count, a
  *    percentage or a numeric id differing by 1 is a gap of `minorUnitScale`
  *    minor units, so at the default tolerance it is still a `value-mismatch`;
@@ -136,6 +166,29 @@ export function diffFields(
   const compareNumbers = (path: string, a: number, b: number): void => {
     if (sameNumber(a, b)) return;
     const gap = Math.abs(Math.round(b * scale) - Math.round(a * scale));
+    // Two unequal numbers that scale and round to the SAME integer minor unit
+    // produce a gap of 0, so the gap carries no information, and
+    // `gap <= tolerance` is true at every tolerance including 0. That is exactly
+    // the shape of agreement, which is why this cannot be `rounding` — a
+    // consumer filtering `rounding` as tolerated noise would drop a real
+    // one-fils KWD or BHD difference with it. It is reported under its own cause
+    // that no tolerance can produce and no tolerance can suppress.
+    //
+    // `gap === 0` exactly, never `!(gap > 0)`: an Infinity-against-Infinity
+    // scaling gives NaN, which is a different failure and keeps its existing
+    // `value-mismatch` classification.
+    if (gap === 0) {
+      push(path, a, b, "sub-minor-unit",
+        `legacy ${describe(a)} vs candidate ${describe(b)}: the two values are not equal, but at ` +
+          `scale ${scale} both round to the same integer minor unit, ${Math.round(a * scale)}, so ` +
+          "the computed gap is 0 minor units — the same gap two equal values would give. This is " +
+          `not rounding within tolerance: the cause does not depend on the tolerance of ` +
+          `${tolerance} minor units and no tolerance can suppress it. The cause exists because a ` +
+          "real one-fils difference on a three-decimal currency such as KWD or BHD, compared at a " +
+          "scale of 100, computes a gap of 0 exactly like this, so it must be adjudicated rather " +
+          "than tolerated.");
+      return;
+    }
     const gapText = Number.isFinite(gap)
       ? `a gap of ${gap} minor unit${gap === 1 ? "" : "s"} at scale ${scale}`
       : "a gap that is not representable in minor units";

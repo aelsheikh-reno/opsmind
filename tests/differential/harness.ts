@@ -88,13 +88,15 @@ async function runCase<I, O>(spec: DifferentialSpec<I, O>, name: string, input: 
   // `matched` is strict, and deliberately so. A `rounding` difference is still a
   // difference and still fails the case.
   //
-  // DO NOT add an option to filter, collapse or downgrade `rounding` here.
+  // DO NOT add an option to filter, collapse or downgrade any cause here.
   // diffFields scales to integer minor units and `minorUnitScale` defaults to
   // 100, but KWD and BHD are three-decimal currencies: a genuine one-fils gap
-  // (1234.567 vs 1234.568) scales to the same integer, so it arrives as
-  // `rounding` with a gap of 0. Treating that as "no difference" would silently
-  // lose real money in two live jurisdictions. The gate exists to make a human
-  // approve a divergence, not to forgive one. A fils on a payslip is a real fils.
+  // (1234.567 vs 1234.568) scales to the same integer, so it arrives with a gap
+  // of 0 — under its own `sub-minor-unit` cause precisely so that it is never
+  // mistaken for tolerated rounding noise. Treating any of these as "no
+  // difference" would silently lose real money in two live jurisdictions. The
+  // gate exists to make a human approve a divergence, not to forgive one. A fils
+  // on a payslip is a real fils.
   return { name, matched: differences.length === 0, differences };
 }
 
@@ -200,8 +202,8 @@ function render(value: unknown): string {
  *
  * The values are printed verbatim rather than left to the cause and detail
  * alone. A sub-minor-unit gap on a three-decimal currency is classified
- * `rounding` with "a gap of 0 minor units", and only the raw 1234.567 against
- * 1234.568 tells the reader that real money moved.
+ * `sub-minor-unit` and its gap in minor units is 0, so only the raw 1234.567
+ * against 1234.568 tells the reader how much money actually moved.
  */
 export function formatReport(report: DifferentialReport): string {
   if (report.total === 0) {

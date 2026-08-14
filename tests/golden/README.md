@@ -85,10 +85,16 @@ passed straight through.
 
 - **`minorUnitScale` must be set per jurisdiction.** The default is 100, which
   is **wrong for KWD and BHD** — both are three-decimal currencies and need
-  `1000`. At scale 100 a genuine one-fils gap (1234.567 vs 1234.568) lands in
-  the same integer minor unit and is reported as a `rounding` difference with a
-  gap of 0. The harness still fails the case, and it still prints both raw
-  values, but the classification is misleading. Set the scale.
+  `1000`. At scale 100 a genuine one-fils gap (1234.567 vs 1234.568) rounds into
+  the same integer minor unit, so the computed gap is 0 and the difference is
+  reported under its own cause, `sub-minor-unit`. The harness still fails the
+  case — at every tolerance, because no tolerance can suppress that cause — and
+  it still prints both raw values. But `sub-minor-unit` means only that the two
+  values landed on the same integer minor unit, so the computed gap is 0 — not
+  that the gap is small, and not even that it is under one minor unit (`0.135`
+  and `0.145` are exactly one minor unit apart at scale 100 and still land
+  here). It tells you nothing about how many fils the two sides actually
+  disagree by. Set the scale.
 - **`toleranceMinorUnits`** is a count of minor units, not a fraction. Leave it
   at 0 unless a divergence has been approved.
 - **`ignorePaths`** is the escape hatch for values that are not comparable
