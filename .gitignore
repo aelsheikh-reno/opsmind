@@ -1,4 +1,9 @@
-node_modules/
+# No trailing slash: `node_modules/` matches a directory but not a SYMLINK
+# named node_modules, and a symlink is what actually got committed once — a
+# worktree pointed at the main checkout's modules, `git add -A` swept it up,
+# and it reached main. A committed symlink to an absolute path is broken on
+# every machine but the one that made it.
+node_modules
 .next/
 out/
 coverage/

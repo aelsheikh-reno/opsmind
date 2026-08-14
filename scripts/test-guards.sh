@@ -504,6 +504,30 @@ check("a database dump at the root is still ignored",
       not v["backup.sql"], repr(v))
 check("a dump sitting inside prisma/ is still ignored",
       not v["prisma/dump.sql"], repr(v))
+# node_modules must be ignored as a SYMLINK too, not only as a directory. A
+# worktree pointing at another checkout's modules is normal; committing that
+# pointer is not, and `node_modules/` with a trailing slash does not match it.
+# It reached main once exactly this way.
+v2 = gitignore_verdict([
+    "node_modules/x.js",          # inside the directory
+    "vendor/node_modules/y.js",   # nested copies too
+])
+check("files under node_modules are ignored", not v2["node_modules/x.js"], repr(v2))
+check("nested node_modules are ignored too", not v2["vendor/node_modules/y.js"], repr(v2))
+
+def symlink_is_ignored():
+    """A SYMLINK named node_modules, which a trailing-slash rule does not match."""
+    import tempfile, shutil, subprocess, os
+    d = tempfile.mkdtemp(prefix="gitignore-symlink-")
+    SANDBOXES.append(d)
+    shutil.copyfile(os.path.join(REPO, ".gitignore"), os.path.join(d, ".gitignore"))
+    subprocess.run(["git", "init", "-q"], cwd=d, capture_output=True)
+    os.symlink("/tmp", os.path.join(d, "node_modules"))
+    r = subprocess.run(["git", "add", "-n", "node_modules"], cwd=d, capture_output=True, text=True)
+    return "add '" not in (r.stdout + r.stderr)
+
+check("a node_modules SYMLINK is ignored, not just the directory", symlink_is_ignored())
+
 check("compressed dumps and pg_dump archives are still ignored",
       not v["data.sql.gz"] and not v["snap.dump"], repr(v))
 
