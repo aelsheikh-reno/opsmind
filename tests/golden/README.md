@@ -85,16 +85,17 @@ passed straight through.
 
 - **`minorUnitScale` must be set per jurisdiction.** The default is 100, which
   is **wrong for KWD and BHD** — both are three-decimal currencies and need
-  `1000`. At scale 100 a genuine one-fils gap (1234.567 vs 1234.568) rounds into
-  the same integer minor unit, so the computed gap is 0 and the difference is
-  reported under its own cause, `sub-minor-unit`. The harness still fails the
-  case — at every tolerance, because no tolerance can suppress that cause — and
-  it still prints both raw values. But `sub-minor-unit` means only that the two
-  values landed on the same integer minor unit, so the computed gap is 0 — not
-  that the gap is small, and not even that it is under one minor unit (`0.135`
-  and `0.145` are exactly one minor unit apart at scale 100 and still land
-  here). It tells you nothing about how many fils the two sides actually
-  disagree by. Set the scale.
+  `1000`. At scale 100 a genuine one-fils gap (1234.567 vs 1234.568) is finer
+  than a minor unit, so the difference is reported under its own cause,
+  `sub-minor-unit`. The harness still fails the case — at every tolerance,
+  because no tolerance can suppress that cause — and it still prints both raw
+  values and the exact gap: `sub-minor-unit` means precisely and only that the
+  two values are strictly less than one minor unit apart, and the detail says by
+  how much ("they are 0.1 minor units apart"). A pair exactly one minor unit
+  apart never lands here: `0.135` vs `0.145` at scale 100 is a gap of 1 and
+  reports `value-mismatch`. So the cause does tell you how far apart the two
+  sides are — but in hundredths of a dinar, not in the fils the payslip is
+  written in. Set the scale.
 - **`toleranceMinorUnits`** is a count of minor units, not a fraction. Leave it
   at 0 unless a divergence has been approved.
 - **`ignorePaths`** is the escape hatch for values that are not comparable

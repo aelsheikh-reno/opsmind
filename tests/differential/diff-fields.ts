@@ -24,7 +24,10 @@ export type FieldDifference = {
 export type DiffOptions = {
   /** A COUNT of minor units (fils, piastres), not a fraction. Integer >= 0. */
   toleranceMinorUnits?: number;
-  /** Minor units per major unit. Integer >= 1, default 100. */
+  /**
+   * Minor units per major unit. Integer >= 1, default 100. Any integer, not
+   * only a power of ten: the scale is applied as an exact multiplication.
+   */
   minorUnitScale?: number;
   /** Exact paths to skip, subtree and all. */
   ignorePaths?: string[];
@@ -89,54 +92,171 @@ function requireInteger(value: number, name: string, min: number): number {
   return value;
 }
 
+// --- exact decimal arithmetic -------------------------------------------------
+//
+// Everything that decides a numeric classification runs through these. No
+// float operation may appear between a pair of numbers and its cause: a float
+// multiply by the scale is what made 0.135 and 0.145 — exactly one minor unit
+// apart — compute as a gap of 0, and 0.145 and 0.155 compute as a gap of 2.
+
+/** A finite value held exactly as `units / 10 ** decimals`. `decimals >= 0`. */
+type Exact = { units: bigint; decimals: number };
+
+const TEN = 10n;
+
+const pow10 = (n: number): bigint => TEN ** BigInt(n);
+
+/**
+ * The shortest round-trip decimal of `x`, as an exact scaled integer.
+ *
+ * `String(x)` is the decimal the value prints as, and the one a reader of a
+ * differential report means by "0.145". It is deliberately NOT the exact binary
+ * value of the double: in binary 0.145 - 0.135 is 0.009999999999999981, so an
+ * exact-binary comparison would call an exactly-one-minor-unit pair sub-minor.
+ *
+ * `String` switches to exponential notation outside roughly 1e-7 .. 1e21
+ * ("1e+21", "1.5e-8", "5e-324"), so the exponent is parsed rather than assumed
+ * absent — reading "1e-7" as the digits "1" would be wrong by seven orders of
+ * magnitude and silently so.
+ *
+ * Caller must have established `Number.isFinite(x)`.
+ */
+function exactOf(x: number): Exact {
+  const text = String(x);
+  const eAt = text.search(/e/i);
+  const significand = eAt === -1 ? text : text.slice(0, eAt);
+  const exponent = eAt === -1 ? 0 : Number(text.slice(eAt + 1));
+  const negative = significand.startsWith("-");
+  const magnitude = negative || significand.startsWith("+") ? significand.slice(1) : significand;
+  const dot = magnitude.indexOf(".");
+  const whole = dot === -1 ? magnitude : magnitude.slice(0, dot);
+  const fraction = dot === -1 ? "" : magnitude.slice(dot + 1);
+  let units = BigInt(`${whole}${fraction}` || "0");
+  // x = digits * 10 ** (exponent - fraction.length). A negative decimals is a
+  // whole number with trailing zeros, folded into the units so that `decimals`
+  // is always a real denominator and never has to be reasoned about as a shift
+  // in the other direction.
+  let decimals = fraction.length - exponent;
+  if (decimals < 0) {
+    units *= pow10(-decimals);
+    decimals = 0;
+  }
+  // String(-0) is "0", so a negative zero arrives here as zero; it never
+  // reaches this function anyway, since -0 === 0 is already agreement.
+  return { units: negative ? -units : units, decimals };
+}
+
+/**
+ * The true distance between `a` and `b`, in minor units, exactly.
+ *
+ * The scale is applied as an integer multiplication, not as a decimal-point
+ * shift, so `minorUnitScale` may be any integer >= 1 as documented and not only
+ * a power of ten: a scale of 3 gives thirds of a major unit, exactly, and a
+ * scale of 1000 gives KWD fils, exactly. The denominator stays a power of ten,
+ * which is what makes the result renderable as a finite decimal.
+ *
+ * The result keeps its fractional part rather than rounding to an integer count
+ * of minor units. Two values can be less than one minor unit apart while
+ * straddling a minor-unit boundary (1234.564 vs 1234.566 at scale 100), and
+ * rounding each side first reports that pair as a whole unit apart when it is
+ * two tenths of one.
+ */
+function minorUnitDistance(a: number, b: number, scale: number): Exact {
+  const left = exactOf(a);
+  const right = exactOf(b);
+  const decimals = Math.max(left.decimals, right.decimals);
+  const lift = (v: Exact): bigint => v.units * pow10(decimals - v.decimals);
+  const difference = lift(right) - lift(left);
+  const magnitude = difference < 0n ? -difference : difference;
+  return { units: magnitude * BigInt(scale), decimals };
+}
+
+/** `value < limit` where `limit` is a non-negative integer. Exact. */
+const isBelow = (value: Exact, limit: number): boolean =>
+  value.units < BigInt(limit) * pow10(value.decimals);
+
+/** `value <= limit` where `limit` is a non-negative integer. Exact. */
+const isAtMost = (value: Exact, limit: number): boolean =>
+  value.units <= BigInt(limit) * pow10(value.decimals);
+
+/** An exact non-negative `Exact` as a decimal string: "1", "0.2", "0.1". */
+function renderExact(value: Exact): string {
+  const divisor = pow10(value.decimals);
+  const whole = value.units / divisor;
+  const remainder = value.units % divisor;
+  if (remainder === 0n) return whole.toString();
+  const fraction = remainder.toString().padStart(value.decimals, "0").replace(/0+$/, "");
+  return `${whole}.${fraction}`;
+}
+
 /**
  * Diff `candidate` against `legacy`, returning every differing leaf.
  *
  * Ordering is deterministic — depth first, legacy key order, then keys only the
  * candidate has — so a failing differential case reads the same way twice.
  *
- * Tolerance is an integer count of minor units, and both numbers are scaled and
- * rounded to integers before the comparison: at a gap of 1 or more minor units,
- * up to and including exactly `toleranceMinorUnits`, the cause is `rounding`; at
- * one more it is `value-mismatch`. The previous attempt compared
- * `Math.abs(b - a) <= 0.01` and classified four identical one-fils gaps two
- * different ways depending on binary representation.
+ * Tolerance is an integer count of minor units, and the two numbers are scaled
+ * to minor units EXACTLY — decimal digits carried as BigInt, no float operation
+ * anywhere in the decision — so the gap that is classified is the true distance
+ * between them:
  *
- * Two known limits of that scaling, recorded here rather than worked around
- * because whether the predicate should change is a business-rule question:
+ *  - unequal but strictly less than one minor unit apart: `sub-minor-unit`, at
+ *    every tolerance, decided before the tolerance is read;
+ *  - one minor unit or more, up to and including exactly `toleranceMinorUnits`:
+ *    `rounding`;
+ *  - beyond that: `value-mismatch`.
  *
- *  - The COMPARISON is integer, but the scaling multiply `a * scale` is
- *    floating point, so a value whose scaled form lands on a `.5` boundary can
- *    round to the neighbouring minor unit. `0.135 * 100` is exactly 13.5 and
- *    rounds up to 14; `0.145 * 100` is 14.499999999999998 and rounds down to
- *    14 — two values exactly one minor unit apart, computed as a gap of 0.
- *    This moves the `rounding` / `value-mismatch` boundary as well, not only
- *    the `sub-minor-unit` one. A gap of N is what was computed, not a
- *    guarantee about the distance between the two raw values.
- *  - Above roughly `Number.MAX_SAFE_INTEGER / scale` (about 9.0e13 at scale
- *    100) the scaled values lose integer precision, so a genuine multi-unit gap
- *    can collapse to 0 and be reported as `sub-minor-unit`. No payslip or
- *    invoice reaches that magnitude and nothing here handles it; it is written
- *    down so that it is not a silent surprise if it ever shows up.
+ * The gap reported in `detail` is that true distance and may be fractional
+ * (1234.567 vs 1234.568 at scale 100 is 0.1 minor units). Two earlier attempts
+ * got this wrong in opposite directions: `Math.abs(b - a) <= 0.01` classified
+ * four identical one-fils gaps two different ways depending on binary
+ * representation, and `Math.round(x * scale)` collapsed 0.135 vs 0.145 — exactly
+ * one minor unit apart — to a gap of 0 while inflating 0.145 vs 0.155 to a gap
+ * of 2. Across x.xx5 pairs one minor unit apart, that proxy misreported 11.25%.
+ *
+ * The two limits previously recorded here are both gone, and are named so that
+ * nobody reintroduces a workaround for them:
+ *
+ *  - There is no float multiply left to move the boundary. A value whose scaled
+ *    form lands on a `.5` no longer rounds to a neighbouring minor unit,
+ *    because nothing is rounded: the exact distance is compared against 1 and
+ *    against the tolerance as integer ratios.
+ *  - There is no `Number.MAX_SAFE_INTEGER / scale` ceiling. BigInt has no
+ *    precision limit, so 100000000000000.03 vs 100000000000000.05 is 2 minor
+ *    units at scale 100, not the 0 the previous code computed, and the largest
+ *    and smallest doubles scale without loss.
+ *
+ * What remains, deliberately, is that the comparison is on each value's
+ * shortest round-trip decimal — the string it prints as — and not on its exact
+ * binary value. 0.145 as a double is a shade under 0.145, so an exact-binary
+ * distance between 0.135 and 0.145 is 0.009999999999999981, which is less than
+ * one minor unit and would report a pair that a human reads as exactly one fils
+ * apart as `sub-minor-unit`. The printed decimal is what a differential report
+ * is about, so that is what is compared.
+ *
+ * Above 2**53 that decision becomes visible, because there the shortest
+ * round-trip decimal is no longer the value the double holds: the reported gap
+ * is the distance between the printed numbers, not between the machine values.
+ * 999999999999999900000 vs 1e21 at scale 100 reports 10,000,000 minor units,
+ * while those two doubles are one ulp — 13,107,200 minor units — apart. Both
+ * readings are defensible; the printed one is chosen because a human reads this
+ * output as money, and it is also the reading that holds where the data lives. A
+ * binary-exact implementation gives a different cause in 12% of money-shaped
+ * comparisons (600,000 sampled, <= 1e9, <= 3 dp, scale 100), calling 47.18 vs
+ * 47.19 — a plain one-fils difference — `sub-minor-unit`, i.e. finer than a
+ * fils, which is flatly wrong on a payslip. Above 2**53 the two never disagree,
+ * because there every double is an integer.
  *
  * Two deliberate consequences of the rule:
  *
- *  - A pair that rounds to the SAME integer minor unit (1234.567 vs 1234.568 at
- *    scale 100, both 123457) has a gap of 0. That is NOT `rounding`: it gets its
- *    own cause, `sub-minor-unit`, at every tolerance including 0, because the
- *    tolerance comparison cannot distinguish it from agreement. KWD and BHD are
- *    three-decimal currencies, so at the default scale of 100 a genuine one-fils
- *    difference can land here, and a consumer that treats `rounding` as
- *    tolerated noise must not be able to drop it along with the noise.
- *
- *    Landing on the same integer is what the cause keys on — being finer than
- *    the scale is neither necessary nor sufficient. The converse does not hold:
- *    a sub-scale pair that straddles a rounding boundary lands on two integers
- *    (1234.564 vs 1234.566 give 123456 and 123457), so it reports a gap of 1 —
- *    `value-mismatch` at tolerance 0, `rounding` at tolerance 1 or more — even
- *    though it is the same size of difference as the pair above. Which of the
- *    two behaviours is intended is part of the same open question as the limits
- *    recorded above.
+ *  - Being finer than the scale is the whole of what `sub-minor-unit` keys on,
+ *    whether or not the two values round to the same integer minor unit.
+ *    1234.567 vs 1234.568 (0.1 minor units apart) and 1234.564 vs 1234.566 (0.2
+ *    apart, straddling a minor-unit boundary) are the same size of difference
+ *    and get the same cause. It is not `rounding`, at any tolerance including 0:
+ *    KWD and BHD are three-decimal currencies, so at the default scale of 100 a
+ *    genuine one-fils difference lands here, and a consumer that treats
+ *    `rounding` as tolerated noise must not be able to drop it with the noise.
  *  - The scale applies to every number in the tree, money or not. A count, a
  *    percentage or a numeric id differing by 1 is a gap of `minorUnitScale`
  *    minor units, so at the default tolerance it is still a `value-mismatch`;
@@ -165,36 +285,46 @@ export function diffFields(
 
   const compareNumbers = (path: string, a: number, b: number): void => {
     if (sameNumber(a, b)) return;
-    const gap = Math.abs(Math.round(b * scale) - Math.round(a * scale));
-    // Two unequal numbers that scale and round to the SAME integer minor unit
-    // produce a gap of 0, so the gap carries no information, and
-    // `gap <= tolerance` is true at every tolerance including 0. That is exactly
-    // the shape of agreement, which is why this cannot be `rounding` — a
-    // consumer filtering `rounding` as tolerated noise would drop a real
-    // one-fils KWD or BHD difference with it. It is reported under its own cause
-    // that no tolerance can produce and no tolerance can suppress.
-    //
-    // `gap === 0` exactly, never `!(gap > 0)`: an Infinity-against-Infinity
-    // scaling gives NaN, which is a different failure and keeps its existing
-    // `value-mismatch` classification.
-    if (gap === 0) {
-      push(path, a, b, "sub-minor-unit",
-        `legacy ${describe(a)} vs candidate ${describe(b)}: the two values are not equal, but at ` +
-          `scale ${scale} both round to the same integer minor unit, ${Math.round(a * scale)}, so ` +
-          "the computed gap is 0 minor units — the same gap two equal values would give. This is " +
-          `not rounding within tolerance: the cause does not depend on the tolerance of ` +
-          `${tolerance} minor units and no tolerance can suppress it. The cause exists because a ` +
-          "real one-fils difference on a three-decimal currency such as KWD or BHD, compared at a " +
-          "scale of 100, computes a gap of 0 exactly like this, so it must be adjudicated rather " +
-          "than tolerated.");
+    // NaN and the infinities have no decimal expansion to scale, so they are
+    // settled before any of it. Equality is already ruled out above, which
+    // leaves only unequal pairs — Infinity against 1e308, NaN against a number,
+    // Infinity against -Infinity — and every one of them keeps the
+    // `value-mismatch` it has always had, at every tolerance. There is no
+    // distance in minor units to report and none is invented.
+    if (!Number.isFinite(a) || !Number.isFinite(b)) {
+      push(path, a, b, "value-mismatch",
+        `legacy ${describe(a)} vs candidate ${describe(b)}: a gap that is not representable in ` +
+          `minor units, over the tolerance of ${tolerance} minor units`);
       return;
     }
-    const gapText = Number.isFinite(gap)
-      ? `a gap of ${gap} minor unit${gap === 1 ? "" : "s"} at scale ${scale}`
-      : "a gap that is not representable in minor units";
-    const within = gap <= tolerance;
+
+    const distance = minorUnitDistance(a, b, scale);
+    const gapText = renderExact(distance);
+    // Strictly less than one minor unit, and unequal — the gap is finer than
+    // the scale can express. Decided before the tolerance is consulted, so no
+    // tolerance can produce this cause and no tolerance can suppress it. It
+    // cannot be `rounding`: a consumer filtering `rounding` as tolerated noise
+    // would drop a real one-fils KWD or BHD difference with it.
+    //
+    // This keys on the true distance, not on the two values rounding to the
+    // same integer minor unit. Those come apart on a pair that straddles a
+    // minor-unit boundary (1234.564 vs 1234.566 at scale 100 rounds to 123456
+    // and 123457), which is two tenths of a minor unit and belongs here.
+    if (isBelow(distance, 1)) {
+      push(path, a, b, "sub-minor-unit",
+        `legacy ${describe(a)} vs candidate ${describe(b)}: the two values are not equal, but at ` +
+          `scale ${scale} they are ${gapText} minor units apart — less than the one minor unit ` +
+          "that is the smallest difference this scale can express. This is not rounding within " +
+          `tolerance: the cause does not depend on the tolerance of ${tolerance} minor units and ` +
+          "no tolerance can suppress it. The cause exists because a real one-fils difference on a " +
+          "three-decimal currency such as KWD or BHD, compared at a scale of 100, is a tenth of a " +
+          "minor unit exactly like this, so it must be adjudicated rather than tolerated.");
+      return;
+    }
+    const within = isAtMost(distance, tolerance);
     push(path, a, b, within ? "rounding" : "value-mismatch",
-      `legacy ${describe(a)} vs candidate ${describe(b)}: ${gapText}, ` +
+      `legacy ${describe(a)} vs candidate ${describe(b)}: a gap of ${gapText} minor ` +
+        `unit${gapText === "1" ? "" : "s"} at scale ${scale}, ` +
         `${within ? "within" : "over"} the tolerance of ${tolerance} minor units`);
   };
 

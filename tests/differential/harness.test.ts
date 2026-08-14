@@ -6,6 +6,10 @@
 // the same input", "diffing and matched", "the real legacy prorata module";
 // 2 -> "one bad case never stops the run"; 3 -> "loadLegacyModule";
 // 4 -> "golden dataset is anonymised".
+//
+// `harness-exact-minor-scaling` reaches the harness through the cause a case
+// reports and through the strictness of `matched`: see "diffing and the
+// strictness of `matched`", the three exact-scaling cases.
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -106,9 +110,10 @@ describe("runDifferential — diffing and the strictness of `matched`", () => {
 
   // The single most valuable test in this file. Kuwait and Bahrain price in
   // three-decimal currencies, so a real one-fils gap is finer than the default
-  // minor-unit scale of 100: it scales to the same integer, so the gap measured
-  // in minor units is 0. It carries its own cause `sub-minor-unit` rather than
-  // `rounding`, precisely so no consumer can drop it as tolerated noise — and
+  // minor-unit scale of 100: measured in minor units the gap is 0.1, below the
+  // one minor unit that scale can express. It carries its own cause
+  // `sub-minor-unit` rather than `rounding`, so no consumer can drop it as
+  // tolerated noise — and
   // `matched` stays strict, because if it did not, two live jurisdictions would
   // be silently wrong on every payslip.
   it("does NOT match a sub-minor-unit KWD gap, nor a difference inside a tolerance", async () => {
@@ -149,6 +154,66 @@ describe("runDifferential — diffing and the strictness of `matched`", () => {
       expect(report.failed, label).toBe(1);
       // A consumer discarding `rounding` as noise still has the real gap in hand.
       expect(report.results[0].differences.filter((d) => d.cause !== "rounding"), label).toHaveLength(1);
+      expectConsistent(report);
+    }
+  });
+
+  // The x.xx5 pairs a `Math.round(x * scale)` multiply bends in both
+  // directions: 0.135 vs 0.145 collapses to a gap of zero and 0.145 vs 0.155
+  // inflates to two. Both are one fils, and the harness must say so — a run
+  // that reports the first as sub-minor-unit is telling a payroll reviewer the
+  // two systems agree to the fils when they do not.
+  it("reports an exactly-one-fils gap as rounding whichever way a float multiply used to bend it", async () => {
+    for (const [legacy, candidate] of [[0.135, 0.145], [0.145, 0.155], [0.155, 0.145], [0.145, 0.135]]) {
+      const label = `${legacy} vs ${candidate}`;
+      const report = await runDifferential(
+        pairSpec([["one fils", { amount: legacy }, { amount: candidate }]], { toleranceMinorUnits: 1 }),
+      );
+      expect(report.results[0].differences, label).toHaveLength(1);
+      expect(report.results[0].differences[0].cause, label).toBe("rounding");
+      expect(report.results[0].matched, label).toBe(false);
+      expectConsistent(report);
+
+      const strict = await runDifferential(pairSpec([["one fils", { amount: legacy }, { amount: candidate }]]));
+      expect(strict.results[0].differences[0].cause, label).toBe("value-mismatch");
+      expect(strict.matched, label).toBe(0);
+      expectConsistent(strict);
+    }
+  });
+
+  // The other direction: 1234.564 and 1234.566 are a fifth of a fils apart but
+  // straddle the rounding boundary, so the old scaling reported a whole minor
+  // unit — which a consumer filtering `rounding` away would have discarded.
+  it("keeps a straddling sub-minor gap under its own cause, out of a rounding filter", async () => {
+    const report = await runDifferential(pairSpec([
+      ["KWD straddling the boundary", { amount: 1234.564 }, { amount: 1234.566 }],
+      ["AED one fils", { amount: 0.135 }, { amount: 0.145 }],
+    ], { toleranceMinorUnits: 1 }));
+    const straddling = byName(report, "KWD straddling the boundary");
+    expect(straddling.differences[0].cause).toBe("sub-minor-unit");
+    expect(byName(report, "AED one fils").differences[0].cause).toBe("rounding");
+    expect(straddling.differences.filter((d) => d.cause !== "rounding")).toHaveLength(1);
+    expect(report.matched).toBe(0);
+    expect(report.failed).toBe(2);
+    const text = formatReport(report);
+    for (const token of ["1234.564", "1234.566", "sub-minor-unit", "rounding"]) {
+      expect(text, token).toContain(token);
+    }
+    expectConsistent(report);
+  });
+
+  it("does not lose a two-fils gap at a magnitude where doubles are further apart than a fils", async () => {
+    const pair: [string, unknown, unknown][] = [
+      ["ledger total", { amount: 100000000000000.03 }, { amount: 100000000000000.05 }],
+    ];
+    const strict = await runDifferential(pairSpec(pair, { toleranceMinorUnits: 1 }));
+    expect(strict.results[0].differences[0].cause).toBe("value-mismatch");
+    const tolerated = await runDifferential(pairSpec(pair, { toleranceMinorUnits: 2 }));
+    expect(tolerated.results[0].differences[0].cause).toBe("rounding");
+    // Either way it is a difference, and either way the run does not match.
+    for (const report of [strict, tolerated]) {
+      expect(report.matched).toBe(0);
+      expect(report.results[0].differences[0].cause).not.toBe("sub-minor-unit");
       expectConsistent(report);
     }
   });

@@ -133,6 +133,47 @@
     consumer that treats `rounding` as tolerated noise would drop a real gap.
     Deferred deliberately rather than reopening a merged, reviewed PR.
 
+- id: harness-exact-minor-scaling
+  phase: 0
+  title: Scale to minor units exactly, so the classification matches the rule
+  depends_on: [harness-sub-minor-cause]
+  spec: PIPELINE.md#the-problem-this-design-solves
+  produces:
+    - tests/differential/diff-fields.ts
+    - tests/differential/diff-fields.test.ts
+    - tests/differential/harness.ts        # comments only — they described the old mechanism
+    - tests/differential/harness.test.ts   # ditto, plus cases for the corrected classification
+    - tests/golden/README.md               # ditto — it described the old mechanism
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "Two values less than one minor unit apart report sub-minor-unit, whether or not they round to the same integer"
+      - "Two values exactly one minor unit apart never report sub-minor-unit, at any magnitude a payslip reaches"
+      - "The gap in minor units is the true gap — no pair is inflated or collapsed by the scaling"
+      - "No float arithmetic decides a classification"
+  risk: money
+  status: todo
+  note: >
+    Resolves the predicate question harness-sub-minor-cause escalated. Ahmed's
+    decision, 2026-08-14: the implementation follows the assertion already
+    approved on that node — a gap finer than minorUnitScale is what the cause
+    keys on — rather than the "both sides round to the same integer" proxy that
+    was actually built.
+
+    The proxy and the rule come apart because `Math.round(x * scale)` is a
+    float multiply. 0.135 and 0.145 are exactly one minor unit apart yet
+    collapse to a gap of 0, while 0.145 and 0.155 inflate to a gap of 2;
+    11.25% of x.xx5 pairs misreport in one direction or the other. The
+    inflation half is a pre-existing bug in the rounding / value-mismatch
+    boundary, not only in the new cause, so this fixes both.
+
+    A magnitude test does not work either: 0.145 - 0.135 is 0.009999999999999981
+    in binary, so `|b - a| * scale < 1` calls an exactly-one-unit pair
+    sub-minor. Scale exactly instead — shift the decimal point on each value's
+    round-trip string and compare as integers — which is what
+    harness-diff-fields promised with "no float in the decision" and did not
+    deliver.
+
 - id: gate-size-impl-scope
   title: Count the guard harness as tests, not as implementation
   phase: 0
