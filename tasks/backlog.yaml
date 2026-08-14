@@ -349,7 +349,7 @@
       - "The statutory due date is periodEnd + Regime.deadlineDays in calendar days, and the date to file by rolls forward off a weekend or holiday"
       - "Repositories import the shared client from lib/db.ts and never construct one"
   risk: compliance
-  status: todo
+  status: done
   note: >
     Built first among modules because it is small and exercises every pattern
     the other six copy: module interface, repository boundary, business
@@ -723,7 +723,7 @@
       - "The audit log is append-only; erasure redacts rather than deletes"
       - "No isPaid or equivalent boolean, and no nullable direction, is introduced by these models"
   risk: compliance
-  status: todo
+  status: done
   note: >
     The second half of the kernel schema, split from kernel-schema-base on size.
     Carries Person, PersonEnrolment, User, DocumentType, FxRate and the audit
