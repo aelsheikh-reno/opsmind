@@ -253,9 +253,23 @@
     lab staging VM where the team can try it while the old system still runs.
 
 - id: kernel-schema-base
-  title: Prisma schema for the kernel entities
+  title: Prisma schema for the kernel entities — calendar, law, parties, document
   phase: 1
-  depends_on: [harness-differential]
+  depends_on: [harness-differential, gate-migrations-committable]
+  size_total: 1700
+  size_waiver_reason: >
+    Roughly 1640 lines total, of which ~1145 are tests/kernel/: they parse the
+    schema so the four assertions are enforceable rather than aspirational,
+    which is the ratio CLAUDE.md's testing policy asks for on a
+    compliance-tagged task. Implementation is ~310 against the unchanged 400 —
+    schema, the backlog graph and the migration lock. Generated migration DDL
+    is out of size-impl per ADR-028 and still counted in this total.
+
+    Figures are approximate on purpose: this reason is itself part of the diff
+    it describes, so any exact count it states is wrong as soon as it is
+    written. An earlier version of this node claimed 369 when the real figure
+    was 450 — measured before later edits and never rechecked — which is how a
+    waiver stops being reviewable.
   spec: docs/architecture/data-model.md
   also_read:
     - docs/architecture/components-kernel.md   # what each entity is for
@@ -265,8 +279,9 @@
   produces:
     - prisma/schema.prisma
     - prisma/migrations/
+    - tests/kernel/
   done_when:
-    gates: [lint, types, boundaries]
+    gates: [lint, types, boundaries, tests]
     differential: none   # a schema computes nothing; risk still blocks auto-merge
     assertions:
       - "Document carries a direction and it is not nullable"
@@ -281,6 +296,19 @@
     than components-kernel.md, which says what each entity is for — both are
     listed, read the model for structure and the component page for intent.
 
+    Split 2026-08-14. The full kernel measured 677 implementation lines against
+    the 400 that cannot be waived — 364 of schema and 310 of generated
+    migration DDL, and stripping every comment only reached 563. This node
+    keeps its id so module-deadlines' dependency stays valid, and keeps all
+    four assertions unchanged: Jurisdiction, BusinessCalendar, BusinessHoliday,
+    Regime, LegalEntity, JurisdictionEnrolment and Document. See the waiver
+    reason above for the measured size — no figure is repeated here, because
+    the one that used to be was stale.
+    People, accounts and the registry move to kernel-schema-people-registry.
+    Depends on gate-migrations-committable because until that landed the
+    migration could not be committed at all and the size gate under-read this
+    task by 310 lines.
+
 - id: module-deadlines
   title: Deadline monitor — the reference module
   phase: 1
@@ -294,6 +322,8 @@
     gates: [lint, types, boundaries, tests, coverage, differential]
     assertions:
       - "Business-day arithmetic uses the Sunday-Thursday Gulf week"
+      - "A jurisdiction with no BusinessCalendar is an error, never a Saturday-Sunday fallback"
+      - "A filing due date is periodEnd + Regime.deadlineDays in calendar days, never rolled off a weekend"
       - "A run reports the complete breach set, and an empty set is meaningful"
       - "Thresholds are data in settings, not constants in code"
       - "Registering a deadline already inside a threshold evaluates immediately"
@@ -336,7 +366,7 @@
 - id: kernel-entities
   title: Kernel entities — Person, Document, LegalEntity, Jurisdiction, Regime, Enrolment
   phase: 1
-  depends_on: [kernel-schema-base]
+  depends_on: [kernel-schema-people-registry]
   spec: docs/architecture/components-kernel.md
   also_read:
     - docs/architecture/data-model.md          # field-level shapes
@@ -507,7 +537,7 @@
       - "Database dumps and archives stay ignored, including one sitting inside prisma/"
       - "The guard is proved by whether git will stage the file, not by git check-ignore"
   risk: low
-  status: todo
+  status: done
   note: >
     `.gitignore` line 10 is `*.sql`, grouped with `*.sql.gz` and `*.dump` and
     plainly meant for database dumps. It also matches
@@ -543,7 +573,7 @@
       - "size-total still counts generated DDL in full and stays waivable per task"
       - "The 400 impl budget and the 800 total default are unchanged"
   risk: low
-  status: todo
+  status: done
   note: >
     kernel-schema-base measured 450 implementation lines against the
     non-overridable 400 after already being split once: 224 of authored schema
@@ -575,7 +605,7 @@
       - "reference/legacy/lib/fx.ts loads through loadLegacyModule and computes"
       - "A missing legacy client throws, and never falls back to this build's client"
   risk: low
-  status: todo
+  status: done
   note: >
     The generated client package name resolves to whichever client was
     generated last, and that is this build's. From the moment the new schema
@@ -596,3 +626,42 @@
     guard-write.sh gains one exempt filename, vitest.config.ts, so the alias can
     name the package it aliases. One filename, not a directory or a pattern;
     check-boundaries.sh is untouched. Ahmed's decision, 2026-08-14.
+
+- id: kernel-schema-people-registry
+  title: Prisma schema — people, accounts, the registry, FX and audit
+  phase: 1
+  depends_on: [kernel-schema-base]
+  spec: docs/architecture/data-model.md
+  also_read:
+    - docs/architecture/components-kernel.md
+    - docs/architecture/data-retention.md      # retention basis and erasure mode
+    - docs/architecture/decisions.md           # ADR-007, ADR-022, ADR-023
+  legacy_reference: reference/legacy/prisma/schema.prisma
+  produces:
+    - prisma/schema.prisma
+    - prisma/migrations/
+    - tests/kernel/
+  done_when:
+    gates: [lint, types, boundaries, tests]
+    differential: none   # a schema computes nothing; risk still blocks auto-merge
+    assertions:
+      - "Person carries managerId and per-jurisdiction enrolments with validity dates"
+      - "DocumentType carries field schema, retention years and basis, and an erasure mode of exactly redact_personal or full_delete"
+      - "FxRate stores rate as a decimal with an asOf date, never a float"
+      - "The audit log is append-only; erasure redacts rather than deletes"
+      - "No isPaid or equivalent boolean, and no nullable direction, is introduced by these models"
+  risk: compliance
+  status: todo
+  note: >
+    The second half of the kernel schema, split from kernel-schema-base on size.
+    Carries Person, PersonEnrolment, User, DocumentType, FxRate and the audit
+    table — measured at ~313 implementation lines.
+
+    Its tests are already written. The test-author produced them from the spec
+    alone for kernel-schema-base before the split, and they are parked verbatim
+    in tests/kernel/pending-slice-2/README.md rather than deleted or softened.
+    Move each block back into tests/kernel/kernel-schema.test.ts and restore the
+    full ten-model list in "declares the kernel entities this task carries".
+
+    Subject matter overlaps kernel-entities and kernel-registry-fx, which build
+    the lib/kernel/ code over these tables; this node is the schema they need.
