@@ -75,8 +75,9 @@ model Jurisdiction {
   code      String   @unique
   name      String
 
-  calendar BusinessCalendar?
-  regimes  Regime[]
+  calendar         BusinessCalendar?
+  regimes          Regime[]
+  personEnrolments PersonEnrolment[]
 }
 
 /// The working week and the non-working days a deadline must step over.
@@ -243,8 +244,290 @@ model Document {
   legalEntity   LegalEntity? @relation(fields: [legalEntityId], references: [id], onDelete: SetNull)
 
   enrolmentCertificate JurisdictionEnrolment[] @relation("EnrolmentCertificate")
+  employmentContract   Person?                 @relation("EmploymentContract")
 
   @@index([docType])
   @@index([direction])
   @@index([expiryDate])
+}
+
+// ---------------------------------------------------------------------------
+// People and accounts
+// ---------------------------------------------------------------------------
+
+/// Staff identity: HR record, payroll subject, claimant and project resource in
+/// one row. Deliberately NOT split per role — components-kernel.md notes it is
+/// among the most referenced tables and separating the roles would migrate half
+/// the schema to solve a problem that is not constraining delivery.
+///
+/// Compensation is not here. data-model.md moves the salary, its currency and
+/// its components onto SalaryTerm — effective-dated, append-only rows owned by
+/// Payroll (ADR-022) — so a raise never rewrites a period that has already been
+/// paid. Legacy carried salary, salaryCurrency and salaryComponents as flat
+/// columns edited in place, which is the history loss ADR-022 exists to stop;
+/// those three do not come across. The hourly rates below do, because no
+/// documented table replaces them (see the note on them).
+model Person {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  name        String
+  email       String?
+  jobTitle    String?
+  department  String?
+  nationality String?
+
+  /// The org chart, required to resolve who approves what (data-model.md:119).
+  /// Nullable because the top of the chart reports to nobody; that a chain must
+  /// not loop is an application rule, not something a column can state.
+  managerId String?
+  manager   Person?  @relation("PersonManager", fields: [managerId], references: [id], onDelete: SetNull)
+  reports   Person[] @relation("PersonManager")
+
+  contractStart DateTime? @db.Date
+  contractEnd   DateTime? @db.Date
+  exitDate      DateTime? @db.Date
+  exitReason    String?
+
+  /// "fulltime" | "parttime", carried from the legacy shape.
+  employmentType            String  @default("fulltime")
+  weeklyHours               Decimal @default(40) @db.Decimal(6, 2)
+  payslipInContractCurrency Boolean @default(false)
+
+  /// No costPerHour, billingRate or rateCurrency here. They were carried from
+  /// the legacy shape and removed on review: a project's margin for a past
+  /// month must not move when someone's rate changes today, which is the same
+  /// argument ADR-022 makes for salary. They arrive effective-dated with
+  /// kernel-rate-terms, which must merge before module-projects and
+  /// module-payroll read them. Nothing reads them yet, so shipping a shape
+  /// known to be wrong would only have to be migrated away from.
+
+  /// The employment contract, as evidence — the person is the record, the PDF
+  /// is proof of it (CLAUDE.md rule 7). Restrict, not the legacy Cascade:
+  /// deleting the evidence must never delete the employee.
+  documentId String?   @unique
+  document   Document? @relation("EmploymentContract", fields: [documentId], references: [id], onDelete: Restrict)
+
+  enrolments PersonEnrolment[]
+  user       User?
+
+  @@index([managerId])
+}
+
+/// A person's own registration in a jurisdiction: the social insurance number
+/// or tax identifier, and the dates it is valid between (components-kernel.md,
+/// "person-level enrolments (SI and tax identifiers per jurisdiction)"). Held
+/// separately from Person because one person can be registered in several
+/// jurisdictions at once, and a registration ends without the person leaving.
+model PersonEnrolment {
+  id             String       @id @default(cuid())
+  createdAt      DateTime     @default(now())
+  personId       String
+  person         Person       @relation(fields: [personId], references: [id], onDelete: Cascade)
+  jurisdictionId String
+  jurisdiction   Jurisdiction @relation(fields: [jurisdictionId], references: [id], onDelete: Restrict)
+
+  /// Which obligation the identifier is for. The same closed-set argument as
+  /// Regime.obligationType: a free string lets an extraction write three
+  /// spellings of one obligation that no query reunites.
+  obligationType ObligationType
+  /// The registration number itself — social insurance number, tax number.
+  identifier     String
+
+  /// Validity dates. A null activeTo means still registered.
+  activeFrom DateTime  @db.Date
+  activeTo   DateTime? @db.Date
+
+  @@index([personId, jurisdictionId, obligationType])
+  @@index([jurisdictionId])
+}
+
+/// An account. Authentication only: the provider, the provider's subject and
+/// the credential hash, so an IdP change re-points that pair without touching
+/// anything else (security-authentication.md). Roles, grants and scopes live in
+/// the Authorization service and never here — ADR-007. The legacy User carried
+/// `role` and a `permissions` JSON blob; that is what this build replaces.
+model User {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  email String @unique
+  name  String
+
+  /// Which identity provider authenticates this user; exactly one, never two
+  /// (ADR-008). A string rather than an enum because security-authentication.md
+  /// makes adding Okta "a provider entry, not a rewrite" — an enum would make
+  /// every new customer's IdP a schema migration.
+  provider     String  @default("credentials")
+  /// The provider's subject claim. Null for the credentials provider, which
+  /// identifies the user by email and holds a hash instead.
+  providerSub  String?
+  /// bcrypt. Null for a user who authenticates through an external provider —
+  /// there is no local credential to store, and an empty string would look like
+  /// one.
+  passwordHash String?
+
+  /// The staff record this account acts as, where there is one. Null for the
+  /// break-glass administrator, who is an account without an employee behind
+  /// it. Restrict: an account must be dealt with explicitly, never orphaned by
+  /// a person's removal.
+  personId String? @unique
+  person   Person? @relation(fields: [personId], references: [id], onDelete: Restrict)
+
+  isActive    Boolean   @default(true)
+  lastLoginAt DateTime?
+  lastSeenAt  DateTime?
+
+  @@unique([provider, providerSub])
+}
+
+// ---------------------------------------------------------------------------
+// The document type registry
+// ---------------------------------------------------------------------------
+
+/// What the retention clock counts from. It differs per statute, which is why
+/// it is stored rather than assumed (data-retention.md).
+enum RetentionBasis {
+  end_of_financial_year
+  end_of_tax_period
+  document_date
+}
+
+/// How a data-subject erasure request is honoured for a document type.
+/// `redact_personal` clears the personal fields and leaves the financial record
+/// standing, which is how statutory retention and the right to erasure are
+/// reconciled; `full_delete` is for types no statute requires keeping. Exactly
+/// these two values (ADR-023).
+enum ErasureMode {
+  redact_personal
+  full_delete
+}
+
+/// The registry: one row per document type, holding the extraction schema, the
+/// retention policy and how erasure is honoured — all as data, editable in
+/// Settings, because a statute changing must be a configuration change and not
+/// a release (ADR-023). The ingestion rule catalogue that components-kernel.md
+/// lists alongside these is IngestionRule, a separate kernel table that arrives
+/// with the ingestion work.
+model DocumentType {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  /// Matches Document.docType.
+  type     String @unique
+  label    String
+  category String
+
+  /// The extraction schema handed to the parser on every call.
+  fields Json
+
+  /// Seven years by default: UAE corporate tax requires seven from the end of
+  /// the financial year and VAT five from the end of the tax period, and since
+  /// one invoice serves both regimes the longer period governs. Per-type
+  /// because the statutes differ and change — data-retention.md says to confirm
+  /// the actual numbers with the accountant; the schema only guarantees they
+  /// are data.
+  retentionYears Int            @default(7)
+  retentionBasis RetentionBasis
+  /// Blocks the purge job regardless of age, for disputes and investigations.
+  legalHold      Boolean        @default(false)
+  erasureMode    ErasureMode
+
+  /// Who last changed this type and when — components-kernel.md requires the
+  /// registry be "versioned with actor and timestamp". Actor and timestamp are
+  /// on the row; prior versions are not retained here.
+  updatedAt       DateTime @updatedAt
+  updatedByUserId String?
+}
+
+// ---------------------------------------------------------------------------
+// FX
+// ---------------------------------------------------------------------------
+
+/// One observed rate on one date. Its own table, replacing the JSON blob the
+/// legacy build kept in Setting under `fx_rates_cache`, so a rate can be looked
+/// up as of a date instead of being whatever the cache last held.
+///
+/// A settlement or a payroll month copies the rate it used onto its own row, so
+/// a processed period keeps its rate forever and is never recomputed from here.
+model FxRate {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  /// ISO-4217. rate is the number of `quote` units one `base` unit buys.
+  base  String
+  quote String
+
+  /// Decimal, never Float: a rate multiplies money, so binary rounding here
+  /// lands directly in an amount. Ten fractional digits carry both a
+  /// thousands-scale rate and a small one at full published precision.
+  rate Decimal @db.Decimal(20, 10)
+
+  /// The date the rate is for. Rates are looked up as of a date, not "now".
+  asOf DateTime @db.Date
+
+  /// One rate per pair per day. A snapshot has to reproduce: a payslip
+  /// converted last March must convert the same way when it is reopened, and
+  /// two rows for one pair on one date make "the rate as of that date"
+  /// ambiguous exactly where data-model.md says it is determinate. Ahmed's
+  /// decision, 2026-08-14. Deliberately no `source` column — if a second rate
+  /// provider ever arrives that is a migration, not a redesign, and adding the
+  /// column speculatively would weaken this key today for a case that may
+  /// never come.
+  @@unique([base, quote, asOf])
+}
+
+// ---------------------------------------------------------------------------
+// Audit
+// ---------------------------------------------------------------------------
+
+/// Append-only activity log, read back by the in-product timelines. Nothing in
+/// this build ever deletes or amends an entry: it stays in the database because
+/// of that read-back requirement, and an Object Lock archive is a later option.
+///
+/// Erasure redacts rather than deletes (ADR-023). A redaction clears the
+/// personal fields on the entry and records that it happened, so the row and
+/// its place in the timeline survive and the log stays immutable in shape.
+/// That the database also refuse DELETE is a grant-level concern for
+/// operations, not something this schema can state.
+model AuditEntry {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  /// What happened, and to what.
+  action      String
+  entityType  String
+  entityId    String?
+  entityLabel String?
+  details     Json?
+
+  /// The actor, copied rather than joined: an entry must still read correctly
+  /// after the account is deactivated, and no foreign key may put the log at
+  /// the mercy of another row's deletion.
+  actorUserId String?
+  actorName   String?
+
+  /// The retention policy that WAS APPLIED, snapshotted at the moment a purge
+  /// or an erasure ran. Null on every other kind of entry.
+  ///
+  /// This is how "what policy governed this action" is answered without
+  /// versioning DocumentType. The registry keeps only its latest actor and
+  /// timestamp; a purge destroys records, so the question is asked about a
+  /// destruction that already happened, and a config table's current row
+  /// cannot answer it. Copied rather than joined, for the same reason the actor
+  /// is: an entry must still read correctly after the type is edited or
+  /// deleted. Ahmed's decision, 2026-08-14 — see data-retention.md.
+  appliedRetentionYears Int?
+  appliedRetentionBasis RetentionBasis?
+  appliedErasureMode    ErasureMode?
+
+  /// Set when an erasure request has redacted entityLabel, details and
+  /// actorName on this entry. Null means the entry is intact — the redaction is
+  /// a recorded change, never a missing row.
+  redactedAt      DateTime?
+  redactedBy      String?
+  redactionReason String?
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
 }

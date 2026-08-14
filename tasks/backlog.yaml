@@ -631,6 +631,17 @@
   title: Prisma schema — people, accounts, the registry, FX and audit
   phase: 1
   depends_on: [kernel-schema-base]
+  size_total: 1300
+  size_waiver_reason: >
+    Roughly 1110 lines, of which ~683 are tests/kernel/ and ~158 are generated
+    migration DDL. Implementation is ~268 against the unchanged 400 — the schema
+    itself plus five lines of backlog. The tests parse the schema so the five
+    assertions are enforceable rather than aspirational, which is what
+    CLAUDE.md's testing policy asks for on a compliance-tagged task, and they
+    include the blocks written for these models before the split.
+
+    Figures are approximate deliberately: this reason is part of the diff it
+    describes, so any exact count it states is wrong as soon as it is written.
   spec: docs/architecture/data-model.md
   also_read:
     - docs/architecture/components-kernel.md
@@ -655,13 +666,15 @@
   note: >
     The second half of the kernel schema, split from kernel-schema-base on size.
     Carries Person, PersonEnrolment, User, DocumentType, FxRate and the audit
-    table — measured at ~313 implementation lines.
+    table. See the waiver reason above for the measured size; no figure is
+    repeated here, because the planning estimate that used to sit in this
+    sentence was wrong by fifty lines and nobody noticed.
 
-    Its tests are already written. The test-author produced them from the spec
-    alone for kernel-schema-base before the split, and they are parked verbatim
-    in tests/kernel/pending-slice-2/README.md rather than deleted or softened.
-    Move each block back into tests/kernel/kernel-schema.test.ts and restore the
-    full ten-model list in "declares the kernel entities this task carries".
+    Its tests were written ahead of it. The test-author produced them from the
+    spec alone for kernel-schema-base before the split, and they were parked
+    verbatim rather than deleted or softened. They have since been moved back
+    into tests/kernel/kernel-schema.test.ts and the parking file removed; the
+    ten-model list is restored.
 
     Subject matter overlaps kernel-entities and kernel-registry-fx, which build
     the lib/kernel/ code over these tables; this node is the schema they need.
@@ -733,3 +746,45 @@
     process slip with an obvious fix and names how many files are waiting;
     "nothing changed" on a clean tree means the task produced nothing at all,
     which is a different conversation.
+
+- id: kernel-rate-terms
+  title: Effective-dated cost and billing rates
+  phase: 1
+  depends_on: [kernel-schema-people-registry]
+  spec: docs/architecture/data-model.md
+  also_read:
+    - docs/architecture/decisions.md           # ADR-022, effective dating
+    - docs/architecture/components-core-projects.md
+  produces:
+    - prisma/schema.prisma
+    - prisma/migrations/
+    - docs/architecture/data-model.md
+    - tests/kernel/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    differential: none
+    assertions:
+      - "A rate change is a new effective-dated row; an existing row is never edited in place"
+      - "A rate is answerable as at a date, so a past month's cost does not move"
+      - "Person carries no rate as a plain column"
+      - "data-model.md gives the table a field-level shape before it is built"
+  risk: money
+  status: todo
+  note: >
+    Person carried costPerHour, billingRate and rateCurrency across from the
+    legacy schema as plain nullable columns. They were removed from
+    kernel-schema-people-registry on review: a project's margin for a past month
+    must not move because someone's rate changed today, which is exactly the
+    argument ADR-022 makes for salary — and legacy edited all four in place,
+    with ADR-022 rescuing only the salary. Ahmed's decision, 2026-08-14. Nothing
+    reads them yet, so shipping a shape known to be wrong would only have to be
+    migrated away from.
+
+    MUST MERGE BEFORE module-projects and module-payroll. Both read rates to
+    compute margin and cost, and both are unreachable until then anyway — they
+    sit behind kernel-entities.
+
+    data-model.md gives this no field-level shape today; the spec section is
+    part of this task, not an assumption it may make. SalaryTerm at
+    data-model.md:36-47 is the pattern: effectiveFrom, effectiveTo null for
+    current, rows never edited in place, and a reason for the change.
