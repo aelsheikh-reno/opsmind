@@ -17,6 +17,17 @@
 //      -> "sub-minor-unit gaps"
 //   2. no consumer can filter it away as tolerated noise
 //      -> "sub-minor-unit gaps" / tolerance-cannot-mask cases
+//
+// Assertion map (tasks/backlog.yaml#harness-exact-minor-scaling):
+//   1. under one minor unit is sub-minor-unit whether or not the two sides
+//      round to the same integer -> "exact scaling · a distance under one
+//      minor unit", "exact scaling · the x.xx5 sweep"
+//   2. exactly one minor unit is never sub-minor, at any magnitude
+//      -> "exact scaling · one minor unit exactly"
+//   3. the gap is the true gap, neither inflated nor collapsed
+//      -> "exact scaling · the gap it reports", and every tolerance boundary
+//   4. no float arithmetic decides a classification
+//      -> "exact scaling · exponential round-trip strings", the sweeps
 import { describe, expect, it } from "vitest";
 import { diffFields } from "@/tests/differential/diff-fields";
 import type { DiffOptions, DifferenceCause, FieldDifference } from "@/tests/differential/diff-fields";
@@ -56,6 +67,56 @@ function causesOf(diffs: FieldDifference[]): DifferenceCause[] {
 /** Cause of the one difference between two scalars. */
 function causeOf(legacy: unknown, candidate: unknown, options?: DiffOptions): DifferenceCause {
   return single(diffFields(legacy, candidate, options)).cause;
+}
+
+/**
+ * The number whose shortest round-trip string is exactly `text` — so a test can
+ * state a decimal distance and know the two doubles really carry it. Written as
+ * a literal, `100000000000000.04` is silently the same double as `...05`, and a
+ * test claiming a one-minor-unit gap there would be claiming nothing.
+ */
+function decimal(text: string): number {
+  const value = Number(text);
+  if (String(value) !== text) {
+    throw new Error(`${text} does not round-trip — String() gives ${String(value)}`);
+  }
+  return value;
+}
+
+/** A pair in both argument orders and with both signs: four orientations. */
+function orientations(a: number, b: number): [number, number][] {
+  return [[a, b], [b, a], [-a, -b], [-b, -a]];
+}
+
+/**
+ * `x.xx5`-style pairs exactly one minor unit apart: `<whole>.<n>5` against
+ * `<whole>.<n+1>5`, with `digits` digits before the trailing 5. This is the
+ * population a `Math.round(x * scale)` float multiply gets wrong, in both
+ * directions, because each side sits on a rounding boundary that binary cannot
+ * represent.
+ */
+function halfMinorPairs(digits: number, wholes: number[], count: number): [number, number][] {
+  const pairs: [number, number][] = [];
+  const at = (whole: number, n: number): string => `${whole}.${String(n).padStart(digits, "0")}5`;
+  for (const whole of wholes) {
+    for (let n = 0; n < count; n += 1) pairs.push([decimal(at(whole, n)), decimal(at(whole, n + 1))]);
+  }
+  return pairs;
+}
+
+/**
+ * Every cause a sweep produces, in all four orientations, mapped to the first
+ * pair that produced it — so a failure names an offender rather than a set.
+ */
+function sweepCauses(pairs: [number, number][], options: DiffOptions): Record<string, string> {
+  const seen: Record<string, string> = {};
+  for (const [a, b] of pairs) {
+    for (const [legacy, candidate] of orientations(a, b)) {
+      const cause = causeOf(legacy, candidate, options);
+      seen[cause] ??= `${legacy} vs ${candidate}`;
+    }
+  }
+  return seen;
 }
 
 // ================================================== assertion 1 · structure ==
@@ -454,9 +515,10 @@ describe("sub-minor-unit gaps", () => {
     for (const detail of [subMinor, rounding, mismatch]) expect(detail.trim().length).toBeGreaterThan(0);
   });
 
-  // A non-finite value, or one large enough that scaling it overflows to
-  // Infinity, also "scales to the same integer" as its counterpart. Those are
-  // not sub-minor gaps and must keep the classification they already had.
+  // A non-finite value has no distance to measure, and a magnitude past 1e307
+  // overflows any float that tries to scale it — under either the old scaling
+  // or an exact one, none of these is a sub-minor gap, and all keep the
+  // classification they already had.
   it("never sweeps a non-finite or overflowing gap into the new cause", () => {
     const cases: [unknown, unknown][] = [
       [Number.POSITIVE_INFINITY, 1e308],
@@ -465,7 +527,7 @@ describe("sub-minor-unit gaps", () => {
       [Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY],
       [Number.NaN, 1234.567],
       [1234.567, Number.NaN],
-      [1e307, 2e307], // both overflow to Infinity when scaled by 100
+      [1e307, 2e307], // 1e309 minor units apart — and Infinity through a float multiply
     ];
     for (const options of [undefined, { toleranceMinorUnits: 0 }, { toleranceMinorUnits: 1_000_000 }]) {
       for (const [legacy, candidate] of cases) {
@@ -503,6 +565,355 @@ describe("sub-minor-unit gaps", () => {
     }
     expect(checked).toBe(150);
     expect([...causes]).toEqual(["sub-minor-unit"]);
+  });
+});
+
+// ================= harness-exact-minor-scaling · the true distance decides ==
+//
+// The cause keys on the true distance between the two values, measured in minor
+// units and computed exactly:
+//     above 0, below one minor unit   -> sub-minor-unit, at every tolerance
+//     one or more units, <= tolerance -> rounding
+//     more than the tolerance         -> value-mismatch
+// `Math.round(x * scale)` is not that distance: it is a float multiply, and it
+// bends x.xx5 pairs in both directions and loses whole minor units at magnitudes
+// where doubles are further apart than a fils.
+
+const EVERY_TOLERANCE = [0, 1, 2, 100, 1_000_000];
+
+describe("exact scaling · the four distances a float multiply misreports", () => {
+  const COLLAPSE: [string, string] = ["0.135", "0.145"];   // both scale+round to 14 -> a gap of 0
+  const INFLATE: [string, string] = ["0.145", "0.155"];    // scale+round to 14 and 16 -> a gap of 2
+  const LARGE: [string, string] = ["100000000000000.03", "100000000000000.05"];
+  const STRADDLE: [string, string] = ["1234.564", "1234.566"];
+
+  /** Every orientation of `pair` must classify the same way at `tolerance`. */
+  function expectCause(pair: [string, string], toleranceMinorUnits: number, expected: DifferenceCause): void {
+    for (const [legacy, candidate] of orientations(decimal(pair[0]), decimal(pair[1]))) {
+      const label = `${legacy} vs ${candidate} at tolerance ${toleranceMinorUnits}`;
+      expect(causeOf(legacy, candidate, { toleranceMinorUnits }), label).toBe(expected);
+    }
+  }
+
+  it("measures 0.135 vs 0.145 as one minor unit, though both scale and round to 14", () => {
+    expectCause(COLLAPSE, 0, "value-mismatch");
+    expectCause(COLLAPSE, 1, "rounding");
+    expectCause(COLLAPSE, 2, "rounding");
+  });
+
+  it("measures 0.145 vs 0.155 as one minor unit, though they scale and round to 14 and 16", () => {
+    // The inflating half: the old boundary called this a value-mismatch at a
+    // tolerance of one, which is a pre-existing bug in rounding, not only in
+    // the new cause.
+    expectCause(INFLATE, 0, "value-mismatch");
+    expectCause(INFLATE, 1, "rounding");
+    expectCause(INFLATE, 2, "rounding");
+  });
+
+  it("keeps two minor units at a magnitude where consecutive doubles are 0.0156 apart", () => {
+    expectCause(LARGE, 0, "value-mismatch");
+    expectCause(LARGE, 1, "value-mismatch");
+    expectCause(LARGE, 2, "rounding");
+    expectCause(LARGE, 3, "rounding");
+  });
+
+  it("calls a fifth of a minor unit sub-minor even when it straddles the rounding boundary", () => {
+    // An intended behaviour change: scaled and rounded these are 123456 and
+    // 123457, so the old code reported a whole minor unit that is not there.
+    for (const tolerance of EVERY_TOLERANCE) expectCause(STRADDLE, tolerance, "sub-minor-unit");
+  });
+
+  it("never calls a whole-minor-unit pair sub-minor, at any tolerance or orientation", () => {
+    for (const pair of [COLLAPSE, INFLATE, LARGE]) {
+      for (const toleranceMinorUnits of EVERY_TOLERANCE) {
+        for (const [legacy, candidate] of orientations(decimal(pair[0]), decimal(pair[1]))) {
+          expect(causeOf(legacy, candidate, { toleranceMinorUnits }),
+            `${legacy} vs ${candidate} at tolerance ${toleranceMinorUnits}`).not.toBe("sub-minor-unit");
+        }
+      }
+    }
+  });
+});
+
+describe("exact scaling · the x.xx5 sweep", () => {
+  // Pairs exactly one minor unit apart whose ends both sit on a rounding
+  // boundary — the population a float multiply bends, in one direction or the
+  // other, in better than one case in ten. A sweep this wide cannot miss it.
+  const WHOLES = [0, 1, 7, 42, 137, 999, 12500];
+  const AT_100 = halfMinorPairs(2, WHOLES, 99);
+  // The same shape one decimal deeper, for a KWD or BHD run configured at 1000.
+  const AT_1000 = halfMinorPairs(3, [0, 1234], 120);
+
+  it("sweeps enough pairs for a one-in-ten defect to be certain to show", () => {
+    expect(AT_100).toHaveLength(693);
+    expect(AT_1000).toHaveLength(240);
+  });
+
+  it("reports every one of them as a real mismatch at tolerance 0", () => {
+    expect(sweepCauses(AT_100, { toleranceMinorUnits: 0 })).toEqual({ "value-mismatch": expect.any(String) });
+    expect(sweepCauses(AT_1000, { toleranceMinorUnits: 0, minorUnitScale: 1000 }))
+      .toEqual({ "value-mismatch": expect.any(String) });
+  });
+
+  it("reports every one of them as rounding from a tolerance of one upwards", () => {
+    for (const toleranceMinorUnits of [1, 2, 1_000_000]) {
+      expect(sweepCauses(AT_100, { toleranceMinorUnits }), `tolerance ${toleranceMinorUnits}`)
+        .toEqual({ rounding: expect.any(String) });
+    }
+    expect(sweepCauses(AT_1000, { toleranceMinorUnits: 1, minorUnitScale: 1000 }))
+      .toEqual({ rounding: expect.any(String) });
+  });
+
+  it("never calls one of them sub-minor-unit", () => {
+    for (const toleranceMinorUnits of EVERY_TOLERANCE) {
+      const causes = Object.keys(sweepCauses(AT_100, { toleranceMinorUnits }));
+      expect(causes, `tolerance ${toleranceMinorUnits}`).not.toContain("sub-minor-unit");
+    }
+  });
+
+  // The other half of the same population. x.xx4 against x.xx6 is two
+  // thousandths — a fifth of a minor unit — and every such pair straddles the
+  // rounding boundary, which is where the old scaling invented a whole unit.
+  it("calls every straddling x.xx4 / x.xx6 pair sub-minor, at every tolerance", () => {
+    const straddling: [number, number][] = [];
+    for (const whole of WHOLES) {
+      for (let cents = 0; cents <= 99; cents += 1) {
+        const at = (last: number): string => `${whole}.${String(cents).padStart(2, "0")}${last}`;
+        straddling.push([decimal(at(4)), decimal(at(6))]);
+      }
+    }
+    expect(straddling).toHaveLength(700);
+    for (const toleranceMinorUnits of [0, 1, 1_000_000]) {
+      expect(sweepCauses(straddling, { toleranceMinorUnits }), `tolerance ${toleranceMinorUnits}`)
+        .toEqual({ "sub-minor-unit": expect.any(String) });
+    }
+  });
+});
+
+describe("exact scaling · one minor unit exactly", () => {
+  // Every magnitude a payslip reaches, and several decades past it.
+  const ONE_UNIT: [string, string][] = [
+    ["0", "0.01"], ["0.01", "0.02"], ["0.135", "0.145"], ["9.99", "10"],
+    ["999999.99", "1000000"], ["99999999.99", "100000000"],
+    ["12345678.9", "12345678.91"], ["1000000000000.01", "1000000000000.02"],
+  ];
+  // Strictly under one minor unit, including two that straddle the boundary.
+  const UNDER_ONE_UNIT: [string, string][] = [
+    ["0", "0.009"], ["0.135", "0.1359"], ["1234.564", "1234.566"],
+    ["8000.33", "8000.339"], ["1e-7", "0.01"],
+  ];
+
+  it("is a mismatch at tolerance 0 and a rounding at tolerance 1 — never sub-minor", () => {
+    for (const [a, b] of ONE_UNIT) {
+      for (const [legacy, candidate] of orientations(decimal(a), decimal(b))) {
+        const label = `${legacy} vs ${candidate}`;
+        expect(causeOf(legacy, candidate), label).toBe("value-mismatch");
+        expect(causeOf(legacy, candidate, { toleranceMinorUnits: 0 }), label).toBe("value-mismatch");
+        expect(causeOf(legacy, candidate, { toleranceMinorUnits: 1 }), label).toBe("rounding");
+      }
+    }
+  });
+
+  it("is sub-minor strictly below one minor unit, and no tolerance can mask it", () => {
+    for (const [a, b] of UNDER_ONE_UNIT) {
+      for (const [legacy, candidate] of orientations(decimal(a), decimal(b))) {
+        for (const toleranceMinorUnits of EVERY_TOLERANCE) {
+          expect(causeOf(legacy, candidate, { toleranceMinorUnits }),
+            `${legacy} vs ${candidate} at tolerance ${toleranceMinorUnits}`).toBe("sub-minor-unit");
+        }
+      }
+    }
+  });
+
+  it("leaves a straddling gap in the hand of a consumer that filters rounding away", () => {
+    const diffs = diffFields(
+      { kwd: 1234.564, aed: 0.135 },
+      { kwd: 1234.566, aed: 0.145 },
+      { toleranceMinorUnits: 1_000_000 },
+    );
+    expect(at(diffs, "aed").cause).toBe("rounding");
+    expect(at(diffs, "kwd").cause).toBe("sub-minor-unit");
+    expect(pathsOf(diffs.filter((d) => d.cause !== "rounding"))).toEqual(["kwd"]);
+  });
+});
+
+describe("exact scaling · exponential round-trip strings", () => {
+  // String(1e-7) is "1e-7" and String(1e21) is "1e+21". Shifting a decimal point
+  // through those strings without reading the exponent mis-scales them by
+  // twenty-odd orders of magnitude, in silence.
+  it("keeps a tiny exponential gap sub-minor rather than equal or mismatched", () => {
+    const tiny: [number, number][] = [
+      [1e-7, 2e-7], [1.5e-8, 2.5e-8], [0, 1e-7], [1e-7, 0.000001], [-1e-7, 1e-7],
+    ];
+    for (const [a, b] of tiny) {
+      for (const [legacy, candidate] of [[a, b], [b, a]] as [number, number][]) {
+        for (const toleranceMinorUnits of EVERY_TOLERANCE) {
+          expect(causeOf(legacy, candidate, { toleranceMinorUnits }),
+            `${legacy} vs ${candidate} at tolerance ${toleranceMinorUnits}`).toBe("sub-minor-unit");
+        }
+      }
+    }
+  });
+
+  it("puts the one-minor-unit boundary exactly right with an exponential on one side", () => {
+    // 0.0100001 - 1e-7 is 0.01 exactly: one whole minor unit, not a hair under.
+    const tiny = decimal("1e-7");
+    const edge = decimal("0.0100001");
+    expect(causeOf(tiny, edge, { toleranceMinorUnits: 0 })).toBe("value-mismatch");
+    expect(causeOf(tiny, edge, { toleranceMinorUnits: 1 })).toBe("rounding");
+    expect(causeOf(edge, tiny, { toleranceMinorUnits: 1 })).toBe("rounding");
+    for (const toleranceMinorUnits of EVERY_TOLERANCE) {
+      expect(causeOf(tiny, edge, { toleranceMinorUnits }), `tolerance ${toleranceMinorUnits}`)
+        .not.toBe("sub-minor-unit");
+    }
+    // ...and a hair under is sub-minor: 0.01 - 1e-7 is 0.9999... of a unit.
+    expect(causeOf(tiny, decimal("0.01"), { toleranceMinorUnits: 1 })).toBe("sub-minor-unit");
+  });
+
+  it("scales a value whose string carries a positive exponent", () => {
+    const huge = decimal("1e+21");
+    // 100000 lower — exactly ten million minor units at the default scale.
+    const justUnder = decimal("999999999999999900000");
+    expect(causeOf(justUnder, huge, { toleranceMinorUnits: 9_999_999 })).toBe("value-mismatch");
+    expect(causeOf(justUnder, huge, { toleranceMinorUnits: 10_000_000 })).toBe("rounding");
+    expect(causeOf(huge, justUnder, { toleranceMinorUnits: 10_000_000 })).toBe("rounding");
+    expect(causeOf(huge, decimal("2e+21"), { toleranceMinorUnits: 1_000_000 })).toBe("value-mismatch");
+    expect(causeOf(-huge, huge, { toleranceMinorUnits: 1_000_000 })).toBe("value-mismatch");
+    expect(causeOf(1e-7, huge, { toleranceMinorUnits: 1_000_000 })).toBe("value-mismatch");
+    for (const toleranceMinorUnits of EVERY_TOLERANCE) {
+      expect(causeOf(justUnder, huge, { toleranceMinorUnits }), `tolerance ${toleranceMinorUnits}`)
+        .not.toBe("sub-minor-unit");
+    }
+  });
+
+  it("reports nothing at all between two equal exponential values", () => {
+    for (const value of [1e-7, 1.5e-8, 1e21, -1e21, 5e-324]) {
+      expect(diffFields(value, value), String(value)).toEqual([]);
+      expect(diffFields({ v: value }, { v: value }, { toleranceMinorUnits: 3, minorUnitScale: 1000 }),
+        String(value)).toEqual([]);
+    }
+  });
+});
+
+describe("exact scaling · a minorUnitScale that is not a power of ten", () => {
+  it("never calls a gap of exactly one minor unit sub-minor, at any scale", () => {
+    const EXACTLY_ONE: [number, string, string][] = [
+      [1, "5", "6"], [2, "1", "1.5"], [4, "1", "1.25"], [5, "1", "1.2"],
+      [8, "1", "1.125"], [20, "1", "1.05"], [1000, "1.001", "1.002"],
+    ];
+    for (const [minorUnitScale, a, b] of EXACTLY_ONE) {
+      const [legacy, candidate] = [decimal(a), decimal(b)];
+      const label = `${a} vs ${b} at scale ${minorUnitScale}`;
+      expect(causeOf(legacy, candidate, { minorUnitScale }), label).toBe("value-mismatch");
+      expect(causeOf(legacy, candidate, { minorUnitScale, toleranceMinorUnits: 1 }), label).toBe("rounding");
+      expect(causeOf(candidate, legacy, { minorUnitScale, toleranceMinorUnits: 1 }), label).toBe("rounding");
+      for (const toleranceMinorUnits of EVERY_TOLERANCE) {
+        expect(causeOf(legacy, candidate, { minorUnitScale, toleranceMinorUnits }), label)
+          .not.toBe("sub-minor-unit");
+      }
+    }
+  });
+
+  it("calls a gap under one minor unit sub-minor at scales 3 and 7", () => {
+    // One minor unit is 0.333... at scale 3 and 0.142857... at scale 7, so no
+    // decimal amount is exactly one unit away at either — but plenty are under.
+    const UNDER: [number, string, string][] = [
+      [3, "1", "1.1"], [3, "1", "1.3"], [7, "1", "1.1"], [7, "1", "1.14"],
+    ];
+    for (const [minorUnitScale, a, b] of UNDER) {
+      for (const toleranceMinorUnits of EVERY_TOLERANCE) {
+        expect(causeOf(decimal(a), decimal(b), { minorUnitScale, toleranceMinorUnits }),
+          `${a} vs ${b} at scale ${minorUnitScale}, tolerance ${toleranceMinorUnits}`).toBe("sub-minor-unit");
+      }
+    }
+  });
+
+  it("keeps whole multiples of an awkward scale on the right side of the tolerance", () => {
+    const MULTIPLES: [number, string, string, number][] = [
+      [3, "1", "2", 3], [3, "1", "3", 6], [7, "1", "2", 7], [7, "1", "3", 14],
+    ];
+    for (const [minorUnitScale, a, b, units] of MULTIPLES) {
+      const label = `${a} vs ${b} at scale ${minorUnitScale}`;
+      expect(causeOf(decimal(a), decimal(b), { minorUnitScale, toleranceMinorUnits: units - 1 }), label)
+        .toBe("value-mismatch");
+      expect(causeOf(decimal(a), decimal(b), { minorUnitScale, toleranceMinorUnits: units }), label)
+        .toBe("rounding");
+    }
+  });
+
+  it("is self-consistent on a fractional number of awkward minor units", () => {
+    // 1 vs 1.5 at scale 3 is one and a half minor units: past the boundary, so
+    // never sub-minor, a mismatch at tolerance 0, and a rounding by tolerance 2.
+    // Whether tolerance 1 admits it is the implementation's to decide — but it
+    // must answer the same way each time and never narrow as tolerance widens.
+    const minorUnitScale = 3;
+    const [legacy, candidate] = [decimal("1"), decimal("1.5")];
+    expect(causeOf(legacy, candidate, { minorUnitScale, toleranceMinorUnits: 0 })).toBe("value-mismatch");
+    expect(causeOf(legacy, candidate, { minorUnitScale, toleranceMinorUnits: 2 })).toBe("rounding");
+    const atOne = causeOf(legacy, candidate, { minorUnitScale, toleranceMinorUnits: 1 });
+    expect(["rounding", "value-mismatch"]).toContain(atOne);
+    expect(causeOf(candidate, legacy, { minorUnitScale, toleranceMinorUnits: 1 })).toBe(atOne);
+    let tolerated = false;
+    for (const toleranceMinorUnits of [0, 1, 2, 3, 100]) {
+      const cause = causeOf(legacy, candidate, { minorUnitScale, toleranceMinorUnits });
+      expect(cause, `tolerance ${toleranceMinorUnits}`).not.toBe("sub-minor-unit");
+      if (cause === "rounding") tolerated = true;
+      else expect(tolerated, `tolerance ${toleranceMinorUnits} narrowed after a rounding`).toBe(false);
+    }
+  });
+});
+
+describe("exact scaling · the gap it reports", () => {
+  it("names the true number of minor units, not one a float multiply produced", () => {
+    // 0.44 - 0.01 is 43 minor units, and neither value, nor the tolerance, nor
+    // the scale contains "43": it can only come from the measured gap.
+    const wide = single(diffFields(decimal("0.01"), decimal("0.44"), { toleranceMinorUnits: 50 }));
+    expect(wide.cause).toBe("rounding");
+    expect(wide.detail).toContain("43");
+    // 2.34 - 1.11 is 123 minor units, and 122.99999999999997 through a multiply.
+    const wider = single(diffFields(decimal("1.11"), decimal("2.34"), { toleranceMinorUnits: 200 }));
+    expect(wider.cause).toBe("rounding");
+    expect(wider.detail).toContain("123");
+  });
+
+  it("does not inflate the gap of an x.xx5 pair", () => {
+    const diff = single(diffFields(decimal("0.145"), decimal("0.155"), { toleranceMinorUnits: 1 }));
+    expect(diff.cause).toBe("rounding");
+    // The old scaling made two minor units of this one. Nothing in a one-unit
+    // gap between 0.145 and 0.155 at a tolerance of 1 contains a "2".
+    expect(diff.detail).not.toContain("2");
+  });
+
+  it("does not collapse the gap of a pair a float multiply cannot resolve", () => {
+    const [legacy, candidate] = [decimal("100000000000000.03"), decimal("100000000000000.05")];
+    const diff = single(diffFields(legacy, candidate, { toleranceMinorUnits: 5 }));
+    expect(diff.cause).toBe("rounding");
+    expect(diff.detail).toContain("2"); // two minor units, not the zero a multiply gives
+    expect(diff.legacy).toBe(legacy);
+    expect(diff.candidate).toBe(candidate);
+  });
+
+  it("carries both raw values verbatim, and names them, on a collapsed pair", () => {
+    const diff = single(diffFields(0.135, 0.145));
+    expect(diff.cause).toBe("value-mismatch");
+    expect(diff.legacy).toBe(0.135);
+    expect(diff.candidate).toBe(0.145);
+    expect(diff.detail).toContain("0.135");
+    expect(diff.detail).toContain("0.145");
+  });
+
+  it("applies exact scaling at depth, and keeps each leaf on its own cause", () => {
+    const diffs = diffFields(
+      { payslip: { net: 0.135, rows: [{ amount: 1234.564 }, { amount: 0.145 }] } },
+      { payslip: { net: 0.145, rows: [{ amount: 1234.566 }, { amount: 0.155 }] } },
+      { toleranceMinorUnits: 1 },
+    );
+    expect(pathsOf(diffs)).toEqual(["payslip.net", "payslip.rows[0].amount", "payslip.rows[1].amount"]);
+    expect(at(diffs, "payslip.net").cause).toBe("rounding");
+    expect(at(diffs, "payslip.rows[0].amount").cause).toBe("sub-minor-unit");
+    expect(at(diffs, "payslip.rows[1].amount").cause).toBe("rounding");
+    expect(at(diffs, "payslip.rows[0].amount").legacy).toBe(1234.564);
+    expect(at(diffs, "payslip.rows[0].amount").candidate).toBe(1234.566);
   });
 });
 
