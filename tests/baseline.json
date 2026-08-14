@@ -1,5 +1,5 @@
 {
-  "tests": 317,
+  "tests": 487,
   "why": [
     "The number of tests the suite must not drop below.",
     "",
@@ -8,6 +8,8 @@
     "resolution leaves no trace; a refactor can lose cases silently. The other",
     "gates all answer 'did what ran pass' — none answers 'did everything still",
     "run'. This is a ratchet, not a target: it fails on a DECREASE only.",
+    "",
+    "Bumped to 487 with kernel-entities-law. Left at its creation value of 317 while the suite grew to 487, the ratchet would have admitted the deletion of every kernel test — review caught that. Bump it in the PR that adds the tests, not later.",
     "",
     "Bump this number when a task legitimately adds tests. A task that",
     "legitimately REMOVES them — consolidating cases into one it.each, deleting",
