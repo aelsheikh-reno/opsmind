@@ -466,6 +466,56 @@ check("generated DDL never masks an oversized schema",
       "FAIL" in size_lines(measure({"prisma/migrations/20260101000000_x/migration.sql": 600,
                                     "prisma/schema.prisma": 460}), "size-impl"), out)
 
+# --- the status flip touches one line, or nothing ----------------------------
+# Six occurrences of the status lag, three bad /next selections, and one
+# scripted edit that destroyed staging-deploy's waiver reason by anchoring on
+# the file's first occurrence of a field name rather than on a node. The flip is
+# a script now for the same reason the merge is: build-task.md said "merge only
+# when green" and a red gate reached main anyway.
+def mark_done(node, dirty=False):
+    """Run the flip in a throwaway clone; return (output, code, diff numstat)."""
+    d = tempfile.mkdtemp(prefix="mark-done-")
+    SANDBOXES.append(d)
+    shutil.copytree(os.path.join(REPO, "scripts"), os.path.join(d, "scripts"))
+    os.mkdir(os.path.join(d, "tasks"))
+    shutil.copyfile(os.path.join(REPO, "tasks", "backlog.yaml"),
+                    os.path.join(d, "tasks", "backlog.yaml"))
+    g = lambda *a: subprocess.run(["git"] + list(a), cwd=d, capture_output=True, text=True)
+    g("init", "-q"); g("config", "user.email", "g@g"); g("config", "user.name", "g")
+    g("add", "-A"); g("commit", "-qm", "base")
+    if dirty:
+        with open(os.path.join(d, "tasks", "backlog.yaml"), "a") as f:
+            f.write("\n# a stray edit from the other writer\n")
+    r = subprocess.run(["bash", "scripts/mark-task-done.sh", node], cwd=d,
+                       capture_output=True, text=True, timeout=60)
+    numstat = subprocess.run(["git", "diff", "--numstat", "--", "tasks/backlog.yaml"],
+                             cwd=d, capture_output=True, text=True).stdout.strip()
+    return (r.stdout + r.stderr, r.returncode, numstat)
+
+out, code, numstat = mark_done("no-such-node-anywhere")
+check("an id that is not in the backlog refuses",
+      code == 1 and "no node with that id" in out, "exit %s: %s" % (code, out))
+check("...and changes nothing", numstat == "", repr(numstat))
+
+out, code, numstat = mark_done("scaffold-project")
+check("a node already done refuses rather than committing a no-op",
+      code == 1 and "already done" in out, "exit %s: %s" % (code, out))
+check("...and changes nothing either", numstat == "", repr(numstat))
+
+out, code, numstat = mark_done("kernel-rate-terms", dirty=True)
+check("a backlog already carrying another edit refuses",
+      code == 1 and "not 1+1" in out, "exit %s: %s" % (code, out))
+check("...and reverts its own edit, leaving only the stray one",
+      "status: done" not in numstat and numstat.startswith("2\t0"), repr(numstat))
+
+out, code, numstat = mark_done("kernel-rate-terms")
+check("a todo node flips, in exactly one line",
+      code == 0 and numstat == "1\t1\ttasks/backlog.yaml", "exit %s: %s / %s" % (code, out, numstat))
+
+# The pipeline must route through it rather than around it.
+bt = open(os.path.join(REPO, ".claude/commands/build-task.md")).read()
+check("build-task flips status only through the script", "mark-task-done.sh" in bt, bt[-300:])
+
 # --- a red gate must block a merge -------------------------------------------
 # The guarantee the whole pipeline rests on, and the one that failed. On #30 the
 # gates reported FAILURE, the loop watching them treated FAILURE as a terminal
