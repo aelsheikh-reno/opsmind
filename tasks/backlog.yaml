@@ -1138,7 +1138,7 @@
       - "A per-task size_total still raises or lowers only that task's total budget"
       - "A waiver without a reason, or with a non-numeric value, still fails closed"
   risk: low
-  status: todo
+  status: done
   note: >
     Five of fifteen substantive tasks had to waive an 800 backstop that was
     calibrated before documentation and generated DDL were excluded from
