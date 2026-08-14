@@ -43,6 +43,16 @@ cases = [
  # filename, and domain code must still be refused.
  (W, {"tool_input":{"file_path":"vitest.config.ts","content":"alias @prisma/client for legacy"}},   False, "vitest.config.ts may name the client package"),
  (W, {"tool_input":{"file_path":"lib/modules/payroll/calc.ts","content":"@prisma/client"}},         True,  "domain code naming the client is still blocked"),
+ # lib/db.ts is the single client every repository imports. Exempt for the same
+ # reason vitest.config.ts is: it must name the package without being domain
+ # code. Both directions pinned — one filename, and domain code still refused.
+ (W, {"tool_input":{"file_path":"lib/db.ts","content":"import { PrismaClient } from \"@prisma/client\""}}, False, "lib/db.ts may name the client package"),
+ (W, {"tool_input":{"file_path":"lib/modules/deadlines/calc.ts","content":"@prisma/client"}},              True,  "a module calc.ts naming the client is still blocked"),
+ # The exemption must be one PATH, not a suffix: `*` spans `/` in a bash case, so
+ # a bare */lib/db.ts would let a module mint its own client through the guard.
+ (W, {"tool_input":{"file_path":"lib/modules/payroll/lib/db.ts","content":"@prisma/client"}},              True,  "a module cannot mint its own lib/db.ts"),
+ (W, {"tool_input":{"file_path":os.path.join(os.getcwd(),"lib/db.ts"),"content":"@prisma/client"}},        False, "the real lib/db.ts is allowed by absolute path"),
+ (W, {"tool_input":{"file_path":os.path.join(os.getcwd(),"lib/modules/payroll/lib/db.ts"),"content":"@prisma/client"}}, True, "an absolute path to a module's own lib/db.ts is still blocked"),
 ]
 ok = all(probe(*c) for c in cases)
 r = subprocess.run(["bash", W], input="not json", capture_output=True, text=True)

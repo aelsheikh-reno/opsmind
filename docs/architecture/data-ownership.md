@@ -14,6 +14,8 @@
 
 **Where it sits.** The precondition for the day-one topology: extracting a service later is only safe if its tables were already exclusively its own. The three page-level imports listed under [presentation](architecture-presentation.md) are the current violations.
 
+> **Note** — **Repositories import the client; they never construct one.** `lib/db.ts` holds the single `PrismaClient`, and every module's `repository.ts` imports `db` from it. A repository that calls `new PrismaClient()` gets a connection pool of its own, and seven modules each doing that is seven pools against a database sized for one application — a failure that appears only under load, long after the code that caused it was reviewed. `lib/db.ts` is consequently the one file outside a `repository.ts` permitted to name the client package, and `scripts/guard-write.sh` exempts it by that exact filename.
+
 > **Note** — **Why ownership is the load-bearing rule.** All seven modules share one PostgreSQL database, so nothing physically stops Payroll from writing a Projects table. Without a rule, that is exactly what happens over time, and then no module can be changed or moved without breaking others — which is the state the current build is drifting into. Declaring one writing owner per table is what makes the boundaries real while everything still deploys together, and it is the precondition for ever extracting a module later ([ADR-021](decisions.md#adr-021)).
 
 | Owner | Tables |

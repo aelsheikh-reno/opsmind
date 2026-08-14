@@ -31,11 +31,17 @@ for repo in lib/modules/*/repository.ts lib/kernel/*/repository.ts; do
   done < <(grep -nE 'db as any|db\)\.|db\[' "$repo" || true)
 done
 
-# nothing outside a repository may reach the database
+# nothing outside a repository may reach the database.
+#
+# lib/db.ts is the sole exception, named exactly rather than patterned: it is
+# where the single PrismaClient is constructed so every repository imports one
+# client and one pool instead of building its own. It holds no query and no
+# domain logic — it is the door rule 3 points at, not a way around it. Every
+# other file under lib/ and app/ is still refused, re-exporters included.
 while IFS= read -r f; do
   findings+=("$f imports the database outside a repository")
 done < <(grep -rl "@/lib/db\|@prisma/client" --include="*.ts" --include="*.tsx" lib app 2>/dev/null \
-         | grep -v "repository.ts" || true)
+         | grep -v "repository.ts" | grep -vx "lib/db.ts" || true)
 
 # no deep imports past a module index
 while IFS= read -r hit; do

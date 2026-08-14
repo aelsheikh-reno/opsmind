@@ -16,6 +16,10 @@
 
 > **Note** — **How to read this page.** These are target shapes, not current ones — the database today does not look like this. The [migration page](data-migration.md) explains how each one is reached from what exists, and no change here requires downtime. Field names in `monospace` are literal column names; comments after `--` explain intent rather than being part of the schema.
 
+> **Note** — **Civil dates are stored at UTC midnight and never localised.** A period end, a filing due date and a document expiry name a calendar day, not an instant, and are stored as `@db.Date` at UTC midnight. They are rendered directly from storage — never timezone-converted for display. If a UI shows a different calendar day, that is a display bug and not a reason to change storage. **Instants** are a separate thing and keep full timezone information: `settledAt`, `createdAt`, `filedAt`, `redactedAt`.
+>
+> This is not cosmetic. The legacy build constructs period ends with `new Date(year, month, 0)` — *local* midnight — which makes a statutory date depend on the server's timezone. Compared against the legacy oracle on a UTC+3 machine, a UAE VAT due date came out as 2024-04-27 against legacy's 2024-04-28. **Resolved in the legacy system's favour — the first difference to be so.** Ahmed's decision, 2026-08-14: 2024-04-28 is correct. UAE VAT is due on the 28th day following the end of the tax period (Federal Decree-Law No. 8 of 2017, Article 64), and 31 March + 28 days is 28 April. The oracle was right and the discrepancy was in the new build's test frame, not its arithmetic: production reads period ends from `@db.Date` at UTC midnight and always produced 28 April; the 27th appeared only where a test read legacy's *local*-midnight value in UTC and shifted the input a day. The storage convention above still stands and is what keeps the two frames from being confused again. Confirming the statutory date itself with the accountant is tracked in [open items](open-items.md); the storage convention is right regardless of that answer.
+
 ## Financial spine
 
 #### `SalarySchedule · LeaseSchedule · LoanSchedule`
@@ -86,7 +90,7 @@
 |---|---|---|
 | `enrolmentId` | → JurisdictionEnrolment | Which registration this filing belongs to |
 | `periodStart, periodEnd` | date | The period being filed for |
-| `dueDate` | date | Computed from the regime: `periodEnd + Regime.deadlineDays` in plain **calendar** days, not rolled off a weekend. A statutory deadline does not move because the office is shut; the deadline monitor surfaces that it falls on a non-working day rather than shifting it |
+| `dueDate` | date | The date the filing must actually be made by. The **statutory** date is `periodEnd + Regime.deadlineDays` in plain **calendar** days — UAE VAT is the 28th day after the period ends (Federal Decree-Law No. 8 of 2017, Art. 64), so a period ending 31 March is 28 April. If that day is a weekend or a public holiday in the jurisdiction's calendar it **moves forward to the next working day**: the statute counts calendar days, but it does not require filing on a day the portal and the bank are shut. Rolling forward, never back — rolling back would file against a statutory date that has not arrived |
 | `estimatedAmount` | decimal | **Forecasting only** — the authoritative return is computed in Zoho |
 | `status` | pending \| filed \| paid |   |
 | `filedAt` | timestamp \| null |   |
@@ -204,6 +208,37 @@
 |---|---|---|
 | `ownerId` | → User | Scenarios become shareable and auditable rather than per-browser |
 | `events` | rows | Hypothetical hires, delays, price changes overlaid on the forecast |
+
+
+## Deadline monitor
+
+Both tables are new, and every field is derived rather than specified: from `registerDeadline(entityRef, type, dueDate)`, from the fingerprint format `{tenant}:{app}:{source}:{entity}:{policy}`, from thresholds and severities being per deadline type, from runs being stateless, and from the business calendar. Neither table records what a previous run warned about — that is what makes a missed night self-heal ([deadline monitor](components-core-deadline-monitor.md)).
+
+#### `DeadlineRegistration`
+
+*new · one watched date · deadline monitor*
+
+| Field | Type / values | Why |
+|---|---|---|
+| `entityType, entityId` | reference | `entityRef`, split into the two parts the fingerprint's entity segment is built from — `…:document:123:expiry`. No foreign key: the target may be a Document, a TaxFiling or a BillablePosition, each owned elsewhere, and a cross-owner FK is what stops a module being extracted later ([ADR-021](decisions.md#adr-021)) |
+| `deadlineType` | string | The `type` argument. The key thresholds are read by, and the fingerprint's policy segment |
+| `dueDate` | date | The `dueDate` argument. A date, not a timestamp — distance is counted in whole days. For a filing it is `periodEnd + Regime.deadlineDays` in plain calendar days and may land on a Friday |
+| `jurisdictionId` | reference | Which `BusinessCalendar` measures the distance. Business days are counted against the jurisdiction's calendar, so a registration that cannot name its jurisdiction cannot be scored; a jurisdiction with no calendar is an error, never a Saturday–Sunday fallback. An id with no relation — the Kernel owns `Jurisdiction`, and this module reads it through the kernel interface rather than joining |
+| `@@unique` | (entityType, entityId, deadlineType) | One registration per fingerprint. Two rows would compute one identity and report it twice; it also makes re-registering idempotent |
+| ~~lastWarnedAt~~ | timestamp | Deliberately absent — a run recomputes from today and remembers nothing about yesterday |
+
+
+#### `ThresholdTable`
+
+*new · detection tuning · [ADR-020](decisions.md#adr-020)*
+
+| Field | Type / values | Why |
+|---|---|---|
+| `deadlineType` | string | Matches `DeadlineRegistration.deadlineType`. Thresholds are per type |
+| `businessDaysBefore` | integer | The window, measured in business days against the jurisdiction calendar. Several rows per type, so warnings escalate. A window is **inclusive at its bound** — exactly seven days remaining breaches a seven-day rule — and where two windows are breached the **more severe** one wins, never the tighter one ([deadline monitor](components-core-deadline-monitor.md)) |
+| `severity` | minor \| major | Detection decides severity; the Alert Manager consumes it and never judges it. Only the two values the spec attests exist — adding a level is a migration rather than an invented compliance value |
+| `@@unique` | (deadlineType, businessDaysBefore) | One severity per window per type, so the reported severity cannot depend on row order |
+| `—` | data, not code | Rows are edited in Settings without a deployment, exactly as a SOC tunes detection rules |
 
 
 ## Views

@@ -33,4 +33,18 @@ An empty array is a valid, meaningful report — "I ran,
 nothing is breached" — and doubles as the liveness signal.
 ```
 
+> **Note** — **A statutory due date and the date you file by are two dates.** The statutory date is `periodEnd + Regime.deadlineDays` in plain **calendar** days — UAE VAT is the 28th day after the tax period ends (Federal Decree-Law No. 8 of 2017, Article 64), so a period ending 31 March is 28 April. Not business days: read that way, 28 days would land roughly twelve days late, which is a penalty.
+>
+> If the statutory date falls on a **weekend or a public holiday** in that jurisdiction's calendar, the date to file by **moves forward to the next working day**. The statute counts calendar days; it does not require filing on a day the portal and the bank are shut. Forward, never back — rolling back would file against a statutory date that has not arrived, and treating a closed Friday as the deadline would report a filing late that was not. Ahmed's decision, 2026-08-14, reversing an earlier reading that the date was never adjusted.
+>
+> The module keeps them apart: `statutoryDueDate` is what the law names and what a differential test compares against legacy; `filingDueDate` is what a human must act on. A calendar with no working day inside a fortnight is mis-entered data and raises, naming the jurisdiction, rather than looping.
+
+> **Note** — **Severity is the maximum across breached windows, never the tightest one.** Where several threshold windows are breached at once, the reported severity is the highest of them, not the severity of the nearest window. A misordered Settings row must never downgrade an urgent deadline: rows of `{30 days → major, 7 days → minor}` report **major** at five days out. Over-warning is noisy and visible; under-warning is silent, and silence is the failure this module exists to prevent. Escalation is therefore a property of the data rather than of row ordering. Ahmed's decision, 2026-08-14.
+>
+> Thresholds are not validated against each other on save — an admin editing them must not be blocked, and correctness must not depend on entry order. Settings instead **flags** a threshold set where a tighter window carries a lower severity as probably misconfigured, without preventing the save.
+
+> **Note** — **A deadline type with no configured threshold raises, rather than never reporting.** A registered deadline whose type has no `ThresholdTable` row is a misconfiguration, not a quiet no-op: an unwatched deadline is exactly the failure this module exists to prevent, and silence must never be indistinguishable from "nothing is wrong". It raises **one alert per unconfigured type per run**, not one per deadline, so a missing row produces a single actionable signal rather than a flood. Same principle as the complete report and the source-dark alert. Ahmed's decision, 2026-08-14.
+>
+> A threshold is **inclusive at its bound** — exactly seven business days remaining breaches a seven-day window — and an **overdue** deadline, with negative days remaining, reports the highest configured severity.
+
 > **Note** — Because resolution comes from **absence in a completed report**, modules never call cancel: they update their own data (renew the visa, pay the filing) and the next run observes the cleared state. The missed-cancel failure mode does not exist by construction. Full lifecycle: [alerting flow](flows-alerting.md).

@@ -31,9 +31,11 @@ export default defineConfig([
     }
   },
 
-  // 2 · repositories and prisma tooling are the one exception
+  // 2 · repositories, lib/db.ts and prisma tooling are the one exception.
+  // lib/db.ts constructs the single client those repositories import, so one
+  // pool exists instead of one per module (data-ownership.md).
   {
-    files: ["lib/modules/*/repository.ts", "lib/kernel/*/repository.ts", "prisma/**"],
+    files: ["lib/db.ts", "lib/modules/*/repository.ts", "lib/kernel/*/repository.ts", "prisma/**"],
     rules: { "no-restricted-imports": "off" }
   },
 
@@ -48,5 +50,5 @@ export default defineConfig([
         }]
       }]
     }
-  }
+  },
 ]);
