@@ -683,7 +683,7 @@
       - "test_count_waiver lowers the floor only for the task that records it, and only with a reason"
       - "A missing baseline, an unreadable count or a waiver without a reason fails closed"
   risk: low
-  status: todo
+  status: done
   note: >
     Every other gate answers "did what ran pass". None answers "did everything
     still run". A file whose import breaks reports its neighbours green, a
@@ -717,7 +717,7 @@
       - "A diff that only deletes lines is not treated as empty"
       - "The gates below it are unaffected when a diff exists"
   risk: low
-  status: todo
+  status: done
   note: >
     The size gates measure `$base...HEAD`, so a branch with nothing committed
     measures zero and every budget reports green having weighed nothing. That
