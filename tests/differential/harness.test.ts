@@ -395,13 +395,21 @@ describe("loadLegacyModule", () => {
     }
   });
 
-  // `lib/fx.ts` opens with `import { prisma } from "@/lib/prisma"`; the merged Vite plugin
-  // resolves that inside reference/legacy/ rather than into this build, so it fails on the
-  // legacy dependency chain. `types/next-auth.d.ts` is the other shape: it loads cleanly and
-  // exports nothing, and an oracle exporting nothing agrees with every candidate — the exact
-  // green-but-vacuous gate this harness exists to prevent. All three must throw, never stub.
+  // `types/next-auth.d.ts` loads cleanly and exports nothing, and an oracle exporting nothing
+  // agrees with every candidate — the exact green-but-vacuous gate this harness exists to
+  // prevent. Both must throw, never stub.
+  //
+  // `lib/fx.ts` was listed here too, and no longer is. It was never meant to be an example of
+  // an unloadable module: it failed only because it reaches the generated database client,
+  // and a schema with no models generates none, so the import blew up. That made this guard
+  // pass for the wrong reason and hid a real defect — once the schema grew models the shared
+  // client resolved, and a legacy oracle silently bound to THIS build's tables.
+  // harness-legacy-prisma-client gives the legacy side its own client, so fx.ts now loads and
+  // computes as the oracle it always was. That it loads AND works is asserted in
+  // tests/config/legacy-prisma-client.test.ts; removing it here is not a relaxation, it is the
+  // case moving to the file that tests the corrected behaviour.
   it("throws naming the module when it cannot load — never a stub, never an empty module", async () => {
-    for (const path of ["lib/does-not-exist.ts", "lib/fx.ts", "types/next-auth.d.ts"]) {
+    for (const path of ["lib/does-not-exist.ts", "types/next-auth.d.ts"]) {
       let loaded: Record<string, unknown> | undefined;
       let thrown: unknown;
       try { loaded = await loadLegacyModule(path); } catch (error) { thrown = error; }

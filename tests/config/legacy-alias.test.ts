@@ -272,11 +272,21 @@ describe("from a legacy importer the hook leaves alone", () => {
     },
   );
 
-  it("the scoped package `@prisma/client`, which is not the `@/` alias", async () => {
-    // both sides of a differential test share third-party code; it is not the
-    // code under test, and `@prisma/` must not be mistaken for `@/`
-    expect(await resolveId("@prisma/client", legacyImporter)).toBeNull();
+  it("other scoped packages, including others under `@prisma/`", async () => {
+    // `@prisma/` must not be mistaken for `@/`, and the client redirect below
+    // must not become a blanket rewrite of everything under that scope.
+    for (const source of ["@prisma/engines", "@scope/anything"]) {
+      expect(await resolveId(source, legacyImporter), source).toBeNull();
+    }
   });
+
+  // The generated client used to be listed here as third-party code both sides
+  // share. That was wrong, and it is the defect harness-legacy-prisma-client
+  // exists to fix: the client is generated FROM the schema under test, so the
+  // shared package name gives a legacy oracle this build's tables. It survived
+  // only because a schema with no models generates no client, so the import
+  // failed outright and the harness's "must throw" guard passed for the wrong
+  // reason. The assertion is now the opposite one, below.
 
   it.each(["./tax", "../lib/vat", "../../lib/prisma"])(
     "the relative specifier %s",
@@ -287,6 +297,24 @@ describe("from a legacy importer the hook leaves alone", () => {
 
   it("a source already inside reference/legacy/", async () => {
     expect(await resolveId(path.join(legacyRoot, "lib", "prisma.ts"), legacyImporter)).toBeNull();
+  });
+});
+
+describe("the generated client is redirected, not shared", () => {
+  it("a legacy importer is sent to the client built from the legacy schema", async () => {
+    for (const source of ["@prisma/client", ".prisma/client"]) {
+      const resolved = await resolveId(source, legacyImporter);
+      expect(resolved, `${source} was left to the shared package`).not.toBeNull();
+      expect(String(resolved)).toContain("generated/legacy-prisma-client");
+    }
+  });
+
+  it("a new-build importer is left alone entirely", async () => {
+    // The redirect is decided by who is asking. Same package name, and nothing
+    // outside reference/legacy/ is touched.
+    for (const source of ["@prisma/client", ".prisma/client"]) {
+      expect(await resolveId(source, newBuildImporter), source).toBeNull();
+    }
   });
 
   it("a source elsewhere under reference/", async () => {

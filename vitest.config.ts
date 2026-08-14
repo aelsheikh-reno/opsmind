@@ -27,6 +27,26 @@ const legacyRoot = `${rootDir}/reference/legacy`;
 // "<rootDir>/lib/prisma". Both forms are handled, so the guard holds whichever
 // side of the alias it is called on. node_modules is left alone: third-party
 // packages are shared by both sides and are not the code under test.
+//
+// The generated database client is the one exception, and it is not
+// third-party. It is generated FROM the schema under test, so the shared
+// package name resolves to the new build's tables. Legacy oracles were written
+// against the legacy tables — reference/legacy/lib/fx.ts reads `prisma.setting`
+// and `prisma.payrollRun`, neither of which exists on the new client. Sharing it
+// meant the oracle either threw at call time or answered about the wrong
+// database, which is the same contamination this plugin exists to stop, arriving
+// through node_modules instead of through "@/".
+//
+// It stayed invisible while the new schema had no models: with nothing to
+// generate, `prisma generate` was skipped and the import failed outright, so the
+// harness's own guard test passed for the wrong reason. kernel-schema-base added
+// the first models and the guard fired.
+//
+// So legacy importers resolve the client to a second one generated from the
+// legacy schema by prisma/generate-legacy-client.mjs. Same package name, decided
+// by who is asking. A missing legacy client throws rather than falling back to
+// the shared one — falling back is exactly how the contamination returns, and it
+// would return silently.
 function legacyCounterpart(source: string): string | null {
   if (source.startsWith("@/")) return `${legacyRoot}/${source.slice(2)}`;
   if (!source.startsWith(`${rootDir}/`)) return null;
@@ -35,12 +55,34 @@ function legacyCounterpart(source: string): string | null {
   return `${legacyRoot}/${rest}`;
 }
 
+// The client generated from the LEGACY schema by prisma/generate-legacy-client.mjs.
+const legacyPrismaClient = `${rootDir}/generated/legacy-prisma-client`;
+
+// Both spellings a generated client is reached by. The inner ".prisma/client" is
+// what the public package re-exports; a legacy module landing on it directly must
+// not slip through to the shared copy either.
+const clientPackages = new Set(["@prisma/client", ".prisma/client"]);
+
 function legacySelfAlias(): Plugin {
   return {
     name: "opsmind:legacy-self-alias",
     enforce: "pre",
     async resolveId(source, importer) {
       if (importer === undefined || !importer.startsWith(`${legacyRoot}/`)) return null;
+
+      if (clientPackages.has(source)) {
+        const resolved = await this.resolve(legacyPrismaClient, importer, { skipSelf: true });
+        if (resolved === null) {
+          throw new Error(
+            `${importer} imports "${source}", but the legacy client is not generated at ` +
+              `${legacyPrismaClient}. Run \`node prisma/generate-legacy-client.mjs\`. ` +
+              "Refusing to fall back to this build's client — the legacy oracle would then " +
+              "answer about the new schema's tables instead of its own.",
+          );
+        }
+        return resolved;
+      }
+
       const target = legacyCounterpart(source);
       if (target === null) return null;
       const resolved = await this.resolve(target, importer, { skipSelf: true });

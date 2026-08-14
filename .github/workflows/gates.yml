@@ -70,6 +70,13 @@ jobs:
           else
             echo "no models declared yet — skipping generate/deploy (phase 0)"
           fi
+      - name: Legacy Prisma client for the differential oracle
+        # Built from reference/legacy/prisma/schema.prisma, separate from this
+        # build's client. Unconditional, unlike the generate above: the legacy
+        # schema always has models, and vitest.config.ts throws rather than
+        # falling back to the shared client if this is missing.
+        run: node prisma/generate-legacy-client.mjs
+
       - name: Verify the guards still fire
         run: ./scripts/test-guards.sh
       - name: Run all gates
