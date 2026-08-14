@@ -423,11 +423,66 @@ check("scripts/test-guards.sh stays out of size-impl",
                           "lib/modules/deadlines/calendar.ts": 40}),
                  "size-impl").endswith("pass"), out)
 
+# --- migrations must survive .gitignore --------------------------------------
+# `prisma migrate deploy` applies committed migration files and nothing else. It
+# runs in gates.yml and again on every staging deploy, so a migration.sql that
+# .gitignore swallows means the schema never reaches the database — from a clean
+# checkout there is simply nothing to apply, and the deploy is green. gates.yml
+# calls that "the one failure direction that hides", and it hid for real: the
+# *.sql rule meant for dumps also matched prisma/migrations/*/migration.sql, and
+# nothing noticed until kernel-schema-base became the first task to produce a
+# migration.
+#
+# Both directions are pinned, because the fix is a negation and a negation is
+# exactly the kind of rule that is easy to widen by accident. `git add -n` is the
+# test rather than `git check-ignore`: check-ignore exits 0 when the LAST match
+# is a negation too, so it reports a re-included file as though it were ignored.
+# Whether git will actually stage the file is the question that matters.
+def gitignore_verdict(paths):
+    """Copy the real .gitignore into an empty repo; return {path: will_add}."""
+    d = tempfile.mkdtemp(prefix="gitignore-probe-")
+    SANDBOXES.append(d)
+    shutil.copyfile(os.path.join(REPO, ".gitignore"), os.path.join(d, ".gitignore"))
+    subprocess.run(["git", "init", "-q"], cwd=d, capture_output=True)
+    verdict = {}
+    for p in paths:
+        full = os.path.join(d, p)
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, "w") as f:
+            f.write("-- probe\n")
+        r = subprocess.run(["git", "add", "-n", p], cwd=d,
+                           capture_output=True, text=True)
+        verdict[p] = "add '" in (r.stdout + r.stderr)
+    return verdict
+
+v = gitignore_verdict([
+    "prisma/migrations/20260101000000_probe/migration.sql",  # must be committable
+    "prisma/migrations/migration_lock.toml",                 # must be committable
+    "backup.sql",                                            # dump — must not be
+    "prisma/dump.sql",                                       # dump beside the schema
+    "data.sql.gz",
+    "snap.dump",
+])
+check("a prisma migration is committable",
+      v["prisma/migrations/20260101000000_probe/migration.sql"], repr(v))
+check("the migration lock file is committable",
+      v["prisma/migrations/migration_lock.toml"], repr(v))
+check("a database dump at the root is still ignored",
+      not v["backup.sql"], repr(v))
+check("a dump sitting inside prisma/ is still ignored",
+      not v["prisma/dump.sql"], repr(v))
+check("compressed dumps and pg_dump archives are still ignored",
+      not v["data.sql.gz"] and not v["snap.dump"], repr(v))
+
 for d in SANDBOXES:
     shutil.rmtree(d, ignore_errors=True)
 
 if not all(size_results):
-    print("\nTHE SIZE BUDGET IS NOT BEING RESOLVED AS SPECIFIED — fix gate.sh")
+    # The list started as size-budget probes only; it now also carries the
+    # .gitignore migration guards, so the banner names the failing check rather
+    # than assuming gate.sh is at fault.
+    print("\nA REPOSITORY GUARD IS NOT BEHAVING AS SPECIFIED — see the FAIL line(s) above")
+    print("(size-* lines are gate.sh; committable/ignored lines are .gitignore)")
     sys.exit(1)
 print("\nall guards verified")
 PY

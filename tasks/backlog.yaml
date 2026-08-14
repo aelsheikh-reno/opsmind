@@ -491,3 +491,37 @@
     markdown counted against the 400-line code budget. gate-size-docs-exclusion
     removed that; this carries the pages themselves, plus the phase 1-3 nodes
     they make buildable.
+
+- id: gate-migrations-committable
+  title: Stop .gitignore from swallowing Prisma migrations
+  phase: 0
+  depends_on: [scaffold-project]
+  spec: PIPELINE.md#the-gates
+  produces:
+    - .gitignore
+    - scripts/test-guards.sh
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "A file under prisma/migrations/ ending .sql is committable"
+      - "Database dumps and archives stay ignored, including one sitting inside prisma/"
+      - "The guard is proved by whether git will stage the file, not by git check-ignore"
+  risk: low
+  status: todo
+  note: >
+    `.gitignore` line 10 is `*.sql`, grouped with `*.sql.gz` and `*.dump` and
+    plainly meant for database dumps. It also matches
+    `prisma/migrations/*/migration.sql`, so no migration has ever been
+    committable — `git log --all -- '*.sql'` is empty. gates.yml and every
+    staging deploy run `prisma migrate deploy`, which applies committed
+    migration files and nothing else, so from a clean checkout there is nothing
+    to apply and the deploy is green against an unmigrated database. gates.yml
+    calls that "the one failure direction that hides".
+
+    Latent since scaffold; surfaced when kernel-schema-base became the first
+    task to produce a migration and its 310-line migration.sql was invisible to
+    the size gate. Fixed with a negation, `!prisma/migrations/**/*.sql`, and
+    guarded in both directions because a negation is easy to widen by accident.
+    `git add -n` is the probe rather than `git check-ignore`: check-ignore exits
+    0 when the last matching rule is a negation, so it reports a re-included
+    file as ignored.
