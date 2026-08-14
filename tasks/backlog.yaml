@@ -383,9 +383,8 @@
     day, so a UTC default warns a day late — Ahmed 2026-08-14: the
     jurisdiction's civil date defines today, and no schema field carries one
     yet. Two conventions the written tests pin that no page states: business-day
-    distance counts (from, to], and a missing calendar aborts the whole run
-    rather than reporting the healthy jurisdictions, which under
-    flows-alerting.md takes the entire source dark for one bad jurisdiction.
+    ruling: business-day distance counts (from, to]. The missing-calendar
+    question is settled — see the sweep node.md takes the entire source dark for one bad jurisdiction.
 
     The threshold semantics are no longer on that list — severity as the maximum
     across breached windows, inclusive bounds, overdue at the highest band, and
@@ -849,3 +848,64 @@
     part of this task, not an assumption it may make. SalaryTerm at
     data-model.md:36-47 is the pattern: effectiveFrom, effectiveTo null for
     current, rows never edited in place, and a reason for the change.
+
+- id: module-deadlines-sweep
+  title: Deadline monitor — registration, the nightly sweep and the alert contract
+  phase: 1
+  depends_on: [module-deadlines]
+  spec: docs/architecture/components-core-deadline-monitor.md
+  also_read:
+    - docs/architecture/flows-alerting.md          # scoped completeness, resolve-by-absence
+    - docs/architecture/operations-scheduling.md   # the 02:00 sweep
+  legacy_reference: reference/legacy/app/api/cron/expiry-reminders/route.ts
+  produces:
+    - prisma/schema.prisma
+    - prisma/migrations/
+    - lib/modules/deadlines/{index,repository,thresholds}.ts
+    - tests/modules/deadlines/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage, differential]
+    assertions:
+      - "A run reports the complete breach set, and an empty set is meaningful"
+      - "Registering a deadline already inside a threshold evaluates immediately"
+      - "A jurisdiction with no BusinessCalendar errors for THAT jurisdiction only; the run continues"
+      - "Completeness is reported per jurisdiction; absence resolves only inside a scope declared complete"
+      - "An incomplete jurisdiction's alerts stay open, are marked STALE, and are never resolved by absence"
+      - "A missing calendar raises one misconfiguration alert"
+      - "The sweep scores against the jurisdiction's civil date, not UTC"
+      - "A run is stateless: two runs on the same day report identically, and a missed night self-heals"
+      - "Severity is the maximum across breached windows, never the tightest"
+      - "A deadline type with no threshold row raises one misconfiguration alert per run, not silence"
+      - "repository.ts imports db from lib/db.ts and declares both tables with // owns:"
+  risk: compliance
+  status: todo
+  note: >
+    The second half of module-deadlines. Its implementation and tests are
+    already written — repository.ts, the full index.ts, thresholds.ts,
+    monitor.test.ts and the sweep half of surface.ts — and were carried out of
+    that PR rather than deleted.
+
+    THE WRITTEN TESTS CONTRADICT A SETTLED DECISION AND MUST BE CHANGED WITH
+    THE BEHAVIOUR, NOT AROUND IT. They pin "a missing calendar aborts the whole
+    run". Ahmed settled the opposite on 2026-08-14: the jurisdiction errors,
+    the run continues, healthy jurisdictions resolve by absence normally, the
+    broken one's alerts stay open and STALE and are never resolved by absence,
+    and one misconfiguration alert is raised. Aborting takes every jurisdiction
+    dark for one bad calendar, which is a larger failure than the one it
+    avoids. flows-alerting.md now states that completeness is scoped; both
+    paths need tests.
+
+    "A jurisdiction with no BusinessCalendar is an error, never a
+    Saturday-Sunday fallback" still holds — erroring for that jurisdiction is
+    not the same as aborting the run, and the fallback is what rule 9 forbids.
+
+    Timezone. The sweep is scheduled 02:00 with no timezone stated anywhere; in
+    the Gulf that is 22:00 the previous UTC day, so a UTC default warns a day
+    late. Ahmed 2026-08-14: the jurisdiction's civil date defines today, and the
+    timezone lives on BusinessCalendar beside the weekend mask and holidays —
+    Jurisdiction is identity, BusinessCalendar is the civil-time rules. No
+    schema field carries one yet, so this node adds it.
+
+    Threshold semantics are settled and written into
+    components-core-deadline-monitor.md; thresholds.ts moves here with the
+    tests that pin them.
