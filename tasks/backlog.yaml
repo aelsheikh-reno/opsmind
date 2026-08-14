@@ -467,10 +467,12 @@
 - id: money-spine
   title: Commitment, open item and settlement
   phase: 2
-  depends_on: [kernel-registry-fx]
+  depends_on: [kernel-registry-fx, shapes-money-spine]
   spec: docs/architecture/data-vocabulary.md
   legacy_reference: reference/legacy/lib/wallet.ts
   produces:
+    - prisma/schema.prisma
+    - prisma/migrations/
     - lib/modules/finance/
     - tests/modules/finance/
   done_when:
@@ -486,10 +488,12 @@
 - id: module-payroll
   title: Payroll — effective-dated terms, statutory deductions, prorata
   phase: 3
-  depends_on: [money-spine, module-deadlines]
+  depends_on: [money-spine, module-deadlines, shapes-payroll]
   spec: docs/architecture/components-core-payroll.md
   legacy_reference: reference/legacy/lib/{prorata,tax}.ts
   produces:
+    - prisma/schema.prisma
+    - prisma/migrations/
     - lib/modules/payroll/
     - tests/modules/payroll/
   done_when:
@@ -505,7 +509,7 @@
 - id: module-projects
   title: Projects — structure, timesheets, milestones
   phase: 3
-  depends_on: [kernel-entities]
+  depends_on: [kernel-entities, shapes-projects]
   spec: docs/architecture/components-core-projects.md
   produces:
     - lib/modules/projects/
@@ -521,9 +525,11 @@
 - id: module-expenses
   title: Expenses — lifecycle plus the public claim portal
   phase: 3
-  depends_on: [money-spine]
+  depends_on: [money-spine, shapes-expenses]
   spec: docs/architecture/components-core-expenses.md
   produces:
+    - prisma/schema.prisma
+    - prisma/migrations/
     - lib/modules/expenses/
     - tests/modules/expenses/
   done_when:
@@ -541,6 +547,8 @@
   depends_on: [module-projects, money-spine]
   spec: docs/architecture/components-core-billing.md
   produces:
+    - prisma/schema.prisma
+    - prisma/migrations/
     - lib/modules/billing/
     - tests/modules/billing/
   done_when:
@@ -909,3 +917,156 @@
     Threshold semantics are settled and written into
     components-core-deadline-monitor.md; thresholds.ts moves here with the
     tests that pin them.
+
+- id: spec-coverage-audit
+  title: Which owned tables have no field-level shape
+  phase: 0
+  depends_on: [docs-architecture-spec]
+  spec: docs/architecture/data-ownership.md
+  produces:
+    - docs/architecture/open-items.md
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "Every table named in data-ownership.md is cross-referenced against the entity cards in data-model.md"
+      - "The tables with no field-level shape are listed, split by owner and by whether they are already built"
+      - "The list is reported and nothing is written — no shape is invented by this task"
+  risk: low
+  status: todo
+  note: >
+    data-model.md says up front that it covers "the shapes that changed or are
+    new in the target" and that unchanged tables are not repeated. That is
+    coherent for a refactor of a live database, where those tables already
+    exist. This is a greenfield build, so it means several modules have no
+    specification at all — and the gap is only discovered when a task reaches
+    the module and finds nothing to build to. module-deadlines hit it mid-PR:
+    DeadlineRegistration and ThresholdTable were named in one cell of
+    data-ownership.md and nowhere else.
+
+    Report and stop. Writing shapes is the nodes below, so that inventing a data
+    model is never something that happens inside an implementation PR under a
+    size budget.
+
+- id: shapes-money-spine
+  title: Field-level shapes for commitment, open item and settlement
+  phase: 2
+  depends_on: [spec-coverage-audit]
+  spec: docs/architecture/data-vocabulary.md
+  also_read:
+    - docs/architecture/data-model.md
+    - docs/architecture/decisions.md           # ADR-014, ADR-015
+  produces:
+    - docs/architecture/data-model.md
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "Commitment, open item and settlement each get a field-level card"
+      - "Balance is derived and no card gives it a column"
+      - "No card carries a paid boolean, and every direction is non-nullable"
+      - "One card per concept, so the three cannot drift apart"
+  risk: money
+  status: todo
+  note: >
+    One node rather than three, and ahead of the per-module shapes, because
+    these three span payroll, billing and expenses. Specified separately they
+    drift: the same settlement would grow a different shape in each module that
+    records one, and the vocabulary ADR-014 exists to unify would be re-split by
+    the act of writing it down.
+
+- id: shapes-projects
+  title: Field-level shapes for the Projects tables
+  phase: 3
+  depends_on: [spec-coverage-audit]
+  spec: docs/architecture/components-core-projects.md
+  produces:
+    - docs/architecture/data-model.md
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "Every Projects table in the ownership map has a field-level card"
+      - "Milestone completion produces a billable position; nothing is invoiced automatically"
+      - "Team membership is queryable, because instance-level authorisation depends on it"
+  risk: low
+  status: todo
+  note: >
+    Ten tables — Project, ProjectService, ProjectActivity, ProjectMilestone,
+    Timesheet, TimesheetEntry, ProjectTeamMember, ProjectMemberAllocation,
+    ProjectAiSuggestion, ProjectDocumentLink — and the largest undefined surface
+    in the build. Merges immediately before module-projects.
+
+- id: shapes-expenses
+  title: Field-level shapes for the Expenses tables
+  phase: 3
+  depends_on: [spec-coverage-audit]
+  spec: docs/architecture/components-core-expenses.md
+  produces:
+    - docs/architecture/data-model.md
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "Expense, ExpenseAttachment, PettyCashFloat and ClaimToken each have a field-level card"
+      - "A claim token is single-use, expiring, and independent of the identity provider"
+  risk: compliance
+  status: todo
+  note: >
+    ClaimToken is the reason this is compliance rather than low: it is the one
+    kernel-adjacent credential in the build that is deliberately not the
+    identity provider's, and its shape decides whether the public claim portal
+    can be replayed.
+
+- id: shapes-payroll
+  title: Field-level shapes for the Payroll tables
+  phase: 3
+  depends_on: [spec-coverage-audit]
+  spec: docs/architecture/components-core-payroll.md
+  produces:
+    - docs/architecture/data-model.md
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "PayrollRun and PayrollEntry have field-level cards"
+      - "An entry carries what was actually paid, and monthly generation is idempotent against the shape"
+  risk: money
+  status: todo
+  note: >
+    SalarySchedule and SalaryTerm already have cards; these two do not. Merges
+    immediately before module-payroll.
+
+- id: shapes-ingestion
+  title: Field-level shapes for IngestionRun and IngestionRule
+  phase: 3
+  depends_on: [spec-coverage-audit]
+  spec: docs/architecture/components-core-ingestion.md
+  also_read:
+    - docs/architecture/decisions.md           # ADR-005, rules are data
+  produces:
+    - docs/architecture/data-model.md
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "IngestionRun and IngestionRule have field-level cards"
+      - "A rule is trigger plus flat ANDed conditions plus ordered actions, as data"
+      - "The action vocabulary is fixed; a rule cannot introduce a new verb"
+  risk: low
+  status: todo
+  note: >
+    IngestionRule is Kernel-owned by data-ownership.md and described in prose
+    only (ADR-005). The slice-1 implementer declined to invent it, correctly.
+
+- id: shapes-finance-misc
+  title: Field-level shapes for Budget and CapitalInjection
+  phase: 2
+  depends_on: [spec-coverage-audit]
+  spec: docs/architecture/components-core-finance.md
+  produces:
+    - docs/architecture/data-model.md
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "Budget and CapitalInjection have field-level cards"
+      - "Neither carries a paid boolean; both state a direction where money moves"
+  risk: money
+  status: todo
+  note: >
+    The two Finance tables outside the money spine. Small, but they feed the
+    cash view, so they are money-tagged.
