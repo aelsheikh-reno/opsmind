@@ -313,20 +313,41 @@
   title: Deadline monitor — the reference module
   phase: 1
   depends_on: [kernel-schema-base]
+  size_total: 1200
+  size_waiver_reason: >
+    Roughly 1005 lines: ~580 tests, ~126 prisma (90 schema, 36 generated DDL),
+    ~159 lib, ~59 backlog, ~46 documentation, ~35 the four enforcement layers
+    lib/db.ts needed. Implementation is ~335 against the unchanged 400 — the
+    generated DDL and the documentation are out of size-impl by ADR-028 and
+    ADR-026 and still counted in this total, which is the point of the split.
+    Figures are approximate because this reason is inside the diff it measures;
+    they were recomputed from the gate's own pathspecs, not estimated.
+    The tests carry the date rules this whole node exists to pin — Gulf week,
+    missing-calendar error, calendar-day due dates — at the rigour CLAUDE.md
+    asks for on a compliance task, including cases driven against the legacy
+    oracle rather than hand-written.
   spec: docs/architecture/components-core-deadline-monitor.md
   legacy_reference: reference/legacy/app/api/cron/expiry-reminders/route.ts
   produces:
-    - lib/modules/deadlines/{index,repository,thresholds,calendar}.ts
+    - prisma/schema.prisma
+    - prisma/migrations/
+    - docs/architecture/data-model.md
+    - docs/architecture/data-ownership.md
+    - lib/db.ts
+    - lib/modules/deadlines/{index,calendar}.ts
     - tests/modules/deadlines/
+    - tests/kernel/db-client.test.ts
+    - scripts/{guard-write,check-boundaries,test-guards}.sh
+    - eslint.config.mjs
+    - templates/eslint.config.mjs
+    - docs/architecture/{components-core-deadline-monitor,open-items}.md
   done_when:
     gates: [lint, types, boundaries, tests, coverage, differential]
     assertions:
       - "Business-day arithmetic uses the Sunday-Thursday Gulf week"
       - "A jurisdiction with no BusinessCalendar is an error, never a Saturday-Sunday fallback"
-      - "A filing due date is periodEnd + Regime.deadlineDays in calendar days, never rolled off a weekend"
-      - "A run reports the complete breach set, and an empty set is meaningful"
-      - "Thresholds are data in settings, not constants in code"
-      - "Registering a deadline already inside a threshold evaluates immediately"
+      - "The statutory due date is periodEnd + Regime.deadlineDays in calendar days, and the date to file by rolls forward off a weekend or holiday"
+      - "Repositories import the shared client from lib/db.ts and never construct one"
   risk: compliance
   status: todo
   note: >
@@ -336,6 +357,46 @@
 
     Unblocked 2026-08-14 with kernel-schema-base: its own spec and the
     data-ownership.md the boundary rule cites are both committed now.
+
+    Split 2026-08-14 on size. The whole module measured 544 implementation lines
+    against the non-overridable 400, of which lib/ was 227 code and 177 comment
+    — and those comments carry the calendar-days rule and the port rationale,
+    which ADR-028 names as the wrong thing to delete for a number. This node
+    keeps the two tables, the business calendar, the date rules and lib/db.ts.
+    Threshold severity, registration, the nightly sweep, the store port and the
+    alert contract move to module-deadlines-sweep, which declares its own node
+    in its own PR. Its code and tests are written and carried, not deleted.
+
+    thresholds.ts moved on review. The first cut of this split left it here
+    while its tests went with the sweep, so it shipped at 0% covered with four
+    business rules nothing in the spec states — the split cut the code at one
+    seam and the tests at another. Those four are now settled and written into
+    components-core-deadline-monitor.md, so the sweep node builds to a spec
+    rather than to a note: severity is the MAXIMUM across breached windows and
+    never the tightest, a threshold is inclusive at its bound, an overdue
+    deadline takes the highest configured severity, and a type with no
+    threshold row raises one misconfiguration alert per type per run instead of
+    silently never reporting.
+
+    What that node must still settle. The sweep is scheduled 02:00 with no
+    timezone stated anywhere, and in the Gulf that is 22:00 the previous UTC
+    day, so a UTC default warns a day late — Ahmed 2026-08-14: the
+    jurisdiction's civil date defines today, and no schema field carries one
+    yet. Two conventions the written tests pin that no page states: business-day
+    distance counts (from, to], and a missing calendar aborts the whole run
+    rather than reporting the healthy jurisdictions, which under
+    flows-alerting.md takes the entire source dark for one bad jurisdiction.
+
+    The threshold semantics are no longer on that list — severity as the maximum
+    across breached windows, inclusive bounds, overdue at the highest band, and
+    an unconfigured type raising rather than staying silent are all settled and
+    written into components-core-deadline-monitor.md. The civil-date convention
+    and the accepted legacy difference behind 2024-04-27 are in data-model.md.
+
+    DeadlineRegistration and ThresholdTable had no field-level spec — one cell
+    in data-ownership.md was their only mention anywhere. Ahmed approved
+    deriving them from what the spec does fix, and the shape is now written into
+    data-model.md so they stop being undocumented.
 
 - id: gate-size-docs-exclusion
   title: Keep documentation out of the implementation budget

@@ -3,6 +3,7 @@
 # rather than discovering them at review.
 set -uo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(dirname "$here")"
 
 if ! parsed=$(python3 "$here/_read_event.py"); then
   echo "BLOCKED: could not read the hook event, failing closed" >&2
@@ -42,6 +43,17 @@ esac
 #   prisma/         schema and generator tooling; naming the client is its job
 #   tests/          a test may assert the package is installed, or read the
 #                   legacy schema, without touching a database
+#   lib/db.ts       the single client every repository imports. Repositories
+#                   reach the database THROUGH it, so it is the one
+#                   non-repository file that must name the client package: it
+#                   is where the client is constructed, once, instead of once
+#                   per module. Anchored to the resolved repository root, so it
+#                   is genuinely one path: a bare `*/lib/db.ts` would also match
+#                   lib/modules/payroll/lib/db.ts, because `*` spans `/` in a
+#                   bash case, and a module minting its own client is exactly
+#                   what this must refuse. Matching a literal directory name
+#                   instead would refuse the real file in a checkout named
+#                   anything else.
 #   vitest.config.ts  build/test configuration. It aliases the client package so
 #                   legacy oracles resolve the client generated from the LEGACY
 #                   schema rather than this build's — configuring resolution, not
@@ -54,6 +66,7 @@ if printf '%s' "$body" | grep -q "@/lib/db\|@prisma/client"; then
   case "$path" in
     */repository.ts|repository.ts|*/prisma/*|prisma/*) ;;
     tests/*|*/tests/*) ;;
+    lib/db.ts|"$repo_root/lib/db.ts") ;;
     vitest.config.ts|*/vitest.config.ts) ;;
     *) block "only repository.ts may import the database (CLAUDE.md rule 3)" ;;
   esac

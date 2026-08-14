@@ -531,3 +531,85 @@ model AuditEntry {
   @@index([entityType, entityId])
   @@index([createdAt])
 }
+
+// ---------------------------------------------------------------------------
+// Deadline monitor
+// ---------------------------------------------------------------------------
+
+/// How serious a breach is. Detection decides severity; the Alert Manager
+/// consumes it and never judges it (ADR-020). Only the two values the deadline
+/// monitor's spec attests are here — its reportRun example carries `major` and
+/// `minor` and nothing else. Adding a level is a migration, deliberately: an
+/// unattested `critical` invented now would be a compliance value nobody
+/// specified. Ahmed's constraint on derived fields, 2026-08-14.
+enum AlertSeverity {
+  minor
+  major
+}
+
+/// A date the monitor watches. Created by registerDeadline(entityRef, type,
+/// dueDate) and removed by deregisterDeadline; alerts resolve by absence from a
+/// completed report, so a deregistered row simply stops being reported.
+model DeadlineRegistration {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  /// entityRef, as the two parts the fingerprint's entity segment is built
+  /// from: `…:document:123:expiry` (data-model.md spells a reference this way
+  /// on OpenItem, Settlement and search_index too). No foreign key — the row
+  /// may point at a Document, a TaxFiling or a BillablePosition, all owned by
+  /// other modules, and a cross-owner FK is exactly what stops a module being
+  /// extracted later (ADR-021).
+  entityType String
+  entityId   String
+
+  /// The `type` argument, and the key the threshold table is read by. It is
+  /// also the fingerprint's policy segment — `expiry`, `due` — so identity
+  /// survives a threshold being retuned.
+  deadlineType String
+
+  /// The `dueDate` argument. A date, not a timestamp: distance is counted in
+  /// whole days. For a filing this is periodEnd + Regime.deadlineDays in plain
+  /// calendar days and may land on a Friday; the monitor surfaces that rather
+  /// than shifting it (see Regime.deadlineDays above).
+  dueDate DateTime @db.Date
+
+  /// Which BusinessCalendar measures the distance. Distance is business days
+  /// against the jurisdiction's calendar, so a registration that cannot name
+  /// its jurisdiction cannot be scored at all; a missing calendar is an error,
+  /// never a Saturday-Sunday fallback. Held as an id with no relation: the
+  /// Kernel owns Jurisdiction, and this module reads it through the kernel's
+  /// interface rather than joining into its table (CLAUDE.md rule 1).
+  jurisdictionId String
+
+  /// One registration per fingerprint. Two rows for the same entity and type
+  /// would compute one identity and report it twice, and a fingerprint is
+  /// meant to be a deterministic identity for a stable fact. This is also what
+  /// makes re-registering the same deadline idempotent.
+  @@unique([entityType, entityId, deadlineType])
+  @@index([dueDate])
+}
+
+/// Thresholds and severities, per deadline type — data in Settings, tunable
+/// without a deployment, exactly as a SOC tunes detection rules (ADR-020).
+/// Several rows per type give the escalating windows the compliance calendar
+/// promises: 30 business days out is minor, 7 is major.
+model ThresholdTable {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  /// Matches DeadlineRegistration.deadlineType.
+  deadlineType String
+
+  /// The window, in BUSINESS days remaining, at or inside which this row's
+  /// severity applies. Business days because "seven days" that lands on a
+  /// weekend is not seven working days.
+  businessDaysBefore Int
+
+  severity AlertSeverity
+
+  /// One severity per window per type. Two rows for the same window would make
+  /// the reported severity depend on row order, and severity is monotonic while
+  /// an alert is open — a value that flips is a resolve-then-reopen.
+  @@unique([deadlineType, businessDaysBefore])
+}
