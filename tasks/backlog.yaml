@@ -1289,3 +1289,39 @@
     is between integration tests that only run where CI provides a database, and
     a strict floor that acknowledges an uncoverable repository. Both are gate
     changes and neither is urgent.
+
+- id: kernel-source-compiler-api
+  title: Read kernel source with the TypeScript compiler API
+  phase: 0
+  depends_on: [kernel-entities-law]
+  spec: PIPELINE.md#the-gates
+  produces:
+    - tests/kernel/kernel-source.ts
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "The 30 fixture tests pass byte-for-byte unchanged"
+      - "Every consumer test file passes unchanged"
+      - "The public contract is preserved name for name"
+  risk: low
+  status: todo
+  note: >
+    The reader was hand-rolled: a 187-line character scanner, a seven-state mode
+    machine, brace and template depth bookkeeping, a regex-versus-division
+    heuristic and six regexes. typescript was already a devDependency the whole
+    time — it is what the types gate runs. Raised on kernel-entities-law, whose
+    waiver rested on justifying the reader; done before
+    kernel-entities-parties makes it load-bearing for six components rather
+    than one.
+
+    The tests were the equivalence proof and they were not touched: 30 fixtures
+    and four consumer files, all unchanged, 487 passing.
+
+    It closed real holes rather than only saving lines. A db.<table> chain
+    broken across lines was invisible to the line-based scanner, so the // owns:
+    cross-check — the guard on rule 1 — could pass on a repository touching an
+    undeclared table purely because of formatting. Declarations written inside
+    STRING LITERALS were reported as real: the mutant fixtures in
+    kernel-regime-data.test.ts were read as genuine exports of VAT_RATE = 0.05
+    and vatDeadlineDays = 28. Signatures were silently truncated at a brace in a
+    return type, and a type alias swallowed the declaration that followed it.

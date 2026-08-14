@@ -1,5 +1,9 @@
-// A small, dependency-free reader for `lib/kernel/` — the source text, not the
-// behaviour.
+// A reader for `lib/kernel/` — the source text, not the behaviour.
+//
+// It reads through the TypeScript compiler API. `typescript` is already a
+// devDependency (it is what the `types` gate runs), so the questions below are
+// answered from the same token stream and the same syntax tree the compiler
+// itself builds, rather than from a lexer written here that has to be believed.
 //
 // WHY THIS EXISTS. Three of the four assertions on
 // `tasks/backlog.yaml#kernel-entities-law` are about the *shape* of the kernel
@@ -28,13 +32,14 @@
 // requires. Signatures and type members only — the same allowance the task
 // gives for binding calls against `index.ts`.
 //
-// The parser is shallow on purpose. Anything it cannot classify is surfaced
-// (`blankNonCode` is proven against fixtures in kernel-source.test.ts) rather
-// than silently dropped, because a reader that quietly sees nothing turns every
-// sweep built on it green.
+// The queries are shallow on purpose. Anything the reader cannot classify is
+// surfaced (`blankNonCode` is proven against fixtures in kernel-source.test.ts)
+// rather than silently dropped, because a reader that quietly sees nothing turns
+// every sweep built on it green.
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -124,12 +129,103 @@ export function kernelRepositories(): SourceFile[] {
     .filter((file): file is SourceFile => file !== undefined);
 }
 
-// --------------------------------------------------------------- the lexer --
+// ------------------------------------------------------------- the compiler --
+
+interface Parsed {
+  file: ts.SourceFile;
+  /** Every token with nothing beneath it, in source order. */
+  tokens: ts.Node[];
+  /** Every comment, in source order. Comments are trivia, so they are not nodes. */
+  comments: ts.CommentRange[];
+}
+
+/**
+ * Parsing is memoised on the source text: a sweep asks the same file for its
+ * comments, then for its literals, then for its declarations, and re-parsing
+ * each time is work with no new answer attached.
+ *
+ * Everything is parsed as TypeScript rather than TSX. `lib/kernel/` is shared
+ * vocabulary and holds no components, and `<T>` in a .ts file means a type
+ * argument — the reading the compiler only takes in this mode.
+ */
+const parses = new Map<string, Parsed>();
+
+function parse(source: string): Parsed {
+  const cached = parses.get(source);
+  if (cached !== undefined) return cached;
+
+  const file = ts.createSourceFile("kernel.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const tokens: ts.Node[] = [];
+  const collect = (node: ts.Node): void => {
+    const children = node.getChildren(file);
+    if (children.length === 0) tokens.push(node);
+    else children.forEach(collect);
+  };
+  collect(file);
+
+  // Between a token's full start and its start lies nothing but whitespace and
+  // comments, so every comment in the file is in some token's trivia — the last
+  // one included, because the end-of-file token is a token. `getLeading…` alone
+  // would miss a comment that trails code on its own line, which is exactly
+  // where a rate gets explained; the two together miss nothing.
+  const comments: ts.CommentRange[] = [];
+  const seen = new Set<number>();
+  for (const token of tokens) {
+    const trivia = token.getFullStart();
+    const found = [
+      ...(ts.getTrailingCommentRanges(source, trivia) ?? []),
+      ...(ts.getLeadingCommentRanges(source, trivia) ?? []),
+    ];
+    for (const range of found) {
+      if (seen.has(range.pos)) continue;
+      seen.add(range.pos);
+      comments.push(range);
+    }
+  }
+
+  const parsed: Parsed = { file, tokens, comments };
+  parses.set(source, parsed);
+  return parsed;
+}
+
+const lineAt = (file: ts.SourceFile, position: number): number =>
+  file.getLineAndCharacterOfPosition(position).line + 1;
+
+/** Every node in the tree, outermost first, in source order. */
+function eachNode(node: ts.Node, visit: (node: ts.Node) => void): void {
+  visit(node);
+  ts.forEachChild(node, (child) => {
+    eachNode(child, visit);
+  });
+}
+
+const isExported = (node: ts.Node): boolean =>
+  ts.canHaveModifiers(node) &&
+  (ts.getModifiers(node) ?? []).some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword);
+
+const NAME = /^[A-Za-z_]\w*$/;
+
+// ------------------------------------------------------------ blanking code --
 
 export interface BlankOptions {
   /** Blank the contents of string and template literals too. Default true. */
   strings?: boolean;
 }
+
+/**
+ * The literal tokens whose contents are text rather than code. A template with
+ * a substitution is three or more tokens — `` `due ${ ``, then the expression,
+ * then `` } days` `` — so blanking the literal tokens leaves the expression
+ * standing, which is the behaviour that matters below.
+ */
+const LITERAL_TOKENS = new Set<ts.SyntaxKind>([
+  ts.SyntaxKind.StringLiteral,
+  ts.SyntaxKind.NoSubstitutionTemplateLiteral,
+  ts.SyntaxKind.RegularExpressionLiteral,
+  ts.SyntaxKind.TemplateHead,
+  ts.SyntaxKind.TemplateMiddle,
+  ts.SyntaxKind.TemplateTail,
+]);
 
 /**
  * Replaces comments — and, by default, the contents of string, template and
@@ -141,171 +237,28 @@ export interface BlankOptions {
  * inside a comment explaining a rate, on a version string, or on `\d{2,4}`
  * inside a regular expression, and must not miss one hidden in a template
  * expression — `${deadlineDays ?? 28}` is code, and the 28 in it counts.
+ *
+ * Telling `/` the divisor from `/` the regular expression is the parser's job
+ * here rather than this file's: `total / 2` is a slash token and
+ * `/^[A-Z]{2}\d{2,4}$/` is one literal token, decided by the same grammar the
+ * compiler uses.
  */
 export function blankNonCode(source: string, options: BlankOptions = {}): string {
   const blankStrings = options.strings !== false;
+  const { file, tokens, comments } = parse(source);
   const out = source.split("");
-  const blank = (index: number): void => {
-    if (out[index] !== "\n") out[index] = " ";
+  const blank = (from: number, to: number): void => {
+    for (let index = from; index < to; index += 1) {
+      if (out[index] !== "\n") out[index] = " ";
+    }
   };
 
-  type Mode = "code" | "line" | "block" | "single" | "double" | "template" | "regex";
-  let mode: Mode = "code";
-  // Brace depth in code, plus the depth at which each open `${` began, so the
-  // matching `}` returns to template mode rather than to code.
-  let depth = 0;
-  const templateDepths: number[] = [];
-  // Whether a `/` here can start a regular expression: true after an operator,
-  // a comma, an opening bracket or a keyword, false after a value.
-  let regexAllowed = true;
-  let inCharClass = false;
-
-  for (let i = 0; i < source.length; i += 1) {
-    const ch = source[i];
-    const next = source[i + 1];
-
-    switch (mode) {
-      case "line":
-        blank(i);
-        if (ch === "\n") mode = "code";
-        break;
-
-      case "block":
-        blank(i);
-        if (ch === "*" && next === "/") {
-          blank(i + 1);
-          i += 1;
-          mode = "code";
-        }
-        break;
-
-      case "single":
-      case "double": {
-        const quote = mode === "single" ? "'" : '"';
-        if (ch === "\\") {
-          if (blankStrings) {
-            blank(i);
-            blank(i + 1);
-          }
-          i += 1;
-          break;
-        }
-        if (ch === quote) {
-          if (blankStrings) blank(i);
-          mode = "code";
-          regexAllowed = false;
-          break;
-        }
-        if (blankStrings && ch !== "\n") blank(i);
-        break;
-      }
-
-      case "template":
-        if (ch === "\\") {
-          if (blankStrings) {
-            blank(i);
-            blank(i + 1);
-          }
-          i += 1;
-          break;
-        }
-        if (ch === "$" && next === "{") {
-          if (blankStrings) {
-            blank(i);
-            blank(i + 1);
-          }
-          templateDepths.push(depth);
-          depth += 1;
-          i += 1;
-          mode = "code";
-          regexAllowed = true;
-          break;
-        }
-        if (ch === "`") {
-          if (blankStrings) blank(i);
-          mode = "code";
-          regexAllowed = false;
-          break;
-        }
-        if (blankStrings && ch !== "\n") blank(i);
-        break;
-
-      case "regex":
-        if (ch === "\\") {
-          if (blankStrings) {
-            blank(i);
-            blank(i + 1);
-          }
-          i += 1;
-          break;
-        }
-        if (ch === "[") inCharClass = true;
-        else if (ch === "]") inCharClass = false;
-        else if (ch === "/" && !inCharClass) {
-          if (blankStrings) blank(i);
-          mode = "code";
-          regexAllowed = false;
-          break;
-        }
-        if (blankStrings && ch !== "\n") blank(i);
-        break;
-
-      default: {
-        if (ch === "/" && next === "/") {
-          blank(i);
-          blank(i + 1);
-          i += 1;
-          mode = "line";
-          break;
-        }
-        if (ch === "/" && next === "*") {
-          blank(i);
-          blank(i + 1);
-          i += 1;
-          mode = "block";
-          break;
-        }
-        if (ch === "/" && regexAllowed) {
-          if (blankStrings) blank(i);
-          inCharClass = false;
-          mode = "regex";
-          break;
-        }
-        if (ch === '"') {
-          if (blankStrings) blank(i);
-          mode = "double";
-          break;
-        }
-        if (ch === "'") {
-          if (blankStrings) blank(i);
-          mode = "single";
-          break;
-        }
-        if (ch === "`") {
-          if (blankStrings) blank(i);
-          mode = "template";
-          break;
-        }
-        if (ch === "{") depth += 1;
-        else if (ch === "}") {
-          depth -= 1;
-          if (templateDepths.length > 0 && depth === templateDepths[templateDepths.length - 1]) {
-            templateDepths.pop();
-            if (blankStrings) blank(i);
-            mode = "template";
-            break;
-          }
-        }
-        if (!/\s/.test(ch)) {
-          // A `/` may start a regular expression unless the thing before it was
-          // a value: an identifier, a number, or a closing bracket.
-          regexAllowed = !/[\w$)\]]/.test(ch);
-        }
-        break;
-      }
+  for (const comment of comments) blank(comment.pos, comment.end);
+  if (blankStrings) {
+    for (const token of tokens) {
+      if (LITERAL_TOKENS.has(token.kind)) blank(token.getStart(file), token.end);
     }
   }
-
   return out.join("");
 }
 
@@ -322,29 +275,22 @@ export interface NumericLiteral {
   context: string;
 }
 
-const NUMBER = /(?<![\w$.])(?:0[xX][0-9a-fA-F_]+|\d[\d_]*(?:\.\d[\d_]*)?(?:[eE][+-]?\d+)?|\.\d[\d_]*)(?![\w$])/g;
-
 /**
- * Every numeric literal in the code — comments, strings and regular
- * expressions already removed. `foo.2` cannot occur, and `x2` is an identifier,
- * so both are excluded by the boundaries above.
+ * Every numeric literal in the code. A number in a comment, in a string or in a
+ * regular expression is not a numeric literal token, so none of them appear
+ * here; neither does the `2` of `x2`, which is part of an identifier. `28` in
+ * `${days ?? 28}` does appear, because it is code.
  */
 export function numericLiterals(source: string): NumericLiteral[] {
-  const code = blankNonCode(source);
-  const lines = code.split("\n");
-  const found: NumericLiteral[] = [];
-  lines.forEach((line, index) => {
-    for (const match of line.matchAll(NUMBER)) {
-      const raw = match[0];
-      found.push({
-        raw,
-        value: Number(raw.replace(/_/g, "")),
-        line: index + 1,
-        context: line.trim(),
-      });
-    }
-  });
-  return found;
+  const { file, tokens } = parse(source);
+  const lines = blankNonCode(source).split("\n");
+  return tokens
+    .filter((token) => token.kind === ts.SyntaxKind.NumericLiteral)
+    .map((token) => {
+      const raw = source.slice(token.getStart(file), token.end);
+      const line = lineAt(file, token.getStart(file));
+      return { raw, value: Number(raw.replace(/_/g, "")), line, context: lines[line - 1].trim() };
+    });
 }
 
 // ------------------------------------------------------- the owns declaration --
@@ -361,7 +307,7 @@ export interface OwnsDeclaration {
   raw: string;
 }
 
-const OWNS = /^\s*\/\/\s*owns:(.*)$/i;
+const OWNS = /^\/\/\s*owns:(.*)$/i;
 
 /**
  * The `// owns:` declaration CLAUDE.md requires as a repository's first line:
@@ -369,27 +315,33 @@ const OWNS = /^\s*\/\/\s*owns:(.*)$/i;
  * `// owns: TableA, TableB` naming every table it may touch — the boundary
  * check reads this declaration".
  *
- * Names are split on commas, the `·` the ownership table uses, and whitespace.
+ * Read from the file's comments, so the same words inside a string literal are
+ * not a declaration, and required to open its line, which is the convention
+ * CLAUDE.md states. Names are split on commas, the `·` the ownership table
+ * uses, and whitespace.
  */
 export function ownsDeclaration(source: string): OwnsDeclaration {
+  const { file, comments } = parse(source);
   const lines = source.split("\n");
-  const index = lines.findIndex((line) => OWNS.test(line));
-  if (index === -1) {
-    return { onFirstLine: false, present: false, line: 0, tables: [], raw: "" };
+  for (const comment of comments) {
+    if (comment.kind !== ts.SyntaxKind.SingleLineCommentTrivia) continue;
+    const listed = OWNS.exec(source.slice(comment.pos, comment.end));
+    if (listed === null) continue;
+    const { line, character } = file.getLineAndCharacterOfPosition(comment.pos);
+    if (lines[line].slice(0, character).trim() !== "") continue;
+    return {
+      onFirstLine: line === 0,
+      present: true,
+      line: line + 1,
+      tables: listed[1]
+        .split(/[,·|;]+/)
+        .flatMap((part) => part.trim().split(/\s+/))
+        .map((name) => name.trim())
+        .filter((name) => NAME.test(name)),
+      raw: lines[line].trim(),
+    };
   }
-  const raw = lines[index];
-  const listed = OWNS.exec(raw)?.[1] ?? "";
-  return {
-    onFirstLine: index === 0,
-    present: true,
-    line: index + 1,
-    tables: listed
-      .split(/[,·|;]+/)
-      .flatMap((part) => part.trim().split(/\s+/))
-      .map((name) => name.trim())
-      .filter((name) => /^[A-Za-z_]\w*$/.test(name)),
-    raw: raw.trim(),
-  };
+  return { onFirstLine: false, present: false, line: 0, tables: [], raw: "" };
 }
 
 export interface DbUsage {
@@ -399,38 +351,59 @@ export interface DbUsage {
   context: string;
 }
 
-// `db.person.` and `tx.person.` — the client and the transaction handle a
-// repository receives from `$transaction`. `$`-prefixed members (`$transaction`,
-// `$queryRaw`) are client methods rather than tables and are excluded by the
-// character class.
-const DB_USAGE = /\b(?:db|tx|trx|client|prisma)\s*\.\s*([a-zA-Z_]\w*)\s*(?=[.[(])/g;
+// The client and the transaction handle a repository receives from
+// `$transaction`. `$`-prefixed members (`$transaction`, `$queryRaw`) are client
+// methods rather than tables and fail the name test below.
+const CLIENTS = new Set(["db", "tx", "trx", "client", "prisma"]);
 
-/** Every table a file actually touches through the client, as written. */
+/** True when the access is a base rather than the whole expression: `db.person.findMany`, `db.person[k]`, `db.person(…)`. */
+function isReached(node: ts.Node): boolean {
+  const parent = node.parent as ts.Node | undefined;
+  if (parent === undefined) return false;
+  if (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) {
+    return parent.expression === node;
+  }
+  return ts.isCallExpression(parent) && parent.expression === node;
+}
+
+/**
+ * Every table a file actually touches through the client, as written. Read from
+ * the tree, so a chain broken across lines — `db.person` on one and
+ * `.findMany()` on the next — counts exactly as the one-line form does.
+ */
 export function dbUsages(source: string): DbUsage[] {
-  const code = blankNonCode(source);
+  const { file } = parse(source);
+  const lines = blankNonCode(source).split("\n");
   const found: DbUsage[] = [];
-  code.split("\n").forEach((line, index) => {
-    for (const match of line.matchAll(DB_USAGE)) {
-      found.push({ delegate: match[1], line: index + 1, context: line.trim() });
-    }
+  eachNode(file, (node) => {
+    if (!ts.isPropertyAccessExpression(node)) return;
+    if (!ts.isIdentifier(node.expression) || !CLIENTS.has(node.expression.text)) return;
+    if (!ts.isIdentifier(node.name) || !NAME.test(node.name.text)) return;
+    if (!isReached(node)) return;
+    const line = lineAt(file, node.getStart(file));
+    found.push({ delegate: node.name.text, line, context: lines[line - 1].trim() });
   });
   return found;
 }
 
 /** Every module specifier a file imports or re-exports from. */
 export function importSpecifiers(source: string): string[] {
-  const code = codeWithStrings(source);
+  const { file } = parse(source);
   const specifiers: string[] = [];
-  const patterns = [
-    /\bimport\s+[^;]*?\bfrom\s*["']([^"']+)["']/g,
-    /\bimport\s*["']([^"']+)["']/g,
-    /\bexport\s+[^;]*?\bfrom\s*["']([^"']+)["']/g,
-    /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g,
-    /\brequire\s*\(\s*["']([^"']+)["']\s*\)/g,
-  ];
-  for (const pattern of patterns) {
-    for (const match of code.matchAll(pattern)) specifiers.push(match[1]);
-  }
+  const add = (node: ts.Node | undefined): void => {
+    if (node !== undefined && ts.isStringLiteralLike(node)) specifiers.push(node.text);
+  };
+  eachNode(file, (node) => {
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) add(node.moduleSpecifier);
+    else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference))
+      add(node.moduleReference.expression);
+    else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) add(node.argument.literal);
+    else if (ts.isCallExpression(node)) {
+      const callee = node.expression;
+      const dynamic = callee.kind === ts.SyntaxKind.ImportKeyword;
+      if (dynamic || (ts.isIdentifier(callee) && callee.text === "require")) add(node.arguments[0]);
+    }
+  });
   return specifiers;
 }
 
@@ -443,29 +416,28 @@ export interface ReExport {
   from: string;
 }
 
-const RE_EXPORT_NAMED = /\bexport\s+(?:type\s+)?\{([^}]*)\}\s*from\s*["']([^"']+)["']/g;
-const RE_EXPORT_STAR = /\bexport\s+\*\s*(?:as\s+\w+\s*)?from\s*["']([^"']+)["']/g;
-
 export function reExports(source: string): ReExport[] {
-  const code = codeWithStrings(source);
+  const { file } = parse(source);
   const out: ReExport[] = [];
-  for (const match of code.matchAll(RE_EXPORT_NAMED)) {
-    const names = match[1]
-      .split(",")
-      .map((part) => part.replace(/\btype\b/, "").trim())
-      .map((part) => (part.includes(" as ") ? part.split(" as ")[1].trim() : part))
-      .filter((name) => /^[A-Za-z_]\w*$/.test(name));
-    out.push({ names, star: false, from: match[2] });
-  }
-  for (const match of code.matchAll(RE_EXPORT_STAR)) {
-    out.push({ names: [], star: true, from: match[1] });
-  }
+  eachNode(file, (node) => {
+    if (!ts.isExportDeclaration(node)) return;
+    const from = node.moduleSpecifier;
+    if (from === undefined || !ts.isStringLiteralLike(from)) return;
+    const clause = node.exportClause;
+    const named = clause !== undefined && ts.isNamedExports(clause) ? clause.elements : [];
+    out.push({
+      // The name the importer sees, so `x as y` is exported as `y`.
+      names: named.map((element) => element.name.text).filter((name) => NAME.test(name)),
+      star: clause === undefined || ts.isNamespaceExport(clause),
+      from: from.text,
+    });
+  });
   return out;
 }
 
 export interface TypeMember {
   name: string;
-  /** Everything after the member name on its line: `: readonly number[];`. */
+  /** Everything after the member name: `: readonly number[];`. */
   type: string;
   optional: boolean;
 }
@@ -479,65 +451,79 @@ export interface TypeBlock {
   raw: string;
 }
 
-const TYPE_HEADER = /\bexport\s+(?:declare\s+)?(?:abstract\s+)?(interface|type|class)\s+([A-Za-z_]\w*)/g;
-const MEMBER = /^\s*(?:readonly\s+|public\s+|private\s+)?([A-Za-z_]\w*)\s*(\??)\s*([:(<].*)$/;
+/**
+ * The declared members of one braced block, with the text of each member's
+ * type. Left out: a member with no name — an index signature, a call signature,
+ * a constructor — and a member whose declaration is not a type, such as a class
+ * field with an initialiser. Neither is a shape a caller reads a value out of.
+ * A method's body is never included; the text stops at the `{` that opens it.
+ */
+function typeMembers(
+  members: readonly (ts.TypeElement | ts.ClassElement)[],
+  file: ts.SourceFile,
+  code: string,
+): TypeMember[] {
+  const found: TypeMember[] = [];
+  for (const member of members) {
+    const name = member.name;
+    if (name === undefined || !ts.isIdentifier(name) || !NAME.test(name.text)) continue;
+    const question = (member as { questionToken?: ts.QuestionToken }).questionToken;
+    const body = (member as { body?: ts.Node }).body;
+    const from = (question ?? name).end;
+    const type = code.slice(from, body === undefined ? member.end : body.getStart(file)).trim();
+    if (!/^[:(<]/.test(type)) continue;
+    found.push({ name: name.text, type, optional: question !== undefined });
+  }
+  return found;
+}
+
+/** The first `{ … }` in a type expression: what `type X = { … } | null` declares. */
+function firstTypeLiteral(node: ts.Node): ts.TypeLiteralNode | undefined {
+  if (ts.isTypeLiteralNode(node)) return node;
+  let found: ts.TypeLiteralNode | undefined;
+  ts.forEachChild(node, (child) => {
+    if (found === undefined) found = firstTypeLiteral(child);
+  });
+  return found;
+}
 
 /**
  * Exported `interface`, `type` and `class` declarations, with their member
- * names and the text of each member's type. Only the declaration's braces are
- * read; a class's method bodies are skipped by taking members from lines whose
- * shape is `name: type` or `name(args)` at the top level of the block.
+ * names and the text of each member's type. A `type X = string` declares no
+ * members and is not a block; a `type X = { … }` is.
  */
 export function exportedTypeBlocks(file: SourceFile): TypeBlock[] {
+  const { file: parsed } = parse(file.source);
   const code = codeWithStrings(file.source);
   const blocks: TypeBlock[] = [];
-  for (const header of code.matchAll(TYPE_HEADER)) {
-    const start = header.index ?? 0;
-    const open = code.indexOf("{", start);
-    if (open === -1) continue;
-    // A `type X = string` with no braces has no members; ignore it unless the
-    // brace belongs to this declaration (i.e. arrives before the next `;`).
-    const semicolon = code.indexOf(";", start);
-    if (semicolon !== -1 && semicolon < open) continue;
-
-    let depth = 0;
-    let end = -1;
-    for (let i = open; i < code.length; i += 1) {
-      if (code[i] === "{") depth += 1;
-      else if (code[i] === "}") {
-        depth -= 1;
-        if (depth === 0) {
-          end = i;
-          break;
-        }
-      }
-    }
-    if (end === -1) continue;
-
-    const body = code.slice(open + 1, end);
-    const members: TypeMember[] = [];
-    let memberDepth = 0;
-    for (const line of body.split("\n")) {
-      const match = memberDepth === 0 ? MEMBER.exec(line) : null;
-      if (match !== null) {
-        members.push({ name: match[1], type: match[3].trim(), optional: match[2] === "?" });
-      }
-      for (const ch of line) {
-        if (ch === "{" || ch === "(" || ch === "[") memberDepth += 1;
-        else if (ch === "}" || ch === ")" || ch === "]") memberDepth -= 1;
-      }
-      if (memberDepth < 0) memberDepth = 0;
-    }
-
+  const push = (
+    node: ts.Node,
+    kind: TypeBlock["kind"],
+    name: string,
+    members: readonly (ts.TypeElement | ts.ClassElement)[],
+    end: number,
+  ): void => {
+    const start = node.getStart(parsed);
     blocks.push({
-      kind: header[1] as TypeBlock["kind"],
-      name: header[2],
-      members,
+      kind,
+      name,
+      members: typeMembers(members, parsed, code),
       file: file.relative,
-      line: code.slice(0, start).split("\n").length,
-      raw: code.slice(start, end + 1),
+      line: lineAt(parsed, start),
+      raw: code.slice(start, end),
     });
-  }
+  };
+
+  eachNode(parsed, (node) => {
+    if (!isExported(node)) return;
+    if (ts.isInterfaceDeclaration(node)) push(node, "interface", node.name.text, node.members, node.end);
+    else if (ts.isClassDeclaration(node) && node.name !== undefined)
+      push(node, "class", node.name.text, node.members, node.end);
+    else if (ts.isTypeAliasDeclaration(node)) {
+      const literal = firstTypeLiteral(node.type);
+      if (literal !== undefined) push(node, "type", node.name.text, literal.members, literal.end);
+    }
+  });
   return blocks;
 }
 
@@ -550,60 +536,66 @@ export interface Declaration {
   line: number;
 }
 
-const DECLARATION =
-  /\bexport\s+(?:declare\s+)?(?:default\s+)?(?:async\s+)?(function\*?|const|let|var|class|interface|type|enum)\s+([A-Za-z_]\w*)/g;
+/**
+ * Where a variable's signature stops. An object, an array or a class body is
+ * the initialiser's body and is dropped; a function's body is dropped but its
+ * parameters and return type are kept, because those are the contract. Anything
+ * else — `export const retries = 3` — is short enough to be its own signature.
+ */
+function initialiserEnd(declaration: ts.VariableDeclaration, file: ts.SourceFile): number {
+  const initialiser = declaration.initializer;
+  if (initialiser === undefined) return declaration.end;
+  if (ts.isArrowFunction(initialiser) || ts.isFunctionExpression(initialiser)) {
+    return initialiser.body.getStart(file);
+  }
+  const isBody =
+    ts.isObjectLiteralExpression(initialiser) ||
+    ts.isArrayLiteralExpression(initialiser) ||
+    ts.isClassExpression(initialiser);
+  return isBody ? initialiser.getStart(file) : declaration.end;
+}
 
 /**
- * Exported declarations, as signatures. The captured text stops at the first
- * `{` that opens a body or at the statement's `;`, whichever comes first — so a
- * function's parameters and return type are readable and its body is not.
+ * Exported declarations, as signatures. A function's parameters and return type
+ * are readable and its body is not; a type, an interface, an enum and a class
+ * ARE their bodies, so those are returned whole.
  */
 export function exportedDeclarations(file: SourceFile): Declaration[] {
+  const { file: parsed } = parse(file.source);
   const code = codeWithStrings(file.source);
   const found: Declaration[] = [];
-  for (const match of code.matchAll(DECLARATION)) {
-    const start = match.index ?? 0;
-    const kind = match[1];
-    let end = code.length;
-    if (kind === "interface" || kind === "type" || kind === "class" || kind === "enum") {
-      // A type declaration IS its body; take the balanced block.
-      const open = code.indexOf("{", start);
-      if (open === -1) {
-        end = Math.min(code.indexOf(";", start) === -1 ? code.length : code.indexOf(";", start), code.length);
-      } else {
-        let depth = 0;
-        for (let i = open; i < code.length; i += 1) {
-          if (code[i] === "{") depth += 1;
-          else if (code[i] === "}") {
-            depth -= 1;
-            if (depth === 0) {
-              end = i + 1;
-              break;
-            }
-          }
-        }
-      }
-    } else {
-      // Everything up to the body-opening brace, the arrow, or the semicolon.
-      let depth = 0;
-      for (let i = start; i < code.length; i += 1) {
-        const ch = code[i];
-        if (ch === "(" || ch === "[" || ch === "<") depth += 1;
-        else if (ch === ")" || ch === "]" || ch === ">") depth -= 1;
-        else if (depth <= 0 && (ch === "{" || ch === ";" || ch === "\n")) {
-          if (ch === "\n" && code.slice(start, i).trim().endsWith("=")) continue;
-          end = i;
-          break;
-        }
-      }
-    }
+  const add = (name: string, start: number, end: number): void => {
     found.push({
-      name: match[2],
-      signature: code.slice(start, end).replace(/\s+/g, " ").trim(),
+      name,
+      signature: code.slice(start, end).replace(/\s+/g, " ").trim().replace(/;$/, ""),
       file: file.relative,
-      line: code.slice(0, start).split("\n").length,
+      line: lineAt(parsed, start),
     });
-  }
+  };
+
+  eachNode(parsed, (node) => {
+    if (!isExported(node)) return;
+    const start = node.getStart(parsed);
+    if (ts.isFunctionDeclaration(node)) {
+      if (node.name !== undefined) add(node.name.text, start, node.body?.getStart(parsed) ?? node.end);
+    } else if (ts.isClassDeclaration(node)) {
+      if (node.name !== undefined) add(node.name.text, start, node.end);
+    } else if (
+      ts.isInterfaceDeclaration(node) ||
+      ts.isTypeAliasDeclaration(node) ||
+      ts.isEnumDeclaration(node)
+    ) {
+      add(node.name.text, start, node.end);
+    } else if (ts.isVariableStatement(node)) {
+      node.declarationList.declarations.forEach((declaration, index) => {
+        if (!ts.isIdentifier(declaration.name)) return;
+        // The first declarator carries the `export const` the reader is looking
+        // for; a second one in the same statement starts at its own name.
+        const from = index === 0 ? start : declaration.getStart(parsed);
+        add(declaration.name.text, from, initialiserEnd(declaration, parsed));
+      });
+    }
+  });
   return found;
 }
 
