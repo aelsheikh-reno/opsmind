@@ -1192,7 +1192,7 @@
       - "An unreadable verdict, or none at all, fails closed"
       - "build-task merges only through the guard, never through gh directly"
   risk: low
-  status: todo
+  status: done
   note: >
     On #30 the gates reported FAILURE, the polling loop watching them treated
     FAILURE as a terminal state to stop waiting on, and the next command merged
