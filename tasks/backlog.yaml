@@ -1321,6 +1321,79 @@
     again. Raising them is kernel-repository-integration-tests below, which this
     node deliberately does not do.
 
+- id: gate-test-count-base-ratchet
+  title: The test-count floor is read from the working tree, so it can be edited away
+  phase: 0
+  depends_on: [gate-coverage-strict-path]
+  spec: PIPELINE.md#the-gates
+  produces:
+    - scripts/gate.sh
+    - tests/gates/test-count-ratchet.test.ts
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "The tests floor is resolved from the PR base as well as the working tree"
+      - "A branch lowering the stored tests value requires test_count_waiver with a reason"
+      - "Raising it, or leaving it alone, stays free"
+      - "A base whose baseline cannot be read fails closed"
+  risk: low
+  status: todo
+  note: >
+    The hole gate-coverage-strict-path closed on coverage_bp is still open on the
+    key beside it. scripts/gate.sh reads test_baseline from the working tree's
+    tests/baseline.json and never compares it against the base, so a task can
+    lower "tests" and skip test_count_waiver entirely — the same defeat, on the
+    same file, one key across.
+
+    Found by review on that node and recorded rather than fixed there: size-impl
+    stood at 399 of an unwaivable 400, and a backlog node costs implementation
+    lines. ADR-030 states it as open rather than tracked, deliberately, so this
+    node is what makes that record true.
+
+    The fix is the one already written for coverage_bp — resolve from
+    `git show "$base:tests/baseline.json"`, treat a lower value on the branch as
+    a decrease, require the waiver that already exists. Copy that shape rather
+    than inventing a second one.
+
+- id: gate-coverage-lcov-reconciliation
+  title: An lcov report that does not reconcile with the diff must fail, not pass
+  phase: 0
+  depends_on: [gate-coverage-strict-path]
+  spec: docs/architecture/decisions.md#adr-030
+  produces:
+    - scripts/coverage-gate.sh
+    - tests/gates/coverage-gate.test.ts
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "A diff touching files under the coverage roots with none of them in the report fails"
+      - "A docs-only or app/-only diff still passes with 'no coverable lines changed'"
+      - "The coverage roots the check uses stay in step with coverage.include in vitest.config.ts"
+  risk: low
+  status: todo
+  note: >
+    scripts/coverage-gate.sh reconciles lcov SF: records against the diff by
+    stripping a $PWD/ prefix, which handles the repo-relative form the v8
+    provider writes today and the absolute-under-$PWD form. Any third spelling —
+    `SF:./lib/a.ts` is the demonstrated one — matches no changed file, and the
+    gate reports "no coverable lines changed" and PASSES a diff of uncovered
+    lines.
+
+    Latent rather than live: the current provider writes the plain form, so this
+    is a provider upgrade away, not a bug today. It matters because it is the one
+    path where diff-cov degrades from measuring to passing rather than to
+    failing, which is the opposite of every other path in that script — and the
+    whole design premise is that a gate which measured nothing must never print
+    the same word as one that measured and passed.
+
+    The check must be scoped precisely: if the diff changes files under the
+    coverage.include roots and not one of them appears in the report, that is an
+    unreconciled report, not an empty diff. A docs-only or app/-only task changes
+    no file under those roots and must still pass.
+
+    Deferred from gate-coverage-strict-path for the 400-line budget, not because
+    it is acceptable. Recorded in ADR-030.
+
 - id: kernel-repository-integration-tests
   title: Integration tests over the six kernel repositories, against CI Postgres
   phase: 1
