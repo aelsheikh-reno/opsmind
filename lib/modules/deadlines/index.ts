@@ -8,5 +8,5 @@
 // Threshold semantics were settled by Ahmed 2026-08-14 and are written into
 // components-core-deadline-monitor.md so that node builds to a spec.
 
-export { businessDaysUntil, filingDueDate, statutoryDueDate, isWorkingDay, MissingBusinessCalendarError, requireCalendar } from "./calendar";
+export { businessDaysUntil, civilDateIn, filingDueDate, statutoryDueDate, isWorkingDay, MissingBusinessCalendarError, requireCalendar } from "./calendar";
 export type { BusinessCalendar, CalendarSource } from "./calendar";

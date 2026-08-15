@@ -908,6 +908,51 @@
     data-model.md:36-47 is the pattern: effectiveFrom, effectiveTo null for
     current, rows never edited in place, and a reason for the change.
 
+- id: module-deadlines-civil-date
+  title: Deadline monitor — the jurisdiction's timezone and its civil date
+  phase: 1
+  depends_on: [module-deadlines]
+  spec: docs/architecture/components-core-deadline-monitor.md
+  also_read:
+    - docs/architecture/operations-scheduling.md   # the 02:00 sweep
+  produces:
+    - prisma/schema.prisma
+    - prisma/migrations/
+    - lib/kernel/jurisdiction/{index,repository}.ts
+    - lib/modules/deadlines/{calendar,index}.ts
+    - tests/modules/deadlines/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "BusinessCalendar carries the jurisdiction's IANA zone, required and with no default"
+      - "The kernel's BusinessCalendar satisfies the deadline monitor's CalendarSource port"
+      - "civilDateIn returns the civil date in the given zone, as a Date at UTC midnight"
+      - "An instant falling on a different calendar day in the zone than in UTC resolves to the zone's day"
+      - "An unknown IANA zone throws, naming it, rather than falling back to UTC"
+  risk: compliance
+  status: todo
+  note: >
+    The first of the three nodes module-deadlines-sweep was split into when its
+    implementation measured 532 lines against the unwaivable 400 (Ahmed's
+    decision, 2026-08-15). This one carries the BusinessCalendar timezone field
+    and the civil-date convention; module-deadlines-thresholds carries the four
+    settled threshold semantics; module-deadlines-sweep keeps its id and carries
+    scoped completeness, STALE, the misconfiguration alerts, statelessness,
+    evaluate-on-register and the `// owns:` declaration.
+
+    The sweep is scheduled 02:00 with no timezone stated anywhere; in the Gulf
+    that is 22:00 the previous UTC day, so a UTC default warns a day late. Ahmed
+    2026-08-14: the jurisdiction's civil date defines today, and the timezone
+    lives on BusinessCalendar beside the weekend mask and holidays — Jurisdiction
+    is identity, BusinessCalendar is the civil-time rules. No schema field
+    carried one, so this node adds it.
+
+    Assertion 7 of module-deadlines-sweep, "the sweep scores against the
+    jurisdiction's civil date, not UTC", deliberately stays on that node rather
+    than moving here: it is a claim about the sweep, and the test that pins it
+    drives a sweep. This node pins the field and the function the sweep then
+    uses.
+
 - id: module-deadlines-sweep
   title: Deadline monitor — registration, the nightly sweep and the alert contract
   phase: 1

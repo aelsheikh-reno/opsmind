@@ -30,6 +30,12 @@ export interface BusinessCalendar {
   weekendMask: readonly number[];
   /** Public holidays as civil dates, at UTC midnight — a day, not an instant. */
   holidays: readonly Date[];
+  /**
+   * The IANA zone whose civil date is "today" here — "Asia/Dubai". Required,
+   * with no default: the deadline sweep runs at 02:00, which in the Gulf is
+   * 22:00 the previous UTC day, so a run scored against UTC warns a day late.
+   */
+  timeZone: string;
 }
 
 /** A public holiday with the name a human recognises it by. */
