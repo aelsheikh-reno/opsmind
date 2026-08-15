@@ -24,6 +24,12 @@ export interface BusinessCalendar {
   weekendMask: readonly number[];
   /** Public holidays, as civil dates. */
   holidays: readonly Date[];
+  /**
+   * The IANA zone whose civil date is "today" here — "Asia/Dubai". Not
+   * optional: the sweep runs at 02:00, which in the Gulf is 22:00 the previous
+   * UTC day, so scoring against UTC warns a day late (Ahmed, 2026-08-14).
+   */
+  timeZone: string;
 }
 
 /**
@@ -41,9 +47,10 @@ export interface CalendarSource {
  * Thrown when a jurisdiction has no BusinessCalendar. Failing loudly is the
  * point: a silent Saturday-Sunday fallback would measure a Gulf deadline
  * against the wrong week and report the wrong number of days remaining, which
- * is the exact defect CLAUDE.md rule 9 exists to prevent. During a sweep this
- * aborts the run before anything is reported — see runDeadlineSweep for why a
- * partial report would be worse than no report.
+ * is the exact defect CLAUDE.md rule 9 exists to prevent. During a sweep it
+ * takes THAT jurisdiction out of the run and no other: the run continues, the
+ * healthy scopes are declared complete and resolve by absence, and the broken
+ * one is declared incomplete so nothing in it is resolved (flows-alerting.md).
  */
 export class MissingBusinessCalendarError extends Error {
   readonly jurisdictionId: string;
@@ -81,6 +88,26 @@ function dayNumber(date: Date): number {
 // 1970-01-01 was a Thursday, so epoch day 0 is weekday 4.
 function weekdayOf(dayNum: number): number {
   return (((dayNum + 4) % 7) + 7) % 7;
+}
+
+/**
+ * The civil date `instant` falls on in `timeZone`, as a Date at UTC midnight —
+ * the frame every civil date in this build is stored in (data-model.md).
+ *
+ * This is what "today" means to a sweep: the day it is in Dubai when the job
+ * fires, not the day it is in UTC. An unknown zone throws from Intl, naming it,
+ * which is the loud failure a silent UTC fallback would replace with a date
+ * that is wrong by one day for four hours of every day.
+ */
+export function civilDateIn(timeZone: string, instant: Date): Date {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(instant);
+  const at = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
+  return new Date(`${at("year")}-${at("month")}-${at("day")}T00:00:00Z`);
 }
 
 /** True when the jurisdiction works that day: not a weekend, not a holiday. */
