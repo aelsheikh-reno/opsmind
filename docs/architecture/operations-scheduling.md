@@ -32,7 +32,7 @@
 | Alert escalation timers | Alert Manager | continuous | Its own policies; external dead-man's check covers the engine itself |
 
 
-> **Note** — **A cadence in this table is a firing time; it is never a date.** The deadline sweep's 02:00 is 02:00 in `Asia/Dubai`, which is 22:00 the previous UTC day — an unqualified `02:00` was the ambiguity that produced a warning a day late, because for those hours the UTC day and the Gulf day are different days. What a run scores against is not the firing instant at all: it resolves **today separately for each jurisdiction, as that jurisdiction's civil date** in the zone on its `BusinessCalendar`, so the same run is correct for Dubai and for Cairo and stays correct if the schedule is later moved ([deadline monitor](components-core-deadline-monitor.md)). Ahmed's decision, 2026-08-14. Any job here that comes to compute a date rather than merely refresh a value inherits the same rule.
+> **Note** — **A cadence in this table is a firing time; it is never a date.** The deadline sweep's 02:00 is 02:00 in `Asia/Dubai`, which is 22:00 the previous UTC day — an unqualified `02:00` was the ambiguity that produced a warning a day late, because for those hours the UTC day and the Gulf day are different days. What a run scores against is not the firing instant at all: it resolves **today separately for each jurisdiction, as that jurisdiction's civil date** in the zone on its `BusinessCalendar`, so the same run is correct for Dubai and for Cairo and stays correct if the schedule is later moved ([deadline monitor](components-core-deadline-monitor.md)). Ahmed's decision, 2026-08-14. It was settled for this job; no other job in this table computes a date today, and whether it generalises is not decided here.
 
 ## Two invariants
 
