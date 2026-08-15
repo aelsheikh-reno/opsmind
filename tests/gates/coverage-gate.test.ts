@@ -163,11 +163,24 @@ interface GateResult {
   line: (label: string) => string;
 }
 
+// GITHUB_HEAD_REF is stripped, not inherited. The scripts resolve the task id as
+// `${GITHUB_HEAD_REF:-$(git rev-parse --abbrev-ref HEAD)}` — correct in real CI,
+// where the checkout is a detached merge commit and the variable is the only
+// place the branch name survives. But it is set for the whole job, so under CI
+// it also wins inside every fixture repository below, and each one resolves the
+// OUTER branch instead of the `task/demo` it created. Every waiver lookup then
+// misses: a malformed waiver stops being read at all and the gate passes where
+// the test wants it to fail, while a valid one stops being found and the gate
+// fails where the test wants it to pass. Eight tests here flipped that way, and
+// only in CI — locally the variable is unset, so the suite was green on a
+// machine that could not see the defect. The fixture defines its own branch and
+// must be the only thing that does.
 function runGate(dir: string, floor: number | string, base = "main"): GateResult {
+  const { GITHUB_HEAD_REF: _ignored, ...cleanEnv } = process.env;
   const result = spawnSync(SCRIPT, [String(floor)], {
     cwd: dir,
     encoding: "utf8",
-    env: { ...process.env, GATE_BASE: base },
+    env: { ...cleanEnv, GATE_BASE: base },
   });
   if (result.error !== undefined) throw result.error;
   const out = `${result.stdout ?? ""}${result.stderr ?? ""}`;
