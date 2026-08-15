@@ -46,7 +46,7 @@ needs, what it produces, and how it is proven done.
     - lib/kernel/person/{index,repository}.ts
     - tests/kernel/person.test.ts
   done_when:
-    - gates: [lint, types, boundaries, tests, coverage]
+    - gates: [lint, types, boundaries, tests, cov-report, diff-cov, total-cov]
     - assertions:
         - "Person has managerId self-relation"
         - "PersonEnrolment supports multiple jurisdictions per person"
@@ -120,11 +120,30 @@ Nothing merges until every gate passes. Gates are scripts, not judgements.
 | `types` | `tsc --noEmit`, no `any` introduced in a diff |
 | `boundaries` | No module writes another's tables; no page imports a module; only `repository.ts` touches the database |
 | `tests` | Unit and integration pass |
-| `coverage` | 90% on anything computing money or dates; 70% elsewhere |
+| `test-count` | The suite never shrinks: the runtime test total against the `tests` floor in `tests/baseline.json` |
+| `cov-report` | `vitest run --coverage` ran and exited clean. The report it must produce is `coverage/lcov.info`; a report that is absent, empty or declares no measurable line is caught by the two gates below, which read it — and is a failure there, never a pass |
+| `diff-cov` | Coverage of **the lines this task changed** — 90% on money and compliance, 70% on low, 90% when the risk is unknown |
+| `total-cov` | Whole-repository line coverage against the `coverage_bp` ratchet in `tests/baseline.json`. Fails on a decrease, and on a `coverage_bp` lowered below the value the PR base holds |
+| `cov-waiver` | A task that legitimately lowers either number carries `coverage_waiver` and a `coverage_waiver_reason` on its node. Unexplained, or not a number, it fails |
 | `differential` | Output matches the legacy system on the golden dataset, or the difference is explicitly approved |
 | `security` | `claude-code-security-review` finds nothing high |
 | `size-impl` | Implementation under 400 added lines, or the task is split. Never waivable |
-| `size-total` | Whole diff under 800 added lines, unless the node carries a `size_total` waiver Ahmed granted |
+| `size-total` | Whole diff under 1500 added lines, unless the node carries a `size_total` waiver Ahmed granted (ADR-029) |
+
+**The coverage denominator is the diff, not the repository (ADR-030).** The floor
+never moved — 90 and 70 are what they always were — but it used to be handed to
+vitest as a whole-repository threshold, which failed tasks on files they had
+never opened and taught agents that the number was noise. `diff-cov` grades a
+task on the lines it added. Only lines the report knows about count, and the
+report contains only what `coverage.include` selects — `lib/**` and
+`tests/differential/**` — so a change confined to `app/`, `scripts/`, `prisma/`
+or documentation passes with "no coverable lines changed" rather than a bare
+`pass`. Because diff coverage alone would let the total rot one uncovered file at
+a time, `total-cov` ratchets the whole repository against `tests/baseline.json`;
+that stored integer is read from the PR base as well as the branch, so lowering
+it is treated exactly as lowering coverage and needs the same reasoned waiver.
+Every one of these fails closed — a gate that measured nothing must never print
+the same word as one that measured and passed.
 
 Two size budgets rather than one, because a single number cannot serve both
 jobs. `size-impl` forces a task to split, and an oversized task shows up in

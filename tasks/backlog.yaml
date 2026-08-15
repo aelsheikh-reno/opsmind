@@ -1267,28 +1267,90 @@
   spec: PIPELINE.md#the-gates
   produces:
     - scripts/gate.sh
+    - scripts/coverage-gate.sh
+    - tests/baseline.json
+    - docs/architecture/decisions.md
+    - tests/gates/coverage-gate.test.ts
+    - PIPELINE.md
+    - tasks/backlog.yaml
   done_when:
     gates: [lint, types, tests]
     assertions:
+      - "Coverage is measured on the lines the task changed: 90% for money and compliance, 70% for low"
+      - "Total repository coverage must not decrease against the stored baseline"
+      - "A task adding uncovered new code fails diff coverage"
+      - "A task that lowers total coverage fails the ratchet"
+      - "An unreadable coverage report fails closed"
+      - "A missing or unparseable baseline fails closed"
+      - "A coverage waiver with no reason fails closed, and a waiver in use is printed with its reason"
+      - "Lowering the stored coverage_bp below the base's needs the same waiver an actual decrease needs"
+      - "lib/kernel/*/repository.ts stays measured — no path is excluded to make the gate pass"
+      - "A diff with no coverable lines passes, and says so rather than passing silently"
       - "A branch that resolves no task can still pass the gates on a clean main"
-      - "The floor still bites for code that could and should be covered"
+  risk: low
+  blocks_product: true
+  status: todo
+  note: >
+    BLOCKS PRODUCT. It is infrastructure, but it blocks every compliance node in
+    the graph — all three module-deadlines-sweep nodes among them — so it is
+    built ahead of product work rather than behind it (Ahmed, 2026-08-15).
+
+    A branch that is not task/<id> resolves no risk, so gate.sh takes the strict
+    path and demands 90 — which means every chore branch fails on code it did not
+    touch. Two have already had to be given a node purely to get through (#32 and
+    #37), which is a workaround wearing a node's clothes. Since then it stopped
+    being only a chore-branch problem: module-deadlines-civil-date measures 100%
+    on every line it wrote and still fails at 79.41%, because the denominator is
+    the whole repository.
+
+    THE FIX IS THE DENOMINATOR, NOT THE FLOOR. 90 is right and stays. Coverage is
+    measured on the lines the task changed, at 90 for money and compliance and 70
+    for low. A second, independent check ratchets TOTAL repository coverage so it
+    cannot decrease — diff coverage alone would let the total rot one uncovered
+    file at a time. The baseline is stored beside the test-count ratchet in
+    tests/baseline.json with a per-task waiver that requires a reason, exactly as
+    size_total and test_count_waiver do.
+
+    Everything fails closed: an unreadable coverage report, a missing baseline,
+    and a waiver with no reason are all failures, because a coverage gate that
+    measured nothing must not print the same word as one that measured and
+    passed.
+
+    lib/kernel/*/repository.ts is NOT excluded. Repositories are what payroll and
+    the money spine read through, and an excluded file is one nobody looks at
+    again. Raising them is kernel-repository-integration-tests below, which this
+    node deliberately does not do.
+
+- id: kernel-repository-integration-tests
+  title: Integration tests over the six kernel repositories, against CI Postgres
+  phase: 1
+  depends_on: [gate-coverage-strict-path]
+  spec: docs/architecture/data-ownership.md
+  produces:
+    - tests/integration/kernel/
+    - .github/workflows/gates.yml
+  done_when:
+    gates: [lint, types, tests, coverage]
+    assertions:
+      - "Every exported function of the six kernel repositories is exercised against a real PostgreSQL"
+      - "The suite runs where CI provides a database and is skipped, loudly, where none is reachable"
+      - "A skipped run never reports the same result as a passed one"
+      - "Total repository coverage rises, and the new floor is recorded in tests/baseline.json"
   risk: low
   status: todo
   note: >
-    RECORDED, NOT BUILT. It does not let incorrect data ship and does not let a
-    red gate merge, so under the stopping rule it waits behind product work.
+    RECORDED, NOT BUILT. Ahmed 2026-08-15: it merges before money-spine.
 
-    main is at 84.41% line coverage since kernel-entities-law. A branch that is
-    not task/<id> resolves no risk, so gate.sh takes the strict path and demands
-    90 — which means every chore branch fails on code it did not touch. Two have
-    already had to be given a node purely to get through (#32 and this one),
-    which is a workaround wearing a node's clothes.
+    lib/kernel/*/repository.ts sits between 0% and 15% — document, enrolment,
+    jurisdiction, legal-entity, person, regime. Nothing else in the graph will
+    raise them: they are Prisma plumbing, and no PostgreSQL is reachable outside
+    CI, so unit tests structurally cannot reach the query bodies.
 
-    The cause is honest: lib/kernel/*/repository.ts is Prisma plumbing and no
-    PostgreSQL is reachable outside CI, so those files sit near 0%. The choice
-    is between integration tests that only run where CI provides a database, and
-    a strict floor that acknowledges an uncoverable repository. Both are gate
-    changes and neither is urgent.
+    gate-coverage-strict-path stops that blocking every compliance task, but it
+    does not fix it — it measures the diff instead, and the total ratchet only
+    holds the line where it is. These files stay near zero until something
+    executes them, and they are what payroll and the money spine read through.
+    Hence before money-spine, not after.
 
 - id: kernel-source-compiler-api
   title: Read kernel source with the TypeScript compiler API

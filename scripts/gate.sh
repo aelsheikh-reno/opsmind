@@ -243,7 +243,14 @@ case "$risk" in
   low)              cov=70 ;;
   *)                cov=90 ;;
 esac
-run "coverage" "npx vitest run --coverage --coverage.thresholds.lines=$cov"
+# vitest is run for the REPORT only — no --coverage.thresholds.lines. The
+# threshold it used to be given was a whole-repository one, and the repository
+# is not what a task is answerable for; coverage-gate.sh measures the lines the
+# task changed against $cov, and ratchets the total separately (ADR-030). The
+# lcov parsing lives there rather than here because this file is long enough and
+# it is the only part of the suite that has to read a report format.
+run "cov-report" "npx vitest run --coverage"
+"$here/coverage-gate.sh" "$cov" || fail=1
 
 # ---- size: diff against the PR base, never a maybe-missing local ref --------
 # Two budgets, because one number cannot serve both jobs this gate has.
