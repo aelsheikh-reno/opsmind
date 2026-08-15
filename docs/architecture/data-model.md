@@ -148,7 +148,8 @@
 
 | Field | Type / values | Why |
 |---|---|---|
-| `BusinessCalendar` | weekend mask + holidays[] | Sunday–Thursday in the Gulf; deadline maths cannot be UTC arithmetic |
+| `BusinessCalendar` | weekend mask + holidays[] + `timeZone` | Sunday–Thursday in the Gulf; deadline maths cannot be UTC arithmetic. Three columns, not two: the working week, the days off it, and the zone the day itself is read in |
+| `BusinessCalendar.timeZone` | IANA zone | **Required, and with no default.** The zone whose **civil date** is "today" in this jurisdiction — `Asia/Dubai`, `Africa/Cairo`. It sits on the calendar rather than on `Jurisdiction` because **Jurisdiction is identity and BusinessCalendar is the civil-time rules**, beside the weekend mask and the holidays. The deadline sweep fires at 02:00, which in the Gulf is 22:00 the previous UTC day, so a run scored against UTC warns a day late — every threshold window shifts by one, and on the last night before a filing the following night is after the deadline. No default, for the same reason: a zone nobody chose is that same defect written down once and then trusted. Ahmed's decision, 2026-08-14 ([deadline monitor](components-core-deadline-monitor.md)) |
 
 
 #### `Regime`

@@ -921,6 +921,12 @@
     - lib/kernel/jurisdiction/{index,repository}.ts
     - lib/modules/deadlines/{calendar,index}.ts
     - tests/modules/deadlines/
+    - tests/kernel/kernel-entities.test.ts
+    - tests/integration/deadline-calendar-timezone.test.ts
+    - tests/baseline.json
+    - docs/architecture/data-model.md
+    - docs/architecture/components-core-deadline-monitor.md
+    - docs/architecture/operations-scheduling.md
   done_when:
     gates: [lint, types, boundaries, tests, coverage]
     assertions:
@@ -952,6 +958,14 @@
     than moving here: it is a claim about the sweep, and the test that pins it
     drives a sweep. This node pins the field and the function the sweep then
     uses.
+
+    The three docs/architecture pages are in produces because all three state
+    the rule this node changes: data-model.md specifies BusinessCalendar's
+    columns, the monitor page says what "today" means, and the scheduling page
+    carries the unqualified 02:00 that is the ambiguity itself. They were
+    missing from the first cut of this node, which is how the drift was designed
+    in rather than overlooked; docs/ and *.md are excluded from size-impl, so
+    naming them costs the node nothing.
 
 - id: module-deadlines-sweep
   title: Deadline monitor — registration, the nightly sweep and the alert contract

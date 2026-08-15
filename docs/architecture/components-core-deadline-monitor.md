@@ -10,7 +10,7 @@
 
 **What it does.** Anything with a date registers it here. Every night the module recalculates days remaining for every registered date, applies the threshold configured for that document type, and reports every breach.
 
-**How it works.** Each run is stateless: it recomputes distance from today rather than remembering what it warned about yesterday, so a missed night self-heals. Distance is measured in business days against the jurisdiction's calendar — Sunday to Thursday in the Gulf — because "seven days" that lands on a weekend is not seven working days. The run reports its **complete** breach set to the Alert Manager, and an empty report is meaningful: it says "I ran, nothing is wrong" and doubles as the liveness signal. Thresholds and severities are tunable per type in Settings, exactly as a SOC tunes detection rules.
+**How it works.** Each run is stateless: it recomputes distance from today — **the jurisdiction's civil date**, read in that jurisdiction's zone and never the UTC day — rather than remembering what it warned about yesterday, so a missed night self-heals. Distance is measured in business days against the jurisdiction's calendar — Sunday to Thursday in the Gulf — because "seven days" that lands on a weekend is not seven working days. The run reports its **complete** breach set to the Alert Manager, and an empty report is meaningful: it says "I ran, nothing is wrong" and doubles as the liveness signal. Thresholds and severities are tunable per type in Settings, exactly as a SOC tunes detection rules.
 
 **Where it sits.** This is a **detection engine** — the architectural role correlation rules play in a security operations product. Detection decides what counts as a problem and how serious it is; the generic [Alert Manager](flows-alerting.md) owns everything after: deduplicating, notifying, escalating, resolving. That split is why the alerting half ships to SmartOps while this half stays specific to Reno's compliance calendar.
 
@@ -18,7 +18,7 @@
 |---|---|
 | Deadline registrations | registerDeadline(entityRef, type, dueDate) · deregisterDeadline — no cancel obligation exists (see below) |
 | Thresholds & severity tables | Per deadline type, tunable in Settings — domain knowledge, exactly as SOC thresholds are tuned per detection rule (ADR-020) |
-| Business-day arithmetic | Sunday–Thursday weeks, per-country holidays from the Jurisdiction calendar |
+| Business-day arithmetic | Sunday–Thursday weeks, per-country holidays, and the IANA zone "today" is read in — all three from the jurisdiction's `BusinessCalendar`, none of them a constant |
 | Evaluate-on-register | A document ingested already inside a threshold is scored inline, not left for the next sweep |
 
 
@@ -46,5 +46,9 @@ nothing is breached" — and doubles as the liveness signal.
 > **Note** — **A deadline type with no configured threshold raises, rather than never reporting.** A registered deadline whose type has no `ThresholdTable` row is a misconfiguration, not a quiet no-op: an unwatched deadline is exactly the failure this module exists to prevent, and silence must never be indistinguishable from "nothing is wrong". It raises **one alert per unconfigured type per run**, not one per deadline, so a missing row produces a single actionable signal rather than a flood. Same principle as the complete report and the source-dark alert. Ahmed's decision, 2026-08-14.
 >
 > A threshold is **inclusive at its bound** — exactly seven business days remaining breaches a seven-day window — and an **overdue** deadline, with negative days remaining, reports the highest configured severity.
+
+> **Note** — **"Today" is the jurisdiction's civil date, never the UTC day.** The sweep fires at 02:00 ([scheduling](operations-scheduling.md)), which in the Gulf is 22:00 the previous UTC day, so a run scored against UTC warns a day late. A day late is not a rounding error here: every threshold window shifts by one, and on the last night before a filing the following night is after the deadline. A run therefore resolves its own "today" per jurisdiction, in that jurisdiction's zone, whatever UTC instant the process happened to fire at. Ahmed's decision, 2026-08-14.
+>
+> The IANA zone lives on `BusinessCalendar`, beside the weekend mask and the holidays, because **Jurisdiction is identity and BusinessCalendar is the civil-time rules**. It is **required, with no default**: a zone nobody chose is that same defect written down once and then trusted. A zone the runtime cannot resolve is rejected where it is written, and throws rather than falling back to UTC where it is read — the same principle as a missing calendar being an error naming its jurisdiction and never a silent Saturday–Sunday fallback.
 
 > **Note** — Because resolution comes from **absence in a completed report**, modules never call cancel: they update their own data (renew the visa, pay the filing) and the next run observes the cleared state. The missed-cancel failure mode does not exist by construction. Full lifecycle: [alerting flow](flows-alerting.md).
