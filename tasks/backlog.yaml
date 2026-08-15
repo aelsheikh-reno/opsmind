@@ -1271,6 +1271,8 @@
     - tests/baseline.json
     - docs/architecture/decisions.md
     - tests/gates/coverage-gate.test.ts
+    - PIPELINE.md
+    - tasks/backlog.yaml
   done_when:
     gates: [lint, types, tests]
     assertions:
@@ -1281,6 +1283,7 @@
       - "An unreadable coverage report fails closed"
       - "A missing or unparseable baseline fails closed"
       - "A coverage waiver with no reason fails closed, and a waiver in use is printed with its reason"
+      - "Lowering the stored coverage_bp below the base's needs the same waiver an actual decrease needs"
       - "lib/kernel/*/repository.ts stays measured — no path is excluded to make the gate pass"
       - "A diff with no coverable lines passes, and says so rather than passing silently"
       - "A branch that resolves no task can still pass the gates on a clean main"

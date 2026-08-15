@@ -109,6 +109,13 @@ interface Scenario {
   /** coverage/lcov.info contents; omit the key entirely to write no report */
   report?: Record<string, Record<number, number>> | string | null;
   baseline?: string | null;
+  /** tests/baseline.json as the BASE committed it, when it differs from the
+   *  task branch's. `null` commits no baseline on the base at all. The stored
+   *  integer is itself part of the ratchet, so a fixture has to be able to
+   *  disagree across the two sides — a working tree read alone grades itself. */
+  baseBaseline?: string | null;
+  /** tests/baseline.json as the TASK BRANCH leaves it. */
+  headBaseline?: string;
   backlog?: string;
   branch?: string;
 }
@@ -121,17 +128,22 @@ function scenario(spec: Scenario): string {
   git(dir, ["init", "-q"]);
   git(dir, ["symbolic-ref", "HEAD", "refs/heads/main"]);
 
-  write(dir, "tests/baseline.json", spec.baseline ?? DEFAULT_BASELINE);
+  const onBase = spec.baseBaseline === undefined ? spec.baseline ?? DEFAULT_BASELINE : spec.baseBaseline;
+  if (onBase !== null) write(dir, "tests/baseline.json", onBase);
   if (spec.backlog !== undefined) write(dir, "tasks/backlog.yaml", spec.backlog);
   for (const [file, content] of Object.entries(spec.base ?? {})) write(dir, file, content);
   git(dir, ["add", "-A"]);
   git(dir, ["commit", "-qm", "base"]);
 
   git(dir, ["checkout", "-q", "-b", spec.branch ?? "task/demo"]);
-  if (spec.head !== undefined) {
-    for (const [file, content] of Object.entries(spec.head)) write(dir, file, content);
+  if (spec.headBaseline !== undefined) write(dir, "tests/baseline.json", spec.headBaseline);
+  if (spec.head !== undefined || spec.headBaseline !== undefined) {
+    for (const [file, content] of Object.entries(spec.head ?? {})) write(dir, file, content);
     git(dir, ["add", "-A"]);
-    git(dir, ["commit", "-qm", "task"]);
+    // --allow-empty so a fixture may deliberately leave a file identical to the
+    // base's — "the task did not lower the stored baseline" is a case that has
+    // to be expressible, and it is expressed by changing nothing.
+    git(dir, ["commit", "-qm", "task", "--allow-empty"]);
   }
 
   // Written after the commits and never committed, exactly as the real report
@@ -560,6 +572,131 @@ describe("assertion 7 · the coverage waiver", () => {
 });
 
 // ---------------------------------------------------------------------------//
+// Assertions 4 and 7 — the STORED INTEGER is part of the ratchet
+//
+// A ratchet read only from the working tree grades itself. Lower "coverage_bp"
+// in tests/baseline.json and the percentage no longer has to clear anything:
+// the waiver above never runs, no reason is recorded, and the gate reports the
+// decrease as a pass. Every test in assertion 7 covers the waiver path, and
+// none of them covered this, which made the waiver optional — so the baseline
+// is resolved from the BASE as well and a lowered stored value needs the same
+// waiver, with the same reason, that an actual decrease needs.
+// ---------------------------------------------------------------------------//
+
+describe("assertions 4 and 7 · lowering the stored baseline is lowering the ratchet", () => {
+  const at25 = { "lib/a.ts": { 1: 1, 2: 0, 3: 0, 4: 0 } }; // 25.00%
+
+  it("fails when the task lowers coverage_bp with no waiver, naming both values", () => {
+    // The exact bypass: 79.20% → 25.00% with the stored integer edited down to
+    // meet it. Before the base was consulted this exited 0.
+    const dir = scenario({
+      report: at25,
+      baseBaseline: JSON.stringify({ tests: 1, coverage_bp: 7920 }),
+      headBaseline: JSON.stringify({ tests: 1, coverage_bp: 2500 }),
+    });
+    const result = runGate(dir, 90);
+    expect(result.code, result.out).toBe(1);
+    expect(result.line("total-cov")).toContain("FAIL");
+    expect(result.out, "the base's value is not named").toContain("79.20%");
+    expect(result.out, "the lowered value is not named").toContain("25.00%");
+    expect(result.out).toContain("coverage_waiver");
+    expect(result.out, "a lowered ratchet was reported as a rise").not.toContain("coverage rose");
+  });
+
+  it("fails even when the lowered baseline is one basis point below the base", () => {
+    const dir = scenario({
+      report: { "lib/a.ts": { 1: 1, 2: 1, 3: 1, 4: 1 } }, // 100%, comfortably above both
+      baseBaseline: JSON.stringify({ tests: 1, coverage_bp: 7920 }),
+      headBaseline: JSON.stringify({ tests: 1, coverage_bp: 7919 }),
+    });
+    const result = runGate(dir, 90);
+    expect(result.code, result.out).toBe(1);
+    expect(result.line("total-cov")).toContain("FAIL");
+  });
+
+  it("accepts a lowered baseline that carries a waiver and its reason", () => {
+    // The mechanism is not bypassable, but it IS waivable — on the record, on
+    // the node, with an argument a reviewer can read.
+    const dir = scenario({
+      report: at25,
+      baseBaseline: JSON.stringify({ tests: 1, coverage_bp: 7920 }),
+      headBaseline: JSON.stringify({ tests: 1, coverage_bp: 2500 }),
+      backlog: backlogWith([
+        "  coverage_waiver: 2000",
+        "  coverage_waiver_reason: >",
+        "    the payroll module was deleted and its covered lines with it",
+      ]),
+    });
+    const result = runGate(dir, 90);
+    expect(result.code, result.out).toBe(0);
+    expect(result.line("cov-waiver")).toContain("the payroll module was deleted");
+  });
+
+  it("lets a task raise the stored baseline for free", () => {
+    const dir = scenario({
+      report: { "lib/a.ts": { 1: 1, 2: 1, 3: 1, 4: 1 } },
+      baseBaseline: JSON.stringify({ tests: 1, coverage_bp: 7920 }),
+      headBaseline: JSON.stringify({ tests: 1, coverage_bp: 10000 }),
+    });
+    const result = runGate(dir, 90);
+    expect(result.code, result.out).toBe(0);
+    expect(result.line("total-cov")).toContain("100.00%");
+  });
+
+  it("lets a task leave the stored baseline exactly as the base had it", () => {
+    const dir = scenario({
+      report: { "lib/a.ts": { 1: 1, 2: 1, 3: 1, 4: 0 } }, // 75.00%
+      baseBaseline: JSON.stringify({ tests: 1, coverage_bp: 7500 }),
+      headBaseline: JSON.stringify({ tests: 1, coverage_bp: 7500 }),
+    });
+    const result = runGate(dir, 90);
+    expect(result.code, result.out).toBe(0);
+    expect(result.line("total-cov")).not.toContain("FAIL");
+  });
+
+  it("fails closed when the base has no readable baseline at all", () => {
+    // The base resolved, so there is no excuse for not reading it. A base with
+    // nothing to hold against is a broken ratchet, not an absent one.
+    const dir = scenario({
+      base: { "lib/a.ts": body(2) },
+      report: at25,
+      baseBaseline: null,
+      headBaseline: JSON.stringify({ tests: 1, coverage_bp: 2500 }),
+    });
+    const result = runGate(dir, 90);
+    expect(result.code, result.out).toBe(1);
+    expect(result.line("total-cov")).toContain("FAIL");
+    expect(result.out).toContain("no readable");
+  });
+
+  it("allows the commit that introduces coverage_bp, where the base has no value", () => {
+    // The bootstrap, and the only case a missing key on the base is not a
+    // fault: there is no earlier value to lower. A working tree missing the key
+    // still fails, one branch above this one.
+    const dir = scenario({
+      base: { "lib/a.ts": body(2) },
+      report: { "lib/a.ts": { 1: 1, 2: 1 } },
+      baseBaseline: JSON.stringify({ tests: 1 }),
+      headBaseline: JSON.stringify({ tests: 1, coverage_bp: 9000 }),
+    });
+    const result = runGate(dir, 90);
+    expect(result.code, result.out).toBe(0);
+    expect(result.line("total-cov")).toContain("100.00%");
+  });
+
+  it("still fails an unresolvable base rather than skipping the comparison", () => {
+    const dir = scenario({
+      report: at25,
+      baseBaseline: JSON.stringify({ tests: 1, coverage_bp: 7920 }),
+      headBaseline: JSON.stringify({ tests: 1, coverage_bp: 2500 }),
+    });
+    const result = runGate(dir, 90, "origin/does-not-exist");
+    expect(result.code, result.out).toBe(1);
+    expect(result.out).toContain("cannot resolve");
+  });
+});
+
+// ---------------------------------------------------------------------------//
 // Assertion 8 — no path is excluded to make the gate pass
 // ---------------------------------------------------------------------------//
 
@@ -698,6 +835,75 @@ describe("assertion 9 · a diff with no coverable lines", () => {
     const result = runGate(dir, 90);
     expect(result.line("diff-cov"), result.out).toContain("of 2 changed line(s)");
     expect(result.code).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------//
+// The hunk-header forms
+//
+// Every fixture above appends at end of file, so every hunk it produces is
+// `@@ -N,0 +M,K @@` — one shape, and the shape least able to expose an
+// off-by-one, since the added lines run to the end of the file either way. The
+// two forms that WOULD expose one are produced by editing the middle of a file:
+//
+//   `@@ -3,0 +4 @@`    the count omitted, meaning exactly one added line
+//   `@@ -3,2 +2,0 @@`  a pure deletion, meaning no added lines at all
+//
+// A parser that read the omitted count as zero would measure nothing; one that
+// read the deletion's `+2` as a line number would measure a line the task never
+// touched. Both are pinned on the MAPPED LINE, not on a percentage.
+// ---------------------------------------------------------------------------//
+
+describe("the hunk-header forms an append never produces", () => {
+  const five = "const s1 = 1;\nconst s2 = 2;\nconst s3 = 3;\nconst s4 = 4;\nconst s5 = 5;\n";
+  const inserted = "const s1 = 1;\nconst s2 = 2;\nconst s3 = 3;\nconst mid = 0;\nconst s4 = 4;\nconst s5 = 5;\n";
+  const deleted = "const s1 = 1;\nconst s2 = 2;\nconst s5 = 5;\n";
+
+  it("maps `@@ -3,0 +4 @@` to line 4 and to no other line", () => {
+    // Line 4 is the only uncovered line in the report. If the parser were off
+    // by one it would land on 3 or 5, both covered, and this would pass at 100%.
+    const dir = scenario({
+      base: { "lib/a.ts": five },
+      head: { "lib/a.ts": inserted },
+      report: { "lib/a.ts": { 1: 1, 2: 1, 3: 1, 4: 0, 5: 1, 6: 1 } },
+    });
+    const result = runGate(dir, 90);
+    expect(result.code, result.out).toBe(1);
+    expect(result.out, "the omitted count was not read as exactly one line").toContain(
+      "0.00% of the 1 changed executable line(s)",
+    );
+    expect(result.out, "the inserted line was mapped to the wrong number").toContain("lib/a.ts:4");
+  });
+
+  it("counts that same line as covered when line 4 is the covered one", () => {
+    // The mirror image: 4 covered, its neighbours not. Only a parser that maps
+    // the hunk to 4 can report 100% of 1 here AND 0% of 1 above.
+    const dir = scenario({
+      base: { "lib/a.ts": five },
+      head: { "lib/a.ts": inserted },
+      report: { "lib/a.ts": { 1: 1, 2: 1, 3: 0, 4: 1, 5: 0, 6: 1 } },
+    });
+    const result = runGate(dir, 90);
+    expect(result.code, result.out).toBe(0);
+    expect(result.line("diff-cov")).toContain("100.00% of 1 changed line(s)");
+  });
+
+  it("maps `@@ -3,2 +2,0 @@` to nothing at all", () => {
+    // Lines 3 and 4 are deleted from the middle. lib/a.ts:2 is uncovered in the
+    // report, so a parser that read `+2,0` as one added line at 2 would fail
+    // this at 0% — on a line the task did not add.
+    const dir = scenario({
+      base: { "lib/a.ts": five },
+      head: { "lib/a.ts": deleted },
+      report: { "lib/a.ts": { 1: 1, 2: 0, 3: 1 } },
+    });
+    const result = runGate(dir, 90);
+    expect(result.code, result.out).toBe(0);
+    expect(result.line("diff-cov")).toContain("no coverable lines changed");
+    expect(result.line("diff-cov"), "a deletion was counted as an addition").toContain(
+      "0 added line(s)",
+    );
+    expect(result.out, "a deleted-from line was attributed to the task").not.toContain("lib/a.ts:2");
   });
 });
 

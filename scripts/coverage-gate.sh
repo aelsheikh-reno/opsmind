@@ -240,6 +240,7 @@ fi
 # integer, and no rounding rule has to be agreed between the writer and the
 # reader of the file.
 cov_baseline=$(sed -n 's/.*"coverage_bp"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$baseline" 2>/dev/null | head -1)
+tree_cov="$cov_baseline"
 if (( total_lines == 0 )); then
   fail_gate "total-cov" "$lcov declares no DA: records — it covers no lines at all" \
     "A report that measured nothing is a broken report, not a 0% one."
@@ -268,6 +269,30 @@ else
         waiver="task '${branch#task/}' lowers the floor to $(pct "$declared") — $reason"
         cov_baseline="$declared"
       fi
+    fi
+  fi
+  # THE STORED INTEGER IS PART OF THE RATCHET. Read from the working tree alone
+  # it grades itself: a task lowers "coverage_bp", the percentage falls to meet
+  # it, the waiver above never runs, no reason is recorded, and the gate prints
+  # "coverage rose". So the base's copy is resolved too, and lowering the stored
+  # value is treated exactly as an actual decrease — waiver with a reason, or
+  # FAIL naming both numbers. Raising it, or leaving it alone, stays free.
+  # An unresolvable $base is already a diff-cov failure. A base with no readable
+  # baseline file is a broken ratchet and fails closed. A base file carrying no
+  # "coverage_bp" is the commit that introduces the key, where there is no
+  # earlier value to lower — and a WORKING TREE missing it already failed above.
+  if [[ -n "$cov_baseline" ]] && (( base_ok == 1 )); then
+    base_json=$(git show "$base:$baseline" 2>/dev/null)
+    base_cov=$(sed -n 's/.*"coverage_bp"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' <<<"$base_json" | head -1)
+    if [[ -z "$base_json" ]]; then
+      fail_gate "total-cov" "$base has no readable $baseline — the ratchet has no base to hold against"
+      cov_baseline=""
+    elif [[ -n "$base_cov" && -z "$waiver" ]] && (( tree_cov < base_cov )); then
+      fail_gate "total-cov" \
+        "$baseline lowers \"coverage_bp\" from $(pct "$base_cov") at $base to $(pct "$tree_cov")" \
+        "Lowering the stored baseline lowers the ratchet itself and skips the waiver entirely." \
+        "Record coverage_waiver with a coverage_waiver_reason, as an actual decrease requires."
+      cov_baseline=""
     fi
   fi
   if [[ -n "$cov_baseline" ]]; then
