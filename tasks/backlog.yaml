@@ -918,6 +918,7 @@
   produces:
     - lib/modules/deadlines/{thresholds,index}.ts
     - tests/modules/deadlines/
+    - tests/baseline.json
   done_when:
     gates: [lint, types, boundaries, tests, coverage]
     assertions:
