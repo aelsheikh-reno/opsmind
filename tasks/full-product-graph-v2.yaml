@@ -1,0 +1,700 @@
+# FULL PRODUCT GRAPH v2 — append these nodes to tasks/backlog.yaml
+#
+# Audited 2026-08-15 against the repo backlog (44 nodes, SHA 174d7ca) and the
+# architecture pages. v2 changes: presentation-onboarding added (a whole zone
+# had no node); email-webhook entrance and per-channel thresholds added to
+# ingestion; shapes-* dependencies wired; every service owning tables writes
+# its field-level cards into data-model.md in its own PR (the rate-terms
+# pattern); ops-scheduling no longer waits on adapters; domain screens wait on
+# their modules; ops-observability retagged product; parity resolves the five
+# unbuilt legacy routes; cutover requires all four zones.
+#
+# Everything the architecture specifies and no node produced. Append only:
+# change no existing node, no status, no waiver.
+#
+# kind: product | infrastructure   — drives /next selection policy
+#
+# Phases:
+#   1  kernel            (in progress)
+#   2  money spine       (in progress)
+#   3  core modules
+#   4  capability services
+#   5  integration adapters
+#   6  presentation
+#   7  cutover
+#
+# Every node carries kind: product unless it builds pipeline machinery.
+
+# ── phase 3 · core modules not yet covered ──────────────────────────────
+
+- id: module-ingestion-pipeline
+  title: Document ingestion — classify, extract, validate
+  phase: 3
+  kind: product
+  depends_on: [kernel-registry-fx, service-parser, shapes-ingestion]
+  spec: docs/architecture/components-core-ingestion.md
+  also_read:
+    - docs/architecture/flows-ingestion.md
+    - docs/architecture/walkthrough.md
+  legacy_reference: reference/legacy/lib/ingest.ts
+  produces:
+    - lib/modules/ingestion/
+    - prisma/schema.prisma
+    - prisma/migrations/
+    - tests/modules/ingestion/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "All four channels — upload, email webhook, WhatsApp, Drive — converge on one pipeline"
+      - "The email entrance verifies the provider's webhook signature and an allowed-sender list before anything is read"
+      - "Confidence thresholds are per channel and stricter for unattended ones (email, WhatsApp, Drive), where nobody corrects a bad extraction inline"
+      - "The field schema is read from the registry and passed to the parser on every call"
+      - "Confidence below the type's threshold creates a work item and commits nothing"
+      - "An unclassifiable document is queued, never guessed"
+  risk: compliance
+  status: todo
+
+- id: module-ingestion-rules
+  title: The rule engine — what a document causes
+  phase: 3
+  kind: product
+  depends_on: [module-ingestion-pipeline, service-work-items]
+  spec: docs/architecture/components-core-ingestion.md
+  also_read: [docs/architecture/flows-ingestion.md]
+  produces:
+    - lib/modules/ingestion/rules/
+    - tests/modules/ingestion/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "A rule is data — trigger, ANDed conditions, ordered actions from a fixed vocabulary"
+      - "An administrator can add a rule without a deployment"
+      - "Local actions commit in one transaction; the two crossing a process boundary handle failure explicitly"
+      - "A failed condition stops execution and creates a work item naming the condition"
+  risk: compliance
+  status: todo
+
+- id: module-finance-filings
+  title: Finance — tax filings and enrolment-driven periods
+  phase: 3
+  kind: product
+  depends_on: [money-spine, module-deadlines-sweep]
+  spec: docs/architecture/components-core-finance.md
+  also_read: [docs/architecture/data-model.md]
+  legacy_reference: reference/legacy/lib/{vat,tax}.ts
+  produces:
+    - lib/modules/finance/filings/
+    - tests/modules/finance/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage, differential]
+    assertions:
+      - "One filing per enrolment per period, enforced by a unique constraint"
+      - "Due dates come from Regime.deadlineDays and roll forward off a non-working day"
+      - "estimatedAmount is forecasting only — the authoritative return is computed in Zoho"
+      - "Filings register their due dates with the deadline monitor"
+  risk: compliance
+  status: todo
+
+- id: module-finance-forecast
+  title: Finance — cash projection and the commitment forecast view
+  phase: 3
+  kind: product
+  depends_on: [module-finance-filings]
+  spec: docs/architecture/components-core-finance.md
+  also_read: [docs/architecture/data-model.md, docs/architecture/flows-contract-to-cash.md]
+  legacy_reference: reference/legacy/lib/wallet.ts
+  produces:
+    - lib/modules/finance/forecast/
+    - prisma/migrations/
+    - tests/modules/finance/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage, differential]
+    assertions:
+      - "A converted commitment is excluded, so no amount is counted twice"
+      - "The three confidence tiers are preserved through to the projection"
+      - "The view records refreshed_at and the UI shows it rather than implying live data"
+      - "Direction decides sign at presentation; no stored amount is negative"
+  risk: money
+  status: todo
+
+- id: module-finance-leases-budgets
+  title: Finance — lease and loan schedules, budgets
+  phase: 3
+  kind: product
+  depends_on: [module-finance-forecast, shapes-finance-misc]
+  spec: docs/architecture/components-core-finance.md
+  produces:
+    - lib/modules/finance/
+    - prisma/migrations/
+    - tests/modules/finance/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "Lease and loan schedules are commitments and convert like any other"
+      - "A budget variance is derived, never stored"
+  risk: money
+  status: todo
+
+# ── phase 4 · capability services ───────────────────────────────────────
+
+- id: service-parser
+  title: Document parser — classify and extract, stateless
+  phase: 4
+  kind: product
+  depends_on: [kernel-registry-fx]
+  spec: docs/architecture/components-services.md
+  legacy_reference: reference/legacy/lib/extract.ts
+  produces:
+    - lib/services/parser/
+    - tests/services/parser/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "classify(file) returns a type and a confidence"
+      - "extract(file, schema) takes the schema from the caller on every call"
+      - "The service contains no OpsMind entity, field default or business threshold"
+      - "It holds no state between calls"
+  risk: low
+  status: todo
+
+- id: service-alert-manager
+  title: Alert Manager — fingerprints, four states, complete reports
+  phase: 4
+  kind: product
+  depends_on: [module-deadlines-sweep]
+  spec: docs/architecture/flows-alerting.md
+  also_read: [docs/architecture/decisions.md, docs/architecture/components-services.md]
+  produces:
+    - docs/architecture/data-model.md
+    - lib/services/alerts/
+    - prisma/migrations/
+    - tests/services/alerts/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "data-model.md gains field-level cards for this node's tables in the same PR — no table is built without a written shape"
+      - "reportRun with an empty alert list means checked-and-clear, and resolves by absence within the scopes declared complete"
+      - "A source that misses its schedule raises source-dark; its alerts go STALE and are never resolved by absence"
+      - "Fingerprint is deterministic from tenant:app:source:entity:policy — no source keeps memory"
+      - "Severity is monotonic while an alert is open; a downgrade resolves and reopens"
+      - "acknowledge pauses paging without closing; a lapsed resolve window re-escalates"
+      - "suppress is a fourth state with a window; the alert stays open and reappears"
+      - "The service never judges severity — it consumes what the source reports"
+  risk: compliance
+  status: todo
+
+- id: service-work-items
+  title: Work Items — the human decision queue and approval policy
+  phase: 4
+  kind: product
+  depends_on: [kernel-entities-parties]
+  spec: docs/architecture/components-services.md
+  produces:
+    - docs/architecture/data-model.md
+    - lib/services/work-items/
+    - prisma/migrations/
+    - tests/services/work-items/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "data-model.md gains field-level cards for this node's tables in the same PR — no table is built without a written shape"
+      - "Approval thresholds and segregation of duties are policy here, never roles"
+      - "A requester can never approve their own item, including through a manager chain"
+      - "Items carry a section so a visa review reaches HR and an invoice review reaches Finance"
+      - "The service records decisions; the core executes them"
+      - "It never sees document content"
+  risk: compliance
+  status: todo
+
+- id: service-authorization
+  title: Authorization — roles, grant matrix, entity scope, claim tokens
+  phase: 4
+  kind: product
+  depends_on: [kernel-entities-parties]
+  spec: docs/architecture/security-authorization.md
+  also_read: [docs/architecture/flows-authorisation.md, docs/architecture/decisions.md]
+  produces:
+    - docs/architecture/data-model.md
+    - lib/services/authz/
+    - prisma/migrations/
+    - tests/services/authz/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "data-model.md gains field-level cards for this node's tables in the same PR — no table is built without a written shape"
+      - "Permissions resolve to section × action × entity scope and are carried in the token"
+      - "Coarse checks are answerable from the token with no network call"
+      - "Instance checks stay with the owning module and are never delegated here"
+      - "Claim tokens are single-use, expiring and independent of any identity provider"
+      - "The permission vocabulary is per-application, so a second product uses its own"
+  risk: compliance
+  status: todo
+
+- id: service-docgen
+  title: Docgen — one template to DOCX, PDF and email HTML
+  phase: 4
+  kind: product
+  depends_on: [service-parser]
+  spec: docs/architecture/components-services.md
+  legacy_reference: reference/legacy/lib/docx-replacements.ts
+  produces:
+    - lib/services/docgen/
+    - tests/services/docgen/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "render(template, data, format) produces DOCX, PDF and email HTML from one template"
+      - "A caller pins a template version, so a payslip re-renders identically years later"
+      - "The service knows nothing about what a salary is"
+  risk: low
+  status: todo
+
+- id: service-notifications
+  title: Notifications — delivery, status and retry
+  phase: 4
+  kind: product
+  depends_on: [service-docgen]
+  spec: docs/architecture/components-services.md
+  produces:
+    - docs/architecture/data-model.md
+    - lib/services/notifications/
+    - prisma/migrations/
+    - tests/services/notifications/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "data-model.md gains field-level cards for this node's tables in the same PR — no table is built without a written shape"
+      - "send takes rendered content — it never renders a template"
+      - "Delivery status is recorded and failures retry with backoff"
+      - "It holds no recipient list; the caller supplies the recipient"
+  risk: low
+  status: todo
+
+- id: service-ai-platform
+  title: AI platform — model routing, prompt versions, semantic search
+  phase: 4
+  kind: product
+  depends_on: [service-parser]
+  spec: docs/architecture/components-services.md
+  produces:
+    - lib/services/ai/
+    - tests/services/ai/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "No model literal appears outside this service"
+      - "Prompts are versioned and a caller can pin a version"
+      - "Sensitive fields never enter the semantic index"
+      - "The index matches the search_index card in data-model.md"
+  risk: low
+  status: todo
+
+# ── phase 5 · integration adapters ──────────────────────────────────────
+
+- id: adapter-connection-manager
+  title: Connection Manager — OAuth custody and scoped tokens
+  phase: 5
+  kind: product
+  depends_on: [service-authorization]
+  spec: docs/architecture/components-adapters.md
+  produces:
+    - docs/architecture/data-model.md
+    - lib/adapters/connections/
+    - prisma/migrations/
+    - tests/adapters/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "data-model.md gains field-level cards for this node's tables in the same PR — no table is built without a written shape"
+      - "Tokens are vended per service and scoped, so one adapter cannot obtain another's"
+      - "Refresh is automatic and a failed refresh raises rather than silently expiring"
+      - "It holds credentials for third parties, never permissions for users"
+  risk: compliance
+  status: todo
+
+- id: adapter-zoho
+  title: Zoho Books — the compliance path to the ledger
+  phase: 5
+  kind: product
+  depends_on: [adapter-connection-manager, module-finance-forecast]
+  spec: docs/architecture/components-adapters.md
+  also_read: [docs/architecture/decisions.md]
+  legacy_reference: reference/legacy/lib/zoho-books.ts
+  produces:
+    - lib/adapters/zoho/
+    - tests/adapters/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage, differential]
+    assertions:
+      - "The adapter persists nothing on the OpsMind side"
+      - "Settlement pushes carry an idempotency key and retry"
+      - "Anything unpushed is visible as a list, so an outage delays sync without losing the record"
+      - "Mapping an OpsMind cost to a Zoho account stays in the core"
+  risk: money
+  status: todo
+
+- id: adapter-drive
+  title: Google Drive — watch channels plus a reconciliation sweep
+  phase: 5
+  kind: product
+  depends_on: [adapter-connection-manager, module-ingestion-pipeline]
+  spec: docs/architecture/components-adapters.md
+  legacy_reference: reference/legacy/lib/google-drive.ts
+  produces:
+    - lib/adapters/drive/
+    - tests/adapters/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "One sync function serves both the webhook and the daily sweep"
+      - "The changes cursor is stored and resumed"
+      - "Watch channel renewal is its own scheduled job"
+  risk: low
+  status: todo
+
+- id: adapter-asana
+  title: Asana — per-tenant OAuth, webhook plus sweep
+  phase: 5
+  kind: product
+  depends_on: [adapter-connection-manager, module-projects]
+  spec: docs/architecture/components-adapters.md
+  produces:
+    - lib/adapters/asana/
+    - tests/adapters/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "Per-tenant OAuth replaces any static environment token"
+      - "Every webhook path has a reconciliation sweep behind it"
+  risk: low
+  status: todo
+
+- id: adapter-fx
+  title: FX rates — provider client with a fallback chain
+  phase: 5
+  kind: product
+  depends_on: [kernel-registry-fx]
+  spec: docs/architecture/components-adapters.md
+  legacy_reference: reference/legacy/lib/fx.ts
+  produces:
+    - lib/adapters/fx/
+    - tests/adapters/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage, differential]
+    assertions:
+      - "The adapter fetches and returns; the FX kernel owns the store"
+      - "A provider failure falls back and a total failure raises rather than returning a stale rate silently"
+  risk: money
+  status: todo
+
+- id: adapter-whatsapp
+  title: WhatsApp — inbound documents and outbound reminders
+  phase: 5
+  kind: product
+  depends_on: [adapter-connection-manager, module-ingestion-pipeline, service-notifications]
+  spec: docs/architecture/components-adapters.md
+  legacy_reference: reference/legacy/lib/whatsapp.ts
+  produces:
+    - lib/adapters/whatsapp/
+    - tests/adapters/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "Inbound webhooks verify a provider signature before anything is read"
+      - "Inbound media joins the same ingestion pipeline as every other channel"
+  risk: compliance
+  status: todo
+
+# ── phase 6 · presentation ──────────────────────────────────────────────
+
+- id: auth-flow
+  title: Authentication — one provider per user, break-glass administrator
+  phase: 6
+  kind: product
+  depends_on: [service-authorization]
+  spec: docs/architecture/security-authentication.md
+  also_read: [docs/architecture/decisions.md]
+  produces:
+    - app/api/auth/
+    - lib/auth/
+    - tests/security/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "A user authenticates through exactly one provider — no password beside SSO"
+      - "One audited local administrator exists as the way back in"
+      - "Switching provider re-points provider and providerSub without touching roles or history"
+      - "Login is rate limited and locks out"
+      - "A new OIDC provider is a configuration entry, not a rewrite"
+  risk: compliance
+  status: todo
+
+- id: presentation-bff
+  title: The BFF — server-side composition, gate order, no satellite from the browser
+  phase: 6
+  kind: product
+  depends_on: [auth-flow]
+  spec: docs/architecture/architecture-presentation.md
+  also_read: [docs/architecture/security-surface.md]
+  produces:
+    - app/api/
+    - lib/bff/
+    - tests/presentation/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "Every request passes licence, authentication, coarse authorization, onboarding, then handler — in that order, before any business code"
+      - "The browser never reaches a satellite"
+      - "A route handler contains no business logic"
+      - "Composition happens on the server, never in the browser"
+  risk: compliance
+  status: todo
+
+- id: presentation-public-zone
+  title: Public zone — the claim portal, login, suspended
+  phase: 6
+  kind: product
+  depends_on: [presentation-bff, module-expenses]
+  spec: docs/architecture/architecture-presentation.md
+  also_read: [docs/architecture/security-surface.md]
+  produces:
+    - app/(public)/
+    - tests/presentation/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "Exactly three routes are reachable without a session, and the list is complete"
+      - "The claim endpoint is rate limited and its token is single-use and expiring"
+  risk: compliance
+  status: todo
+
+- id: presentation-onboarding
+  title: The onboarding gate — setup before roles are meaningful
+  phase: 6
+  kind: product
+  depends_on: [presentation-bff, kernel-entities-parties]
+  spec: docs/architecture/architecture-presentation.md
+  also_read: [docs/architecture/security-authentication.md]
+  produces:
+    - app/onboarding/
+    - lib/bff/
+    - tests/presentation/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "Incomplete onboarding intercepts every authenticated route and redirects to /onboarding — the BFF gate order enforces it, not the pages"
+      - "It is the only surface allowed to write configuration before roles exist, and that exemption is scoped to exactly the setup writes"
+      - "Completing setup writes the LegalEntity, its jurisdictions and enrolments through the kernel, never directly"
+      - "It is resumable and idempotent — abandoning halfway and returning does not duplicate anything"
+  risk: compliance
+  status: todo
+  note: >
+    A whole zone in the presentation table that had no node. It writes
+    configuration before authorization is meaningful, which is why it is
+    compliance-tagged: the exemption it holds is exactly the kind of hole that
+    widens silently.
+
+- id: presentation-domain-screens
+  title: Domain screens — one owning module each, no logic
+  phase: 6
+  kind: product
+  depends_on: [presentation-bff, module-payroll, module-billing, module-expenses, module-finance-filings, module-ingestion-rules]
+  spec: docs/architecture/architecture-presentation.md
+  produces:
+    - app/(dashboard)/
+    - tests/presentation/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "No page imports a module directly — the lint rule proves it"
+      - "No screen computes a tax, a total or a date"
+  risk: low
+  status: todo
+  note: >
+    A screen cannot exist before its module. Expect this node to split on
+    size, one PR per screen group, exactly as the kernel did — declare each
+    half's node in its own PR.
+
+
+- id: presentation-composition-surfaces
+  title: Composition surfaces — dashboard, calendar, finances, simulator
+  phase: 6
+  kind: product
+  depends_on: [presentation-domain-screens, module-finance-forecast]
+  spec: docs/architecture/architecture-presentation.md
+  produces:
+    - app/(dashboard)/
+    - tests/presentation/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "A composition surface owns no data and assembles through the BFF"
+      - "The cash view shows the forecast's refreshed_at rather than implying live data"
+      - "Scenarios persist in the database, never in browser storage"
+  risk: money
+  status: todo
+
+- id: presentation-satellite-consoles
+  title: Satellite consoles — alerts, work items, settings, registry
+  phase: 6
+  kind: product
+  depends_on: [presentation-domain-screens, service-alert-manager, service-work-items]
+  spec: docs/architecture/architecture-presentation.md
+  produces:
+    - app/(dashboard)/
+    - tests/presentation/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "Thresholds, rules and retention policy are editable as data without a deployment"
+      - "A misordered threshold set is flagged as probably-misconfigured without blocking the save"
+  risk: low
+  status: todo
+
+# ── cross-cutting ───────────────────────────────────────────────────────
+
+- id: ops-scheduling
+  title: Scheduling — every background job, idempotent and lock-protected
+  phase: 6
+  kind: product
+  depends_on: [module-deadlines-sweep]
+  spec: docs/architecture/operations-scheduling.md
+  produces:
+    - docs/architecture/data-model.md
+    - lib/scheduling/
+    - prisma/migrations/
+    - tests/operations/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "data-model.md gains field-level cards for this node's tables in the same PR — no table is built without a written shape"
+      - "Every job claims a row unique on (job, scheduled time), so duplicate runners collide harmlessly"
+      - "Every event-driven path has a sweep behind it"
+      - "Jobs run on a single fixed timezone and every date comparison uses the jurisdiction calendar"
+      - "A job that stops running raises through the Alert Manager rather than going quiet"
+  risk: compliance
+  status: todo
+  note: >
+    Adapters register their jobs as they land — this node does not wait on
+    them. It generalises the claim mechanism the sweep already needs.
+
+
+- id: ops-observability
+  title: Observability — correlation identifiers across every boundary
+  phase: 6
+  kind: product
+  depends_on: [presentation-bff]
+  spec: docs/architecture/operations-observability.md
+  produces:
+    - lib/observability/
+    - tests/operations/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "A correlation id is generated at the inbound adapter and propagated across every boundary"
+      - "Logs are structured JSON carrying that id plus actor and entity"
+      - "Spans use the vendor-neutral API; the export destination stays a later decision"
+  risk: low
+  status: todo
+
+- id: ops-retention-purge
+  title: Retention — the purge job and erasure requests
+  phase: 6
+  kind: product
+  depends_on: [ops-scheduling, kernel-registry-fx]
+  spec: docs/architecture/data-retention.md
+  produces:
+    - docs/architecture/data-model.md
+    - lib/kernel/retention/
+    - tests/kernel/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "data-model.md gains field-level cards for this node's tables in the same PR — no table is built without a written shape"
+      - "Purge skips anything under legal hold and writes an audit entry for every deletion"
+      - "Erasure redacts personal fields while the financial record survives"
+      - "The applied retention policy is snapshotted onto the audit entry"
+  risk: compliance
+  status: todo
+
+# ── phase 7 · cutover ───────────────────────────────────────────────────
+
+- id: parity-inventory
+  title: Feature parity inventory against the running system
+  phase: 7
+  kind: product
+  depends_on: []
+  spec: docs/architecture/architecture-presentation.md
+  legacy_reference: reference/legacy/app/
+  produces:
+    - docs/parity.md
+  done_when:
+    gates: [lint, types]
+    assertions:
+      - "Every route in the legacy app appears with a status: covered, planned, or deliberately dropped"
+      - "Each row names the node that covers it, or says why nothing does"
+      - "Anything the team uses weekly is marked as such"
+      - "The five unbuilt legacy routes (/ai, /intel, /risk, /operations, /resources) are each resolved build-or-drop — a nav entry with no answer is not parity"
+  risk: low
+  status: todo
+  note: >
+    This is the definition of done for cutover, and it is far cheaper to write
+    while the old system is available than to reconstruct at the end. It depends
+    on nothing and can run at any time — start it early.
+
+- id: migration-mapping
+  title: Data migration — source mapping for every target table
+  phase: 7
+  kind: product
+  depends_on: [parity-inventory, module-billing]
+  spec: docs/architecture/data-migration.md
+  produces:
+    - docs/migration-mapping.md
+    - scripts/migrate/
+    - tests/migration/
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "Every target table names its legacy source, or is marked as new"
+      - "Direction is resolved before insert; unresolvable rows quarantine outside the target tables"
+      - "The migration is idempotent and re-runnable"
+      - "A dry run reports counts per table without writing"
+  risk: compliance
+  status: todo
+
+- id: migration-anonymised-dataset
+  title: Anonymised production-shaped dataset for staging and differential tests
+  phase: 7
+  kind: product
+  depends_on: [migration-mapping]
+  spec: docs/architecture/data-migration.md
+  produces:
+    - scripts/anonymise/
+    - tests/golden/
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "No real salary, passport number or Emirates ID survives anonymisation"
+      - "Shapes are preserved — multi-jurisdiction, mid-month joiners, partial payments, multiple currencies"
+      - "Anonymisation is verified by a test that fails if any known-sensitive field passes through"
+  risk: compliance
+  status: todo
+
+- id: cutover-rehearsal
+  title: Cutover rehearsal on staging
+  phase: 7
+  kind: product
+  depends_on: [migration-anonymised-dataset, presentation-composition-surfaces, presentation-satellite-consoles, presentation-public-zone, ops-scheduling]
+  spec: docs/architecture/operations-runbook.md
+  produces:
+    - docs/cutover-runbook.md
+    - tests/migration/
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "A full migration runs end to end on staging against the anonymised dataset"
+      - "Every parity row marked covered is exercised"
+      - "The runbook states rollback: what happens if cutover is abandoned halfway"
+      - "Timings are recorded, so the real cutover window is known rather than guessed"
+  risk: compliance
+  status: todo
