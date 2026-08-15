@@ -46,7 +46,7 @@ needs, what it produces, and how it is proven done.
     - lib/kernel/person/{index,repository}.ts
     - tests/kernel/person.test.ts
   done_when:
-    - gates: [lint, types, boundaries, tests, coverage]
+    - gates: [lint, types, boundaries, tests, cov-report, diff-cov, total-cov]
     - assertions:
         - "Person has managerId self-relation"
         - "PersonEnrolment supports multiple jurisdictions per person"
@@ -121,7 +121,7 @@ Nothing merges until every gate passes. Gates are scripts, not judgements.
 | `boundaries` | No module writes another's tables; no page imports a module; only `repository.ts` touches the database |
 | `tests` | Unit and integration pass |
 | `test-count` | The suite never shrinks: the runtime test total against the `tests` floor in `tests/baseline.json` |
-| `cov-report` | `vitest run --coverage` produced `coverage/lcov.info`. Absent, empty or declaring no measurable line is a failure, never a pass |
+| `cov-report` | `vitest run --coverage` ran and exited clean. The report it must produce is `coverage/lcov.info`; a report that is absent, empty or declares no measurable line is caught by the two gates below, which read it — and is a failure there, never a pass |
 | `diff-cov` | Coverage of **the lines this task changed** — 90% on money and compliance, 70% on low, 90% when the risk is unknown |
 | `total-cov` | Whole-repository line coverage against the `coverage_bp` ratchet in `tests/baseline.json`. Fails on a decrease, and on a `coverage_bp` lowered below the value the PR base holds |
 | `cov-waiver` | A task that legitimately lowers either number carries `coverage_waiver` and a `coverage_waiver_reason` on its node. Unexplained, or not a number, it fails |
