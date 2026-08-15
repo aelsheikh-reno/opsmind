@@ -1289,7 +1289,7 @@
       - "A branch that resolves no task can still pass the gates on a clean main"
   risk: low
   blocks_product: true
-  status: todo
+  status: done
   note: >
     BLOCKS PRODUCT. It is infrastructure, but it blocks every compliance node in
     the graph — all three module-deadlines-sweep nodes among them — so it is
