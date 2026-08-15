@@ -73,13 +73,22 @@
 // not exist in reference/legacy at all — so this is a decision made in code and
 // it is flagged for Ahmed, not defended as derived.
 //
+// ONE BLOCK HERE HAS A DIFFERENT PROVENANCE, AND SAYING OTHERWISE WOULD MAKE
+// THE PARAGRAPH ABOVE FALSE. "a calendar's time zone is one Intl can resolve"
+// was added by the implementation of tasks/backlog.yaml#module-deadlines-civil-date,
+// by the agent that wrote the check it exercises, from Ahmed's decision of
+// 2026-08-15 that the zone is validated where it enters. It sits here because
+// this is where the kernel's jurisdiction tests live and it is the same claim
+// the weekend-mask block makes one field over — but it is implementer-written,
+// not independently derived, and it is marked so a reader weighs it as such.
+//
 // No other file under `lib/kernel/` was read by the author. The declarations
 // swept below are read by the test process, from `index.ts` and the
 // declarations it re-exports, and never from a function body.
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { managerChain, type Person } from "@/lib/kernel/person";
-import { isWeekendMask } from "@/lib/kernel/jurisdiction";
+import { isTimeZone, isWeekendMask, setBusinessCalendar } from "@/lib/kernel/jurisdiction";
 import { documentAmount, type Document } from "@/lib/kernel/document";
 import {
   KERNEL_DIR,
@@ -332,6 +341,67 @@ describe("a weekend mask is a set of weekday numbers", () => {
       expect(isWeekendMask([day]), `${day} is not a day of the week`).toBe(false);
     }
   });
+});
+
+// ---- a calendar's zone is an IANA zone ---------------------------------------
+
+describe("a calendar's time zone is one Intl can resolve", () => {
+  // prisma BusinessCalendar.timeZone — "The IANA zone whose CIVIL date is
+  // 'today' in this jurisdiction". Ahmed's decision, 2026-08-15: the zone is
+  // validated where it ENTERS. A zone Intl cannot read computes no civil date
+  // at all, and left to fail inside civilDateIn the stack trace names the
+  // deadline monitor for a row the kernel accepted weeks earlier.
+  //
+  // These need no database. The predicate is pure, and the write-path case
+  // below is refused before any query is issued — which is the claim it makes.
+
+  it("accepts the zone of every jurisdiction this build serves", () => {
+    // The five countries of CLAUDE.md, and the map the backfill migration
+    // (prisma/migrations/20260815090000_deadline_calendar_timezone) writes.
+    // A validator that rejects one of these rejects the product.
+    for (const zone of ["Asia/Dubai", "Africa/Cairo", "Asia/Riyadh", "Asia/Kuwait", "Asia/Bahrain"]) {
+      expect(isTimeZone(zone), `${zone} is a real IANA zone`).toBe(true);
+    }
+  });
+
+  it("rejects a zone no runtime can resolve", () => {
+    // What a typo, a hand edit or an extraction produces. Any of them is a
+    // calendar whose "today" cannot be computed in the jurisdiction at all.
+    expect(isTimeZone("Mars/Phobos")).toBe(false);
+    expect(isTimeZone("Asia/Dubbai")).toBe(false);
+    expect(isTimeZone("Dubai")).toBe(false);
+  });
+
+  it("rejects an empty zone, which is the shape of a field nobody filled in", () => {
+    // The column has no default precisely so an unfilled zone is visible. An
+    // empty string would restore the default by the back door — present,
+    // unreadable, and only discovered at 02:00.
+    expect(isTimeZone("")).toBe(false);
+    expect(isTimeZone("   ")).toBe(false);
+  });
+
+  it("refuses to write a calendar carrying a zone it cannot resolve, naming it", () => {
+    // The mask check's shape, applied to the zone: rejected on write rather
+    // than trusted. The error must name the offending value — "invalid time
+    // zone" without it sends whoever reads the log hunting through calendars.
+    return expect(setBusinessCalendar("jurisdiction-id", [5, 6], "Mars/Phobos")).rejects.toThrow(
+      /Mars\/Phobos/,
+    );
+  });
+
+  it("lets a real zone past that check", () => {
+    // The other side of the guard, asserted without a database: whatever stops
+    // this call in an environment with no Postgres, it must not be the zone
+    // validation. Passing means "Asia/Dubai" reached the write itself.
+    return setBusinessCalendar("jurisdiction-id", [5, 6], "Asia/Dubai").then(
+      () => undefined,
+      (error: Error) => {
+        expect(error.message, "a valid IANA zone was rejected by the write-time check").not.toMatch(
+          /is not an IANA zone/,
+        );
+      },
+    );
+  }, 30_000);
 });
 
 // ---- the kernel's public surface loads ---------------------------------------
