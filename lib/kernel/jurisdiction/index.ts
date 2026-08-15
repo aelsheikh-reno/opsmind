@@ -61,6 +61,32 @@ export function isWeekendMask(mask: readonly number[]): boolean {
   );
 }
 
+/**
+ * True when `zone` is an IANA zone this runtime can actually resolve —
+ * "Asia/Dubai", "Africa/Cairo". An empty string is not one.
+ *
+ * Asked of `Intl` rather than of `Intl.supportedValuesOf("timeZone")`, and
+ * deliberately: `civilDateIn` reads a calendar's zone through
+ * `Intl.DateTimeFormat`, so this constructs the same thing and lets it accept
+ * or throw. `supportedValuesOf` returns only canonical names, so it would
+ * reject links and aliases that the reader would then go on to resolve without
+ * complaint — a validator stricter than the consumer refuses zones that work.
+ *
+ * Checked on write for the same reason the weekend mask is: a calendar carrying
+ * a zone nothing can read computes no civil date at all, and the throw surfaces
+ * in the 02:00 sweep, naming the deadline monitor for a row the kernel accepted
+ * hours or weeks earlier.
+ */
+export function isTimeZone(zone: string): boolean {
+  if (zone.trim() === "") return false;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: zone });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export {
   businessCalendarFor,
   getJurisdiction,

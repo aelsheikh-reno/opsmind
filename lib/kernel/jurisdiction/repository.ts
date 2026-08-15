@@ -6,7 +6,7 @@
 import type { Jurisdiction as JurisdictionRow } from "@prisma/client";
 import { db } from "@/lib/db";
 import type { BusinessCalendar, BusinessHoliday, Jurisdiction } from "./index";
-import { isWeekendMask } from "./index";
+import { isTimeZone, isWeekendMask } from "./index";
 
 const toJurisdiction = ({ id, code, name }: JurisdictionRow): Jurisdiction => ({ id, code, name });
 
@@ -64,9 +64,10 @@ export async function businessCalendarFor(jurisdictionId: string): Promise<Busin
 
 /**
  * Sets the working week and the zone its civil date is read in. Rejects a mask
- * that is not a set of day numbers. `timeZone` is a required argument with no
- * default, for the reason the column has none: a default zone is a UTC-shaped
- * "today" written down once and then trusted.
+ * that is not a set of day numbers, and a zone `Intl` cannot resolve.
+ * `timeZone` is a required argument with no default, for the reason the column
+ * has none: a default zone is a UTC-shaped "today" written down once and then
+ * trusted.
  */
 export async function setBusinessCalendar(
   jurisdictionId: string,
@@ -77,6 +78,14 @@ export async function setBusinessCalendar(
     throw new Error(
       `weekendMask ${JSON.stringify(weekendMask)} is not a set of distinct day numbers 0-6 ` +
         "(0 = Sunday). The Gulf working week is Sunday-Thursday, so its mask is [5, 6].",
+    );
+  }
+  if (!isTimeZone(timeZone)) {
+    throw new Error(
+      `timeZone ${JSON.stringify(timeZone)} is not an IANA zone this runtime can resolve ` +
+        '("Asia/Dubai", "Africa/Cairo"). Rejected here, where the value enters: a stored zone ' +
+        "nothing can read throws hours later inside the deadline sweep, which then names the " +
+        "monitor for a calendar row this function accepted.",
     );
   }
   const mask = [...weekendMask];
