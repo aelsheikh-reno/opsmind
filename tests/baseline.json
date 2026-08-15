@@ -1,6 +1,6 @@
 {
-  "tests": 574,
-  "coverage_bp": 7920,
+  "tests": 627,
+  "coverage_bp": 8012,
   "why": [
     "The number of tests the suite must not drop below.",
     "",
@@ -10,7 +10,7 @@
     "gates all answer 'did what ran pass' — none answers 'did everything still",
     "run'. This is a ratchet, not a target: it fails on a DECREASE only.",
     "",
-    "Bumped to 487 with kernel-entities-law, and to 574 with gate-coverage-strict-path. Left at its creation value of 317 while the suite grew to 487, the ratchet would have admitted the deletion of every kernel test — review caught that. Bump it in the PR that adds the tests, not later.",
+    "Bumped to 487 with kernel-entities-law, to 574 with gate-coverage-strict-path, and to 627 with module-deadlines-thresholds. Left at its creation value of 317 while the suite grew to 487, the ratchet would have admitted the deletion of every kernel test — review caught that. Bump it in the PR that adds the tests, not later.",
     "",
     "Bump this number when a task legitimately adds tests. A task that",
     "legitimately REMOVES them — consolidating cases into one it.each, deleting",
@@ -34,7 +34,7 @@
     "task green on its own lines, so this ratchets the whole repository: it fails",
     "on a DECREASE only and never on standing still.",
     "",
-    "Set to 7920 by gate-coverage-strict-path, which is what the repository",
+    "Set to 7920 by gate-coverage-strict-path and raised to 8012 by module-deadlines-thresholds. 7920 was what the repository",
     "measured at the time (240 of 303 lines). The number is low because six",
     "lib/kernel/*/repository.ts files are Prisma plumbing no unit test can reach.",
     "They are deliberately NOT excluded from coverage — raising them is",
