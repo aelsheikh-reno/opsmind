@@ -13,11 +13,13 @@ const toJurisdiction = ({ id, code, name }: JurisdictionRow): Jurisdiction => ({
 const toCalendar = (row: {
   jurisdictionId: string;
   weekendMask: number[];
+  timeZone: string;
   holidays: { date: Date }[];
 }): BusinessCalendar => ({
   jurisdictionId: row.jurisdictionId,
   weekendMask: row.weekendMask,
   holidays: row.holidays.map((holiday) => holiday.date),
+  timeZone: row.timeZone,
 });
 
 export async function getJurisdiction(id: string): Promise<Jurisdiction | null> {
@@ -60,10 +62,16 @@ export async function businessCalendarFor(jurisdictionId: string): Promise<Busin
   return row && toCalendar(row);
 }
 
-/** Sets the working week. Rejects a mask that is not a set of day numbers. */
+/**
+ * Sets the working week and the zone its civil date is read in. Rejects a mask
+ * that is not a set of day numbers. `timeZone` is a required argument with no
+ * default, for the reason the column has none: a default zone is a UTC-shaped
+ * "today" written down once and then trusted.
+ */
 export async function setBusinessCalendar(
   jurisdictionId: string,
   weekendMask: readonly number[],
+  timeZone: string,
 ): Promise<BusinessCalendar> {
   if (!isWeekendMask(weekendMask)) {
     throw new Error(
@@ -74,8 +82,8 @@ export async function setBusinessCalendar(
   const mask = [...weekendMask];
   const row = await db.businessCalendar.upsert({
     where: { jurisdictionId },
-    create: { jurisdictionId, weekendMask: mask },
-    update: { weekendMask: mask },
+    create: { jurisdictionId, weekendMask: mask, timeZone },
+    update: { weekendMask: mask, timeZone },
     include: { holidays: true },
   });
   return toCalendar(row);
