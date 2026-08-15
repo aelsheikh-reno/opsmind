@@ -10,7 +10,7 @@
 // Threshold semantics were settled by Ahmed 2026-08-14 and are written into
 // components-core-deadline-monitor.md, so that half builds to a spec.
 
-export { businessDaysUntil, filingDueDate, statutoryDueDate, isWorkingDay, MissingBusinessCalendarError, requireCalendar } from "./calendar";
+export { businessDaysUntil, civilDateIn, filingDueDate, statutoryDueDate, isWorkingDay, MissingBusinessCalendarError, requireCalendar } from "./calendar";
 export type { BusinessCalendar, CalendarSource } from "./calendar";
 export { APP_ID, fingerprintFor, highestSeverity, isConfigured, severityFor, SOURCE_ID } from "./thresholds";
 export type { Severity, ThresholdRule } from "./thresholds";

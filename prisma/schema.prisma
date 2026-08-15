@@ -92,6 +92,17 @@ model BusinessCalendar {
   /// [5, 6] — Friday and Saturday. No default: a calendar states its own week.
   weekendMask Int[]
 
+  /// The IANA zone whose CIVIL date is "today" in this jurisdiction —
+  /// "Asia/Dubai", "Africa/Cairo". It lives here rather than on Jurisdiction
+  /// because Jurisdiction is identity and this is a civil-time rule, beside the
+  /// weekend mask and the holidays (Ahmed's decision, 2026-08-14).
+  ///
+  /// Required, and with no default. The deadline sweep runs at 02:00, which in
+  /// the Gulf is 22:00 the previous UTC day: scored against UTC it would warn a
+  /// day late, and a default zone is that same defect written down once and
+  /// then trusted.
+  timeZone String
+
   holidays BusinessHoliday[]
 }
 

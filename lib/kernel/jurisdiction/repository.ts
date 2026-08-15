@@ -6,18 +6,20 @@
 import type { Jurisdiction as JurisdictionRow } from "@prisma/client";
 import { db } from "@/lib/db";
 import type { BusinessCalendar, BusinessHoliday, Jurisdiction } from "./index";
-import { isWeekendMask } from "./index";
+import { isTimeZone, isWeekendMask } from "./index";
 
 const toJurisdiction = ({ id, code, name }: JurisdictionRow): Jurisdiction => ({ id, code, name });
 
 const toCalendar = (row: {
   jurisdictionId: string;
   weekendMask: number[];
+  timeZone: string;
   holidays: { date: Date }[];
 }): BusinessCalendar => ({
   jurisdictionId: row.jurisdictionId,
   weekendMask: row.weekendMask,
   holidays: row.holidays.map((holiday) => holiday.date),
+  timeZone: row.timeZone,
 });
 
 export async function getJurisdiction(id: string): Promise<Jurisdiction | null> {
@@ -60,10 +62,17 @@ export async function businessCalendarFor(jurisdictionId: string): Promise<Busin
   return row && toCalendar(row);
 }
 
-/** Sets the working week. Rejects a mask that is not a set of day numbers. */
+/**
+ * Sets the working week and the zone its civil date is read in. Rejects a mask
+ * that is not a set of day numbers, and a zone `Intl` cannot resolve.
+ * `timeZone` is a required argument with no default, for the reason the column
+ * has none: a default zone is a UTC-shaped "today" written down once and then
+ * trusted.
+ */
 export async function setBusinessCalendar(
   jurisdictionId: string,
   weekendMask: readonly number[],
+  timeZone: string,
 ): Promise<BusinessCalendar> {
   if (!isWeekendMask(weekendMask)) {
     throw new Error(
@@ -71,11 +80,19 @@ export async function setBusinessCalendar(
         "(0 = Sunday). The Gulf working week is Sunday-Thursday, so its mask is [5, 6].",
     );
   }
+  if (!isTimeZone(timeZone)) {
+    throw new Error(
+      `timeZone ${JSON.stringify(timeZone)} is not an IANA zone this runtime can resolve ` +
+        '("Asia/Dubai", "Africa/Cairo"). Rejected here, where the value enters: a stored zone ' +
+        "nothing can read throws hours later inside the deadline sweep, which then names the " +
+        "monitor for a calendar row this function accepted.",
+    );
+  }
   const mask = [...weekendMask];
   const row = await db.businessCalendar.upsert({
     where: { jurisdictionId },
-    create: { jurisdictionId, weekendMask: mask },
-    update: { weekendMask: mask },
+    create: { jurisdictionId, weekendMask: mask, timeZone },
+    update: { weekendMask: mask, timeZone },
     include: { holidays: true },
   });
   return toCalendar(row);

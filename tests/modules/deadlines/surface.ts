@@ -65,12 +65,39 @@ export const GULF: readonly number[] = [5, 6];
 /** Saturday and Sunday — the wrong week for all five countries. */
 export const WESTERN: readonly number[] = [0, 6];
 
+/**
+ * The IANA zone each jurisdiction in these fixtures is actually in.
+ *
+ * `module-deadlines-civil-date` made `timeZone` a required member of
+ * BusinessCalendar, so a fixture has to carry one. It is inert for everything in
+ * calendar.test.ts — business-day distance, the statutory date and the filing
+ * date are all arithmetic over civil dates that are handed in already resolved,
+ * and none of them converts an instant — but it must still be a truthful value,
+ * because a fixture is read as documentation of what a row looks like.
+ *
+ * `XX` is the invented jurisdiction used for a seven-day working week and for a
+ * calendar that closes every day; it is given a real zone rather than `UTC`
+ * deliberately. UTC standing in for an unknown zone is the exact defect that
+ * node exists to remove, and it should not appear as a habit in the fixtures
+ * either.
+ */
+const FIXTURE_ZONES: Record<string, string> = {
+  AE: "Asia/Dubai",
+  EG: "Africa/Cairo",
+  SA: "Asia/Riyadh",
+  KW: "Asia/Kuwait",
+  BH: "Asia/Bahrain",
+  GB: "Europe/London",
+  US: "America/New_York",
+};
+
 export function calendar(
   jurisdictionId: string,
   weekendMask: readonly number[],
   holidays: string[] = [],
+  timeZone: string = FIXTURE_ZONES[jurisdictionId] ?? "Asia/Dubai",
 ): BusinessCalendar {
-  return { jurisdictionId, weekendMask: [...weekendMask], holidays: holidays.map(d) };
+  return { jurisdictionId, weekendMask: [...weekendMask], holidays: holidays.map(d), timeZone };
 }
 
 /** `entityRef` is the spec's `…document:123:expiry` identity, split at the colon. */
