@@ -908,6 +908,50 @@
     data-model.md:36-47 is the pattern: effectiveFrom, effectiveTo null for
     current, rows never edited in place, and a reason for the change.
 
+- id: module-deadlines-thresholds
+  title: Deadline monitor — threshold windows, severity and the fingerprint
+  phase: 1
+  depends_on: [module-deadlines]
+  spec: docs/architecture/components-core-deadline-monitor.md
+  also_read:
+    - docs/architecture/flows-alerting.md          # the fingerprint's segments
+  produces:
+    - lib/modules/deadlines/{thresholds,index}.ts
+    - tests/modules/deadlines/
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "Severity is the maximum across breached windows, never the tightest one"
+      - "A threshold is inclusive at its bound — exactly seven business days remaining breaches a seven-day window"
+      - "An overdue deadline, with negative days remaining, reports the highest configured severity"
+      - "A deadline type with no ThresholdTable row is reported as unconfigured, never scored as safe"
+      - "A fingerprint is deterministic and carries no severity, so an escalation does not change identity"
+  risk: compliance
+  status: todo
+  note: >
+    The second of the three nodes module-deadlines-sweep was split into when its
+    implementation measured 532 lines against the unwaivable 400 (Ahmed's
+    decision, 2026-08-15). This one carries the four settled threshold semantics;
+    module-deadlines-civil-date carries the timezone field and the civil-date
+    convention; module-deadlines-sweep keeps its id and carries scoped
+    completeness, STALE, the misconfiguration alerts, statelessness,
+    evaluate-on-register and the `// owns:` declaration.
+
+    Nothing here is a constant. The windows and severities arrive as
+    ThresholdTable rows, editable in Settings without a deployment, exactly as a
+    SOC tunes detection rules (ADR-020). This node owns the predicate; RAISING an
+    alert about an unconfigured type is the sweep's job and lands there.
+
+    The four semantics are written into components-core-deadline-monitor.md and
+    were settled by Ahmed on 2026-08-14, so this node builds to a spec rather
+    than to the legacy oracle — legacy has no threshold table at all.
+
+    THE CARRIED severity.test.ts DOES NOT LAND HERE. It imports `sweep` from the
+    shared surface and pins these rules THROUGH a run, so it cannot live where
+    the sweep does not exist; it moves to module-deadlines-sweep with the other
+    three sweep-level files. This node is tested directly, against the exported
+    functions — the same split civil-date.test.ts forced on the first node.
+
 - id: module-deadlines-sweep
   title: Deadline monitor — registration, the nightly sweep and the alert contract
   phase: 1
