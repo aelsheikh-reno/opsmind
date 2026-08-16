@@ -1,5 +1,5 @@
 {
-  "tests": 718,
+  "tests": 723,
   "coverage_bp": 8165,
   "why": [
     "The number of tests the suite must not drop below.",
@@ -10,7 +10,7 @@
     "gates all answer 'did what ran pass' — none answers 'did everything still",
     "run'. This is a ratchet, not a target: it fails on a DECREASE only.",
     "",
-    "Bumped to 487 with kernel-entities-law, to 574 with gate-coverage-strict-path, and again with module-deadlines-civil-date and module-deadlines-thresholds — the two halves of one split, which landed separately and each added 53. Raised to 718 by gate-stale-input-refusal, whose review found the worktree refusal failing OPEN on any git error; the eleven added tests break git itself rather than the pathspec. Left at its creation value of 317 while the suite grew to 487, the ratchet would have admitted the deletion of every kernel test — review caught that. Bump it in the PR that adds the tests, not later.",
+    "Bumped to 487 with kernel-entities-law, to 574 with gate-coverage-strict-path, and again with module-deadlines-civil-date and module-deadlines-thresholds — the two halves of one split, which landed separately and each added 53. Raised to 718 by gate-stale-input-refusal, whose review found the worktree refusal failing OPEN on any git error; the eleven added tests break git itself rather than the pathspec. Raised to 723 by gate-suite-flakiness: three cover the named deadline that replaced a bare hook timeout, and two hold eslint.config.mjs's global ignore list against the template's — an ignore switches off every rule for a path, so it was the one way left to soften a boundary rule that the block comparison could not see. Left at its creation value of 317 while the suite grew to 487, the ratchet would have admitted the deletion of every kernel test — review caught that. Bump it in the PR that adds the tests, not later.",
     "",
     "Bump this number when a task legitimately adds tests. A task that",
     "legitimately REMOVES them — consolidating cases into one it.each, deleting",
