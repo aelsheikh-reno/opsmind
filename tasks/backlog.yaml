@@ -936,7 +936,7 @@
       - "An instant falling on a different calendar day in the zone than in UTC resolves to the zone's day"
       - "An unknown IANA zone throws, naming it, rather than falling back to UTC"
   risk: compliance
-  status: todo
+  status: done
   note: >
     The first of the three nodes module-deadlines-sweep was split into when its
     implementation measured 532 lines against the unwaivable 400 (Ahmed's
@@ -987,7 +987,7 @@
       - "A deadline type with no ThresholdTable row is reported as unconfigured, never scored as safe"
       - "A fingerprint is deterministic and carries no severity, so an escalation does not change identity"
   risk: compliance
-  status: todo
+  status: done
   note: >
     The second of the three nodes module-deadlines-sweep was split into when its
     implementation measured 532 lines against the unwaivable 400 (Ahmed's
@@ -1576,7 +1576,7 @@
       - "Adding a test file does not change whether an unrelated file passes"
   risk: low
   blocks_product: true
-  status: todo
+  status: done
   note: >
     BLOCKS PRODUCT. A false red is the same class of defect as a false green:
     both mean the verdict does not describe the subject (Ahmed, 2026-08-16).
