@@ -1714,7 +1714,7 @@
     is why it shipped.
 
     Legacy disagrees and legacy is right here: reference/legacy/lib/email.ts:174,
-    239,260 puts EVERY overdue item in the red "Overdue — action needed now"
+    :238-239 and :260 put EVERY overdue item in the red "Overdue — action needed now"
     section and counts it in the urgent subject line, regardless of type. Legacy
     has no per-type severity, so overdue there is uniformly top-tier. That made
     the new build quieter than the product it replaces, on exactly the deadlines

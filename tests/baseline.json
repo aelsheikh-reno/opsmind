@@ -1,6 +1,6 @@
 {
-  "tests": 724,
-  "coverage_bp": 8165,
+  "tests": 738,
+  "coverage_bp": 8170,
   "why": [
     "The number of tests the suite must not drop below.",
     "",
