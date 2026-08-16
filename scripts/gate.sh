@@ -499,10 +499,36 @@ if git rev-parse --verify -q "$base" >/dev/null; then
   # docs/ covers the specification tree; *.md catches prose that lives beside
   # the code it describes — a module README is documentation wherever it sits.
   # Both are size-impl only: size-total below still counts every line.
-  impl=$(added ':(top,exclude)docs/' ':(top,exclude)*.md' \
-               ':(top,exclude)prisma/migrations/**/*.sql' \
-               ':(top,exclude)tests/' ':(top,exclude)scripts/test-guards.sh'); total=$(added)
-  run "size-impl"  "test $impl -lt $impl_budget || { echo 'implementation is $impl added lines, limit $impl_budget — split the task'; false; }"
+  impl_paths=(':(top,exclude)docs/' ':(top,exclude)*.md'
+              ':(top,exclude)prisma/migrations/**/*.sql'
+              ':(top,exclude)tests/' ':(top,exclude)scripts/test-guards.sh')
+  total=$(added)
+
+  # A COMMENT IS NOT IMPLEMENTATION (ADR-035). size-impl is the one measurement
+  # that READS the added lines rather than counting them: in a .ts or .tsx file
+  # a comment-only line and a blank line are not implementation, and charging
+  # them to the budget makes deleting them the cheapest path to green —
+  # inverting the annotation finding the 400 itself rests on, which is ADR-026
+  # and ADR-028's argument about the third artifact a reviewer reads.
+  #
+  # The reading is the TypeScript compiler's, in scripts/size-impl.mjs through
+  # the reader in tests/kernel/kernel-source.ts, never a pattern: a `//` inside
+  # a string, a template literal or a JSX expression is code. A line carrying
+  # code AND a trailing comment counts as code, in full. Everything that is not
+  # .ts or .tsx is counted by --numstat exactly as before, and size-total below
+  # still counts every line of every file. It fails closed: a script that cannot
+  # run, cannot reach the reader or cannot classify a file FAILS the line rather
+  # than report a number — under-counting is how an oversized implementation
+  # gets through (ADR-031).
+  if impl=$(node "$here/size-impl.mjs" --base "$base" -- ':(top)' "${nolock[@]}" \
+                 "${impl_paths[@]}" 2>&1); then
+    run "size-impl"  "test $impl -lt $impl_budget || { echo 'implementation is $impl added code lines, limit $impl_budget — split the task'; false; }"
+  else
+    printf '%-14s' "size-impl"; echo "FAIL"
+    echo "$impl" | tail -25 | sed 's/^/    /'
+    echo "    size-impl measured nothing and must not report a budget it did not weigh."
+    fail=1
+  fi
   run "size-total" "test $total -lt $total_budget || { echo 'whole diff is $total added lines, limit $total_budget — split the task'; false; }"
 else
   printf '%-14s' "size"; echo "FAIL"; echo "    cannot resolve $base — refusing to skip the size gate"; fail=1

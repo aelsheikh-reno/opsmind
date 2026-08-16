@@ -1884,6 +1884,38 @@
     partial credit: the alternative is a gate that rewards moving explanation
     onto the same line as the code it explains.
 
+- id: gate-size-impl-guard-fixtures
+  title: The size probes need what a real gate run needs — a compiler and the reader
+  phase: 0
+  depends_on: [gate-size-impl-exclude-comments]
+  spec: docs/architecture/decisions.md#adr-035
+  produces:
+    - scripts/test-guards.sh
+  done_when:
+    gates: [lint, types, tests, guards]
+    assertions:
+      - "Every size probe in scripts/test-guards.sh passes again, including the six whose fixture carries a .ts file"
+      - "A probe fixture reaches a resolvable typescript and tests/kernel/kernel-source.ts, rather than the script being softened for a toolchain-less directory"
+      - "The measurement probes still fail an oversized implementation and still exempt docs, tests, generated DDL and the guard harness"
+  risk: low
+  status: todo
+  note: >
+    LEFT RED BY gate-size-impl-exclude-comments, deliberately and outside its
+    produces list. size-impl now classifies a .ts or .tsx line with the
+    TypeScript compiler through tests/kernel/kernel-source.ts (ADR-035), so the
+    measurement needs the typescript package and that reader. The budget probes
+    build their fixtures as a copy of scripts/ in a temp directory with
+    neither, so the six whose fixture carries a .ts file refuse — correctly —
+    and the guards gate is red until this lands.
+
+    The fix is the one ADR-031 already recorded for this file: make the fixture
+    the state a real run requires. Symlink node_modules into it (ignored there,
+    so `git add -A` does not commit a symlink to an absolute path) and copy the
+    reader in before the base commit. Do NOT relax the script for a directory
+    missing its toolchain — under-counting is what size-impl exists to close.
+    tests/gates/size-impl-comments.test.ts already builds its gate fixtures this
+    way and passes, so the shape is proven.
+
 - id: kernel-repository-integration-tests
   title: Integration tests over the six kernel repositories, against CI Postgres
   phase: 1
