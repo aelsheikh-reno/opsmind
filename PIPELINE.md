@@ -116,9 +116,12 @@ Nothing merges until every gate passes. Gates are scripts, not judgements.
 
 | Gate | Enforces |
 |---|---|
+| `commit` | Printed on every run, pass or fail: the short SHA, branch and base the suite measured. A verdict with no stated subject is unreadable |
+| `worktree` | Refuses when a file the gate measures is uncommitted, and refuses separately — in different words, carrying git's own error — when it cannot read the tree at all. The run stops there either way: no other gate is measured or printed (ADR-031) |
 | `lint` | Style, plus the module-boundary import rules |
 | `types` | `tsc --noEmit`, no `any` introduced in a diff |
 | `boundaries` | No module writes another's tables; no page imports a module; only `repository.ts` touches the database |
+| `guards` | `scripts/test-guards.sh`: every guard still blocks what it claims to, in both directions. Full suite only — the fixtures call `gate.sh --summary`, so a guard line reachable from `--summary` would never terminate |
 | `tests` | Unit and integration pass |
 | `test-count` | The suite never shrinks: the runtime test total against the `tests` floor in `tests/baseline.json` |
 | `cov-report` | `vitest run --coverage` ran and exited clean. The report it must produce is `coverage/lcov.info`; a report that is absent, empty or declares no measurable line is caught by the two gates below, which read it — and is a failure there, never a pass |
@@ -144,6 +147,39 @@ that stored integer is read from the PR base as well as the branch, so lowering
 it is treated exactly as lowering coverage and needs the same reasoned waiver.
 Every one of these fails closed — a gate that measured nothing must never print
 the same word as one that measured and passed.
+
+**A check states what it measured, and refuses when it cannot (ADR-031).** The
+suite reads two different subjects: `lint`, `types`, `tests` and `cov-report`
+read the working tree, while `size-impl`, `size-total` and `diff-cov` read the
+committed diff `origin/main...HEAD`. Run mid-edit those disagree, and the suite
+reports on a state that exists nowhere — that is how `ALL GATES PASS` was printed
+over a `size-total` of 2746 against a limit of 1700, the fourth time a check here
+has measured the wrong subject while printing the same word a correct one prints.
+So `gate.sh` names the commit on every run and refuses outright when anything it
+measures is uncommitted, in `--summary` as much as in the full suite. Measured
+means everything git tracks or would track, untracked files included, except
+`package-lock.json` and whatever `.gitignore` covers. The price is that the gate
+can no longer be run for a quick read mid-edit; commit or stash first.
+
+The same rule closes the case where the measurement cannot be taken at all. If
+the `git status` that reads the tree fails — `safe.directory` refusing a checkout
+git does not own, a damaged index, a lock held by another process, no repository
+— the gate refuses and prints git's message, rather than reading the empty result
+as a clean tree. That failure direction is the defect itself, not a variant of
+it: every later gate reads commits rather than the index, so a run over rubble
+would otherwise measure normally and reach `ALL GATES PASS`. "The tree is dirty"
+and "the tree could not be read" are different facts and print different words.
+
+**The local gate runs the guard suite, so a broken guard is caught before the
+PR.** Adding the refusal above broke every budget probe in
+`scripts/test-guards.sh` — those fixtures were bare temp directories, not git
+repositories — and `./scripts/gate.sh` still printed `ALL GATES PASS`, because
+the guard suite ran only as a step of its own in `gates.yml`. A local gate that
+omits a check the PR is judged on is the same defect one level up. It is now the
+first line of the full suite and no longer a separate CI step: one invocation,
+not two to keep in sync. The fixtures were fixed by making them real git
+repositories with a clean tree — the state a real run requires — and not by
+relaxing the refusal for anything shaped like a test.
 
 Two size budgets rather than one, because a single number cannot serve both
 jobs. `size-impl` forces a task to split, and an oversized task shows up in

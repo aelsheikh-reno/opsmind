@@ -1498,6 +1498,60 @@
     Deferred from gate-coverage-strict-path for the 400-line budget, not because
     it is acceptable. Recorded in ADR-030.
 
+- id: gate-stale-input-refusal
+  title: The gate measures the committed diff and never says which commit that was
+  phase: 0
+  depends_on: [gate-coverage-strict-path]
+  spec: PIPELINE.md#the-gates
+  produces:
+    - scripts/gate.sh
+    - scripts/test-guards.sh
+    - .github/workflows/gates.yml
+    - tests/gates/stale-input.test.ts
+    - tests/baseline.json
+    - docs/architecture/decisions.md
+    - PIPELINE.md
+    - tasks/backlog.yaml
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "gate.sh prints the commit SHA it measured on every run, pass or fail, in the gate column format"
+      - "An uncommitted change to a file the gate measures fails the run and names the file"
+      - "An untracked file in a measured path counts as dirty"
+      - "--summary refuses on a stale tree exactly as the full suite does"
+      - "A change confined to a path the gate does not measure still runs — it does not over-refuse"
+      - "The refusal exits before any other gate prints a verdict"
+      - "A tree the gate cannot read is refused in different words from a dirty one, and git's own stderr is printed"
+      - "gate.sh's full suite runs scripts/test-guards.sh as a gate line, so a broken guard is caught before the PR and not by CI"
+      - "The guard line is in the full suite only, because the fixtures call --summary and would otherwise re-enter it without terminating"
+      - "Every fixture scripts/test-guards.sh builds is a real git repository with a clean tree, so each probe runs the code path a real run takes"
+      - "The refusal is not softened for the fixtures — no flag, no environment variable and no shape test turns it off in a real checkout"
+      - ".github/workflows/gates.yml runs the guard suite exactly once, through gate.sh"
+  risk: low
+  blocks_product: true
+  status: todo
+  note: >
+    THE DEFECT, OBSERVED. gate.sh was run on module-deadlines-sweep, printed ALL
+    GATES PASS including size-total, the work was then committed, and the true
+    figure was 2746 against a limit of 1700 — a FAIL. The gate had weighed the
+    PREVIOUS commit and printed the same word a correct run prints.
+
+    Fourth instance of one pattern: the stale baseline read on every run;
+    gates=FAILURE treated as a terminal state to stop waiting on, which merged a
+    red gate (#30); an empty diff reading as green, which reported size-impl pass
+    on a 450-line task against 400; and this one. The generalising rule is that a
+    check must state what it measured and refuse when it cannot measure the thing
+    it claims to. Recorded as ADR-031.
+
+    BLOCKS PRODUCT. Every size and coverage verdict in the repository is a claim
+    about a commit nobody named, so no merged number can be trusted to be about
+    the tree it merged.
+
+    Do not soften the refusal for --summary. The Stop hook calls it after every
+    turn, so a summary that silently measures a different tree is the same defect
+    at higher frequency. The accepted cost is that the gate can no longer be run
+    mid-edit for a quick read.
+
 - id: kernel-repository-integration-tests
   title: Integration tests over the six kernel repositories, against CI Postgres
   phase: 1

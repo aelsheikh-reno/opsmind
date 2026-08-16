@@ -18,6 +18,122 @@ run() {
   else echo "FAIL"; echo "$out" | tail -25 | sed 's/^/    /'; fail=1; fi
 }
 
+# ---- the subject: which commit, and is it the one you have ------------------
+# A check must state what it measured, and refuse when it cannot measure the
+# thing it claims to. This is the fourth instance of one pattern in this
+# repository — a check measuring the wrong subject while printing the same word
+# a correct one prints. The stale baseline read on every run; `gates=FAILURE`
+# treated as terminal, which merged a red gate (#30); an empty diff reading as
+# green, which reported size-impl pass on a 450-line task against 400; and this
+# one, a gate run before the commit it claimed to measure — ALL GATES PASS
+# including size-total, then the commit landed and the true figure was 2746
+# against a limit of 1700.
+#
+# The suite measures two different subjects: the WORKING TREE (lint, types,
+# tests, cov-report) and the COMMITTED DIFF `$base...HEAD` (size-impl,
+# size-total, diff-cov). While those agree the distinction is invisible. The
+# moment they disagree the run reports on a state that exists nowhere, in the
+# vocabulary of a run that measured something real.
+#
+# So: name the commit on every run, pass or fail, and refuse outright when the
+# tree does not match it. The refusal exits before any other gate prints, on
+# purpose — a verdict that could be about either of two trees is worse than no
+# verdict, so no other verdict is offered.
+#
+# WHERE THE LINE IS DRAWN. "Files the gate measures" is everything git tracks or
+# would track, minus two sets:
+#
+#   * package-lock.json, which the nolock pathspec below already excludes from
+#     size-impl and size-total, and which vitest's coverage.include never
+#     selects. Committing it moves no number this suite prints.
+#   * anything .gitignore covers, as a rule and not as a list. An ignored path
+#     cannot reach `$base...HEAD`, so it can move no number this suite prints —
+#     that argument holds for whatever .gitignore happens to say, which is why
+#     the set is deliberately not enumerated. An enumeration drifts from the file
+#     it paraphrases and then describes a set that is not the set. git status
+#     omits ignored files unless asked, so the rule needs no pathspec here.
+#     Where ignoring and measuring meet is a path .gitignore covers that a commit
+#     carries anyway — `git add -f`, or a re-include such as the
+#     !prisma/migrations/**/*.sql rule. That is in the committed diff, so it is
+#     measured, exactly like any other committed file.
+#
+# Everything else is measured, because size-total counts every added line of it:
+# a dirty docs/ page, a dirty .claude/ prompt and a dirty backlog node each move
+# a printed number. The narrower rule — refuse only for lib/ and tests/ — was
+# rejected because it would have passed the exact defect that prompted this,
+# scripts/gate.sh being neither.
+#
+# Untracked files count, listed with -uall so a new directory is named by its
+# files rather than collapsed to a folder. An untracked file in a measured path
+# is precisely a file the committed diff does not have and the next commit will.
+#
+# Every pathspec carries :(top) for the reason the size measurement does: run
+# from a subtree without it, git status reports only that subtree and a dirty
+# file elsewhere goes unseen — under-refusing is the direction that reproduces
+# the defect.
+#
+# THE REF IS NAMED FROM symbolic-ref, NOT FROM rev-parse --abbrev-ref. On a
+# detached HEAD the latter prints the literal string "HEAD" and exits 0, so a
+# `|| echo detached` fallback after it is unreachable and the line reads
+# "on HEAD" — a branch name no branch has. The fallback then fires only where
+# git could not answer at all, asserting detachment about a repository the
+# script could not read. Both halves are the failure this file exists to stop: a
+# line stating a subject it did not measure. symbolic-ref fails on a detached
+# HEAD and only then, so the three cases separate cleanly — on a branch, off a
+# branch, and no readable HEAD, which is a different sentence from either.
+base="${GATE_BASE:-origin/main}"
+head_sha=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+if head_ref=$(git symbolic-ref --quiet --short HEAD 2>/dev/null); then :
+elif git rev-parse --verify -q HEAD >/dev/null 2>&1; then head_ref="a detached HEAD"
+else head_ref="an unreadable repository"; fi
+printf '%-14s%s\n' "commit" "$head_sha on $head_ref, measured against $base"
+
+# FAIL CLOSED WHEN THE MEASUREMENT CANNOT BE TAKEN. Discarding git's exit status
+# here makes the whole refusal fail OPEN: any failure of this command yields the
+# empty string, `-n` reads that as "clean tree", and the run proceeds to report
+# on a tree it never looked at — the exact defect one level up. It does not
+# self-rescue either, because rev-parse, `diff --quiet` and `diff --numstat` all
+# read commits rather than the index and keep answering normally.
+#
+# The triggers are routine, not exotic: safe.directory refusing a checkout it
+# does not own (containers, the self-hosted runner), an unreadable object store,
+# a concurrent git holding a lock, a damaged index, a git too old for :(top)
+# pathspec magic, and no repository at all. "The tree is dirty" and "the tree
+# could not be read" are different facts and must not print the same word, so
+# they get different messages — and git's own stderr is surfaced rather than
+# swallowed, because `fatal: detected dubious ownership` is the line an operator
+# acts on. stderr is captured separately from stdout: folded together, a mere
+# warning on a successful run would be reported as an offending file.
+#
+# Both refusals sit ahead of the mode branch, so --summary gets them unchanged.
+status_err=$(mktemp 2>/dev/null) || status_err=/dev/null
+measured_dirty=$(git status --porcelain -uall -- \
+                 ':(top)' ':(top,exclude)*package-lock.json' 2>"$status_err")
+status_rc=$?
+status_msg=$(cat "$status_err" 2>/dev/null)
+[[ "$status_err" == /dev/null ]] || rm -f "$status_err"
+if (( status_rc != 0 )); then
+  printf '%-14s' "worktree"; echo "FAIL"
+  echo "    could not read the working tree — git status exited $status_rc. Whether any"
+  echo "    measured file is uncommitted is unknown here, and a check that cannot"
+  echo "    measure what it claims to must refuse rather than assume the good case."
+  echo "    git said:"
+  echo "${status_msg:-(no message on stderr)}" | sed 's/^/        /'
+  echo "    Fix the repository and re-run. Nothing was measured."
+  echo "GATES FAILED — do not open a PR"
+  exit 1
+fi
+if [[ -n "$measured_dirty" ]]; then
+  printf '%-14s' "worktree"; echo "FAIL"
+  echo "    working tree dirty — the gate measures the committed diff"
+  echo "    ($base...HEAD, at $head_sha) and would report on a different state"
+  echo "    than you have. Uncommitted changes in measured paths:"
+  echo "$measured_dirty" | sed 's/^/        /'
+  echo "    Commit or stash them and re-run. Nothing else was measured."
+  echo "GATES FAILED — do not open a PR"
+  exit 1
+fi
+
 # ---- risk level -------------------------------------------------------------
 # Locally, /build-task writes .task-current.yaml. In CI that file is never
 # present — it is deliberately uncommitted — so before this fallback existed
@@ -166,11 +282,36 @@ if [[ "$mode" == "--summary" ]]; then
   report_waiver
   printf '%-14s%s\n' "size-impl" "$impl_budget"
   printf '%-14s%s\n' "size-total" "$total_budget"
-  echo "changed:     $(git status --porcelain 2>/dev/null | wc -l) files"
+  # Reachable only past the refusal above, so whatever this counts is in a path
+  # the gate does not measure — a lockfile, or nothing. Saying "files" flat
+  # would read as the old number and invite the old inference.
+  echo "changed:     $(git status --porcelain 2>/dev/null | wc -l | tr -d ' ') uncommitted file(s), none in a measured path"
   exit $fail
 fi
 
 # ---- full suite -------------------------------------------------------------
+# THE GUARDS FIRST — the checks that check the checks. This line exists because
+# of a fifth instance of the pattern the commit line above documents, and this
+# time the check that measured the wrong thing was this file. The refusal above
+# was added, `./scripts/gate.sh` printed ALL GATES PASS, and CI went red: every
+# sandbox fixture in scripts/test-guards.sh was a bare directory rather than a
+# git repository, so the refusal fired inside all ten budget probes and the
+# whole guard suite was broken. The local gate calls itself the pre-PR verdict
+# while not running a check CI runs, so "pass" here and "pass" there were
+# answers to different questions — the same defect one level up.
+#
+# FULL MODE ONLY, and the reason is structural rather than a matter of speed
+# (the suite takes about three seconds, which --summary could afford).
+# test-guards.sh probes gate.sh by running it inside throwaway fixture
+# repositories. From --summary — which the fixtures call — this line would
+# re-enter the suite on every probe and would not terminate. The fixtures stub
+# their own copy of test-guards.sh for the same reason, exactly as they already
+# stub npx and npm: a sandbox built to observe one measurement proves nothing by
+# re-running the whole suite inside itself. That stub is a file in a temporary
+# copy of scripts/. There is no flag, and no environment variable, that turns
+# this line off in a real checkout.
+run "guards" "bash \"$here/test-guards.sh\""
+
 run "lint"   "npx eslint ."
 run "types"  "npx tsc --noEmit"
 run "tests"  "npx vitest run"
@@ -272,8 +413,8 @@ run "cov-report" "npx vitest run --coverage"
 # fails on size-impl regardless of how few tests accompany it.
 #
 # scripts/test-guards.sh is test code that happens to sit outside tests/: it
-# does nothing but assert the guards still block what they claim to, and
-# gates.yml runs it as a step of its own. Counted as implementation it caused
+# does nothing but assert the guards still block what they claim to, and the
+# full suite above runs it as a gate line. Counted as implementation it caused
 # precisely the damage the split exists to prevent — gate-size-waiver measured
 # 413 impl lines against the 400 limit with 276 of them guard probes, so the
 # cheapest way to pass was to stop probing the guards, and a guard that has
@@ -332,7 +473,6 @@ run "cov-report" "npx vitest run --coverage"
 # so that --summary can state them too.
 report_waiver
 nolock=(':(top,exclude)*package-lock.json')
-base="${GATE_BASE:-origin/main}"
 git rev-parse --verify -q "$base" >/dev/null || git fetch -q origin main 2>/dev/null || true
 if git rev-parse --verify -q "$base" >/dev/null; then
   # An empty diff is not a pass. The size gates measure `$base...HEAD`, so a
