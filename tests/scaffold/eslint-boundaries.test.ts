@@ -63,6 +63,7 @@ const HOOK_TIMEOUT_MS = CONFIG_LOAD_BUDGET_MS + 30_000;
 
 interface FlatEntry {
   files?: unknown;
+  ignores?: unknown;
   rules?: Record<string, unknown>;
 }
 
@@ -73,9 +74,11 @@ function isBoundaryBlock(entry: unknown): entry is FlatEntry {
   return Object.prototype.hasOwnProperty.call(rules, BOUNDARY_RULE);
 }
 
-// An ignore is a rule switched off for a path, and it is switched off for EVERY
-// rule at once — which makes the global ignore list the cheapest way to defeat
-// the comparison below. `globalIgnores(["lib/**"])` in eslint.config.mjs
+// An ignore is a rule switched off for a path, and a GLOBAL ignore switches off
+// every rule at once — which makes the global ignore list one of the two
+// cheapest ways to defeat the comparison below. (The other is an `ignores` on a
+// boundary block itself; see ALLOWED_BLOCK_IGNORES.)
+// `globalIgnores(["lib/**"])` in eslint.config.mjs
 // disables the whole enforcement layer for the code it exists to enforce, and
 // nothing caught it: this file passed 7/7 with it in place, and
 // check-boundaries.sh exited 0, because the boundary blocks were all still there
@@ -96,6 +99,43 @@ const ALLOWED_EXTRA_IGNORES = new Map([
       "generator output, never authored, never committed",
   ],
 ]);
+
+// THE SAME SOFTENING, ONE BLOCK DOWN.
+//
+// `globalIgnorePatterns` below collects only entries that carry no `files` key,
+// because that is what makes an ignore global. An `ignores` written INSIDE a
+// boundary block is therefore not collected by it — and the block comparison
+// read `files` and `rules` and never `ignores`. So one line, `ignores:
+// ["lib/**"]`, added to the block at eslint.config.mjs:33 passed this file 9/9,
+// left scripts/check-boundaries.sh exiting 0, and took a planted
+// lib/_probe/probe.ts carrying both a deep module import and `@/lib/db` from 2
+// errors to 0. That is the whole enforcement layer off for lib/ — the outcome
+// the global-ignore comparison exists to prevent, at the same price and just as
+// invisible. Block ignores are now compared the way `files` and `rules` are.
+//
+// Keyed by the block's `files` and then the pattern, so an exception is granted
+// to one block rather than to a pattern everywhere. Empty on purpose: no
+// boundary block in either config carries an `ignores` today, and a boundary
+// rule that needs a path carved out of it should say so in its `group`
+// patterns, where the carve-out is readable in the rule itself rather than in a
+// key that silently removes the rule from a tree. Like ALLOWED_EXTRA_IGNORES
+// this is a list a task can append to, and it is defensible for the same
+// reason: the addition lands in the diff with its reason attached.
+const ALLOWED_BLOCK_IGNORES = new Map<string, string>();
+
+/** The key an entry in ALLOWED_BLOCK_IGNORES is written under. */
+function blockIgnoreKey(files: unknown, pattern: string): string {
+  return `${JSON.stringify(files)} ignores ${pattern}`;
+}
+
+/** Patterns this one block's rules skip: its own `ignores`, not a global one. */
+function blockIgnorePatterns(entry: FlatEntry | undefined): Set<string> {
+  const patterns = new Set<string>();
+  const ignores = entry?.ignores;
+  if (!Array.isArray(ignores)) return patterns;
+  for (const pattern of ignores) if (typeof pattern === "string") patterns.add(pattern);
+  return patterns;
+}
 
 /** Patterns ignored for every rule: an entry carrying `ignores` and no `files`. */
 function globalIgnorePatterns(config: unknown[]): Set<string> {
@@ -202,6 +242,46 @@ describe("eslint boundary rules", () => {
         `block ${index + 1} (files ${key}) differs from templates/eslint.config.mjs`,
       ).toEqual(template.rules?.[BOUNDARY_RULE]);
     });
+  });
+
+  it("carries the same ignores on each boundary block as the template", () => {
+    expect(templateBlocks).toHaveLength(3);
+
+    // nothing the project adds. An ignore on a boundary block removes that
+    // block's rule from the path entirely, so it softens exactly as a global
+    // ignore does — it is merely scoped to the one block a reader is looking at
+    for (const block of projectBlocks) {
+      const key = JSON.stringify(block.files);
+      const fromTemplate = blockIgnorePatterns(
+        templateBlocks.find((template) => JSON.stringify(template.files) === key),
+      );
+      for (const pattern of blockIgnorePatterns(block)) {
+        if (fromTemplate.has(pattern)) continue;
+        expect(
+          [...ALLOWED_BLOCK_IGNORES.keys()],
+          `the ${BOUNDARY_RULE} block for files ${key} in eslint.config.mjs ignores ${pattern}, ` +
+            "which templates/eslint.config.mjs does not. An ignore on a boundary block switches " +
+            "that boundary rule off for the path — `ignores: [\"lib/**\"]` here disables the " +
+            "enforcement layer for the code it exists to enforce. Add it to " +
+            "ALLOWED_BLOCK_IGNORES with a reason, or take it out.",
+        ).toContain(blockIgnoreKey(block.files, pattern));
+      }
+    }
+
+    // and nothing the template holds is dropped, the same way the global list
+    // is compared in both directions
+    for (const [index, template] of templateBlocks.entries()) {
+      const key = JSON.stringify(template.files);
+      const match = projectBlocks.find((block) => JSON.stringify(block.files) === key);
+      const inProject = blockIgnorePatterns(match);
+      for (const pattern of blockIgnorePatterns(template)) {
+        expect(
+          [...inProject],
+          `template block ${index + 1} (files ${key}) ignores ${pattern} and eslint.config.mjs ` +
+            "no longer does",
+        ).toContain(pattern);
+      }
+    }
   });
 
   it("turns the boundary rule off only where the template turns it off", () => {
