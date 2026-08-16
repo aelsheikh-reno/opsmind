@@ -1552,6 +1552,60 @@
     at higher frequency. The accepted cost is that the gate can no longer be run
     mid-edit for a quick read.
 
+- id: gate-suite-flakiness
+  title: A suite that is sometimes wrong teaches everyone to retry instead of read
+  phase: 0
+  depends_on: [gate-stale-input-refusal]
+  spec: PIPELINE.md#the-gates
+  produces:
+    - tests/scaffold/eslint-boundaries.test.ts
+    - vitest.config.ts
+    - eslint.config.mjs
+    - templates/eslint.config.mjs
+    - docs/architecture/decisions.md
+    - tasks/backlog.yaml
+    - tests/baseline.json
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "The full suite passes repeatedly under load, and the measured pass rate is reported"
+      - "The bound reflects what the work actually costs, and says so where it is set"
+      - "A hook that exceeds its bound fails naming what it was doing, never as a bare timeout"
+      - "An agent worktree under .claude/worktrees/ is never linted, so reference/legacy cannot be rescanned through it"
+      - "Adding a test file does not change whether an unrelated file passes"
+  risk: low
+  blocks_product: true
+  status: todo
+  note: >
+    BLOCKS PRODUCT. A false red is the same class of defect as a false green:
+    both mean the verdict does not describe the subject (Ahmed, 2026-08-16).
+
+    tests/scaffold/eslint-boundaries.test.ts has a beforeAll bounded at vitest's
+    default 10s that takes 10.2-14.3s under load. It dynamically imports two
+    eslint flat configs, and importing eslint.config.mjs pulls the whole
+    typescript-eslint graph — the work is genuinely expensive, so the bound is
+    wrong rather than the test being stuck. It passed 3/3 standalone and failed
+    roughly half of eight gate runs while another agent was working.
+
+    The trigger is not the file that fails. ANY new test file adds a concurrent
+    worker and tips it, so the next node to add tests inherits a red suite it
+    did not cause. gate-stale-input-refusal took the count from 22 to 23 and was
+    the last one that fitted.
+
+    Raise or remove the bound rather than reaching for the timeout alone: if the
+    import is what costs, say so where the number is set, so the next person to
+    see the figure does not read it as a budget the test overran.
+
+    Why it is worth a node: a gate that is sometimes wrong teaches everyone to
+    retry instead of read, and that is how the stale baseline went unread for
+    twelve merges. The retry habit is the damage, not the minutes.
+
+    Carries the durable eslint fix too. An agent worktree under
+    .claude/worktrees/ is a full second checkout including reference/legacy/,
+    and eslint scanned it and reported 935 errors in the outer repository. It is
+    gitignored now, but eslint's flat config does not read .gitignore, so the
+    ignore must be stated in the config or it recurs on the next worktree agent.
+
 - id: kernel-repository-integration-tests
   title: Integration tests over the six kernel repositories, against CI Postgres
   phase: 1
