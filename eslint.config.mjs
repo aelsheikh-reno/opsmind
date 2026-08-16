@@ -10,7 +10,23 @@ export default defineConfig([
   // generated/** holds the Prisma client built from the legacy schema by
   // prisma/generate-legacy-client.mjs — generator output, never authored and
   // never committed, alongside .next/** and build/**.
-  globalIgnores([".next/**", "out/**", "build/**", "generated/**", "next-env.d.ts", "reference/**"]),
+  //
+  // Flat config does NOT read .gitignore, so every ignore has to be stated here
+  // or it does not exist. .claude/worktrees/** is the case that proved it: an
+  // agent worktree is a full second checkout, reference/legacy and all, and
+  // eslint walked into one and reported 935 errors against the OUTER repository
+  // — files no PR had touched, in a tree that is not the subject of the run.
+  // Adding it to .gitignore fixed the diff and left the lint gate reading two
+  // checkouts as one, so it is stated here too and is in templates/ as well.
+  globalIgnores([
+    ".next/**",
+    "out/**",
+    "build/**",
+    "generated/**",
+    "next-env.d.ts",
+    "reference/**",
+    ".claude/worktrees/**",
+  ]),
 
   // 1 · modules are reached through their index; the database through repositories
   {

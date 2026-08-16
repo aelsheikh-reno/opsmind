@@ -7,7 +7,26 @@ import nextTs from "eslint-config-next/typescript";
 export default defineConfig([
   ...nextVitals,
   ...nextTs,
-  globalIgnores([".next/**", "out/**", "build/**", "next-env.d.ts", "reference/**"]),
+  // Flat config does NOT read .gitignore, so every ignore has to be stated here
+  // or it does not exist. That is why .claude/worktrees/** is in this list even
+  // though git already ignores it: an agent worktree is a full second checkout,
+  // reference/legacy and all, and eslint walked into one and reported 935 errors
+  // against the OUTER repository — files no PR had touched, in a tree that is
+  // not the subject of the run. Ignoring it in git fixed the diff and left the
+  // lint gate reading two checkouts as one.
+  //
+  // It belongs in the template rather than only in the project because every
+  // project this scaffolds is built by the same agent harness and grows the same
+  // directory on its first parallel task. reference/** is here for the same
+  // shape of reason: a second tree of code the project does not own.
+  globalIgnores([
+    ".next/**",
+    "out/**",
+    "build/**",
+    "next-env.d.ts",
+    "reference/**",
+    ".claude/worktrees/**",
+  ]),
 
   // 1 · modules are reached through their index; the database through repositories
   {
