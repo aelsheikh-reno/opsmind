@@ -6,26 +6,42 @@
 //
 // The first form prints one integer: the added lines of `<base>...<head>` under
 // the given pathspecs, counting a `.ts` or `.tsx` line only when it carries
-// code. A comment-only line and a blank line are not implementation and a
-// trailing comment discounts nothing — ADR-035 carries the argument. Every
-// other file is counted exactly as `git diff --numstat` counts it, unchanged.
-// The second form prints `<line>\t<kind>\t<text>` for one file, so what the
-// gate believes about a file can be read rather than inferred from a total.
+// code. Comment-only lines and blank lines are not implementation (ADR-035) —
+// the 400 comes from a study of reviewer cognitive load whose other finding was
+// that authors who annotate ship fewer defects, so charging annotations to the
+// code budget makes deleting them the cheapest path to green. A trailing
+// comment discounts nothing: a line carrying code counts in full. Every other
+// file is counted exactly as `git diff --numstat` counts it, unchanged.
 //
-// NOT A PATTERN, AND NOT A SECOND PARSER. `//` inside a string literal, a
-// template literal or a JSX expression is code, and only a parser knows it —
-// this repository has already been bitten by a line scanner reading
-// declarations out of string literals. So the classification is
-// tests/kernel/kernel-source.ts's `classifyLines`, called here rather than
-// reimplemented: two implementations drift, and the suite would grade one.
-// There is no `tsx` or `ts-node` here and node 20 cannot import TypeScript, so
-// the reader is transpiled with `ts.transpileModule` and the JavaScript
-// imported from `node_modules/.cache` — where a bare `import ts from
-// "typescript"` still resolves (node walks up from the importing file) and
-// which is gitignored, so the copy can never dirty the tree being measured.
-// `typescript` itself is imported dynamically, inside the classifier alone, so
-// a diff with no .ts or .tsx file needs no compiler: --numstat has answered,
-// and a measurement should not acquire a dependency it does not use.
+// The second form prints `<line>\t<kind>\t<text>` for one file, so that what
+// the gate believes about a file can be read directly rather than inferred from
+// a total. It is what the demonstrations in the pull request are captured from.
+//
+// WHY A NODE SCRIPT AND NOT MORE AWK. Deciding whether a line is a comment
+// needs the parser, not a pattern: `//` inside a string literal, inside a
+// template literal and inside a JSX expression is code, and this repository has
+// already been bitten once by a line scanner that read declarations out of
+// string literals. tests/kernel/kernel-source.ts is the reader built for that
+// lesson — it parses with `ts.createSourceFile` and collects comments as
+// `ts.CommentRange[]` — so the classification is ITS `classifyLines`, called
+// here rather than reimplemented. Two implementations would drift, and the
+// suite would only ever grade one of them.
+//
+// HOW A .ts FILE IS REACHED FROM PLAIN NODE. There is no `tsx` or `ts-node` in
+// this repository and node 20 cannot import TypeScript, so the reader is
+// transpiled with `ts.transpileModule` and the JavaScript is imported. The copy
+// is written to `node_modules/.cache`, which is chosen for reasons and not for
+// taste: a bare `import ts from "typescript"` inside the copy has to resolve
+// (node walks up from the importing file, so anything under `node_modules/`
+// finds its sibling), and the directory is gitignored, so the copy can never
+// make the tree the gate measures dirty. What the copy must NOT be trusted for
+// is its own idea of where the repository is — the note in `classifier()` below
+// says why, and it is the reason only its pure functions are used.
+//
+// `typescript` is imported dynamically, inside the classifier and nowhere else,
+// so that a diff carrying no .ts or .tsx file needs no compiler at all: there
+// is nothing to classify, --numstat has already answered, and a measurement
+// should not acquire a dependency it does not use.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -37,10 +53,10 @@ const READER = path.join(ROOT, "tests", "kernel", "kernel-source.ts");
 const CACHE = path.join(ROOT, "node_modules", ".cache");
 
 // FAIL CLOSED, ALWAYS. Every exit from here is non-zero with a reason on
-// stderr, which gate.sh prints under a FAILing size-impl line. A measurement
-// that cannot be taken must not be reported as one that was (ADR-031); the
-// direction that matters is under-counting, since a size-impl that quietly
-// classified nothing would pass every oversized implementation ever written.
+// stderr, and gate.sh prints it under a FAILing size-impl line. A measurement
+// that cannot be taken must not be reported as one that was (ADR-031), and the
+// direction that matters here is under-counting: a size-impl that quietly
+// classifies nothing would pass every oversized implementation ever written.
 function refuse(message) {
   process.stderr.write(`size-impl cannot measure this diff: ${message}\n`);
   process.exit(1);
@@ -61,9 +77,11 @@ function git(args, cwd) {
 }
 
 /**
- * The reader's `classifyLines`, transpiled and loaded. A missing reader, an
- * unreachable compiler, a transpile that reports diagnostics and a module that
- * no longer exports what it must all refuse.
+ * The reader's `classifyLines`, transpiled and loaded. Anything that goes wrong
+ * on the way — a missing reader, a compiler that cannot be loaded, a transpile
+ * that reports diagnostics, a copy that cannot be written or imported, a module
+ * that does not export what it must — refuses rather than returning something
+ * that would classify nothing.
  */
 async function classifier() {
   if (!existsSync(READER)) refuse(`${READER} is missing; nothing can classify a line without it`);
@@ -113,12 +131,17 @@ async function classifier() {
   } catch (error) {
     refuse(`could not load the transpiled reader from ${copy} — ${error.message ?? error}`);
   }
-  if (typeof loaded.classifyLines !== "function") refuse(`${READER} exports no classifyLines`);
+  if (typeof loaded.classifyLines !== "function") {
+    refuse(`${READER} no longer exports classifyLines`);
+  }
   // ONLY THE PURE FUNCTIONS OF THE COPY MAY BE USED. `classifyLines` takes a
-  // string and touches no filesystem. The reader's `REPO_ROOT` resolves from
-  // the copy's own location, and `node_modules` is a symlink often enough (an
-  // agent worktree, a gate fixture) that the copy is not reliably under the
-  // tree being measured — so anything reading files through it needs a root.
+  // string and touches no filesystem, which is why it is safe to call on a copy
+  // that lives somewhere else. The reader's `REPO_ROOT` and everything built on
+  // it (`kernelFiles`, `kernelModules`) resolve from the copy's own location —
+  // and `node_modules` is a symlink often enough, in an agent worktree or in a
+  // gate fixture, that the copy is not reliably under the tree being measured.
+  // Anything here that starts reading files through the reader has to be handed
+  // a root rather than trusting that one.
   return loaded.classifyLines;
 }
 
@@ -165,12 +188,14 @@ function changedFiles(base, head, pathspecs, cwd) {
 /**
  * The line numbers each file gained, read from a zero-context patch: `@@ -a,b
  * +c,d @@` says d lines were added starting at c in the post-image, and an
- * absent count means one — the shape scripts/coverage-gate.sh already reads.
+ * absent count means one. The same shape scripts/coverage-gate.sh reads to find
+ * the lines a task must cover.
  *
- * The file a hunk belongs to comes from the `+++ b/<path>` header rather than
- * from `diff --git`, whose two paths cannot be split unambiguously when one
- * contains a space. Every path parsed here must be one --numstat also named;
- * a disagreement between the two readings is refused, never resolved.
+ * The file a hunk belongs to is taken from the `+++ b/<path>` header rather
+ * than from `diff --git`, whose two paths cannot be split unambiguously when
+ * one contains a space. Every path parsed here must be one --numstat also
+ * named; anything else means the two readings disagree, and a disagreement is
+ * refused rather than resolved.
  */
 function addedLines(base, head, pathspecs, cwd, known) {
   const patch = git(
@@ -243,11 +268,20 @@ async function measure(base, head, pathspecs, cwd) {
 
 async function classifyFile(file) {
   const classifyLines = await classifier();
-  if (!existsSync(file)) refuse(`there is no file at ${file} to classify`);
-  const source = readFileSync(file, "utf8");
-  const text = source.split("\n");
+  // Read through a catch rather than an existsSync test: a directory, a broken
+  // symlink and a file the runner cannot read are all "cannot classify this",
+  // and only the error says which. A refusal that names the wrong cause sends
+  // its reader somewhere the fault is not.
+  let source;
+  try {
+    source = readFileSync(file, "utf8");
+  } catch (error) {
+    refuse(`could not read ${file} — ${error.message ?? error}`);
+  }
   const kinds = classifyLines(source, { tsx: file.endsWith(".tsx") });
-  process.stdout.write(`${kinds.map((k, i) => `${i + 1}\t${k}\t${text[i]}`).join("\n")}\n`);
+  const text = source.split("\n");
+  const out = kinds.map((kind, index) => `${index + 1}\t${kind}\t${text[index]}`);
+  process.stdout.write(`${out.join("\n")}\n`);
 }
 
 async function main(argv) {

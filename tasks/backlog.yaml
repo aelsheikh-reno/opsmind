@@ -1833,6 +1833,7 @@
   produces:
     - scripts/gate.sh
     - scripts/size-impl.mjs
+    - scripts/test-guards.sh
     - tests/kernel/kernel-source.ts
     - tests/gates/size-impl-comments.test.ts
     - docs/architecture/decisions.md
@@ -1840,7 +1841,7 @@
     - tasks/backlog.yaml
     - tests/baseline.json
   done_when:
-    gates: [lint, types, tests]
+    gates: [lint, types, tests, guards]
     assertions:
       - "A comment-only line in a .ts or .tsx file does not count toward size-impl"
       - "A blank line does not count toward size-impl"
@@ -1900,21 +1901,30 @@
   risk: low
   status: todo
   note: >
-    LEFT RED BY gate-size-impl-exclude-comments, deliberately and outside its
-    produces list. size-impl now classifies a .ts or .tsx line with the
-    TypeScript compiler through tests/kernel/kernel-source.ts (ADR-035), so the
-    measurement needs the typescript package and that reader. The budget probes
-    build their fixtures as a copy of scripts/ in a temp directory with
-    neither, so the six whose fixture carries a .ts file refuse — correctly —
-    and the guards gate is red until this lands.
+    ABSORBED BY gate-size-impl-exclude-comments, which now lists
+    scripts/test-guards.sh in its produces and carries the fix. The history is
+    kept here because the reasoning is the record: size-impl now classifies a
+    .ts or .tsx line with the TypeScript compiler through
+    tests/kernel/kernel-source.ts (ADR-035), so taking the measurement needs the
+    typescript package and that reader. The budget probes in
+    scripts/test-guards.sh built their fixtures as a copy of scripts/ in a temp
+    directory with neither, so the six whose fixture carries a .ts file — the
+    docs-heavy pair, the README case, the tests/ case, the test-guards.sh case
+    and "the failure names the real implementation count" — refused, correctly,
+    and the `guards` gate was red until the fix landed.
 
-    The fix is the one ADR-031 already recorded for this file: make the fixture
-    the state a real run requires. Symlink node_modules into it (ignored there,
-    so `git add -A` does not commit a symlink to an absolute path) and copy the
-    reader in before the base commit. Do NOT relax the script for a directory
-    missing its toolchain — under-counting is what size-impl exists to close.
-    tests/gates/size-impl-comments.test.ts already builds its gate fixtures this
-    way and passes, so the shape is proven.
+    The fix is the one ADR-031 already recorded for this same file: make the
+    fixture the state a real run requires. Symlink the repository's
+    node_modules into the fixture (and add it to the fixture .gitignore, so
+    `git add -A` does not commit a symlink to an absolute path) and copy
+    tests/kernel/kernel-source.ts in before the base commit. Do NOT relax the
+    script for a directory missing its toolchain: under-counting is the
+    direction size-impl exists to close, and a fixture that cannot measure is
+    not a smaller version of a real run.
+
+    tests/gates/size-impl-comments.test.ts already builds its gate fixtures
+    exactly this way and its end-to-end cases pass, so the shape was proven; the
+    fix is the same three lines applied to fixture_repo().
 
 - id: kernel-repository-integration-tests
   title: Integration tests over the six kernel repositories, against CI Postgres

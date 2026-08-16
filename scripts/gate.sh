@@ -505,21 +505,31 @@ if git rev-parse --verify -q "$base" >/dev/null; then
   total=$(added)
 
   # A COMMENT IS NOT IMPLEMENTATION (ADR-035). size-impl is the one measurement
-  # that READS the added lines rather than counting them: in a .ts or .tsx file
-  # a comment-only line and a blank line are not implementation, and charging
-  # them to the budget makes deleting them the cheapest path to green —
-  # inverting the annotation finding the 400 itself rests on, which is ADR-026
-  # and ADR-028's argument about the third artifact a reviewer reads.
+  # that reads the added lines rather than counting them, because in a .ts or
+  # .tsx file a comment-only line and a blank line are not implementation and
+  # must not be charged to a budget whose whole job is to force an oversized
+  # task to split. The 400 comes from the SmartBear/Cisco study of reviewer
+  # cognitive load, and the same study found that authors who ANNOTATE ship
+  # materially fewer defects — so charging annotations to the code budget makes
+  # deleting them the cheapest path to green, inverting the finding the number
+  # rests on. This is ADR-026 and ADR-028's argument about the third artifact a
+  # reviewer reads.
   #
-  # The reading is the TypeScript compiler's, in scripts/size-impl.mjs through
-  # the reader in tests/kernel/kernel-source.ts, never a pattern: a `//` inside
-  # a string, a template literal or a JSX expression is code. A line carrying
-  # code AND a trailing comment counts as code, in full. Everything that is not
-  # .ts or .tsx is counted by --numstat exactly as before, and size-total below
-  # still counts every line of every file. It fails closed: a script that cannot
-  # run, cannot reach the reader or cannot classify a file FAILS the line rather
-  # than report a number — under-counting is how an oversized implementation
-  # gets through (ADR-031).
+  # The reading is the TypeScript compiler's, in scripts/size-impl.mjs, via the
+  # reader in tests/kernel/kernel-source.ts — never a pattern match. A `//`
+  # inside a string literal, a template literal or a JSX expression is code, and
+  # only the parser knows the difference; a line scanner reading declarations
+  # out of string literals is a mistake this repository has already made once.
+  # A line carrying code AND a trailing comment counts as code, in full.
+  #
+  # Everything that is not .ts or .tsx is counted exactly as before, by
+  # --numstat, and size-total is untouched — it still counts every line of
+  # every file, comments and blanks included.
+  #
+  # It fails closed. If the script cannot run, cannot reach the reader, or
+  # cannot classify a file, size-impl FAILS and prints why: a budget that
+  # silently classified nothing would under-count, and under-counting is how an
+  # oversized implementation gets through (ADR-031).
   if impl=$(node "$here/size-impl.mjs" --base "$base" -- ':(top)' "${nolock[@]}" \
                  "${impl_paths[@]}" 2>&1); then
     run "size-impl"  "test $impl -lt $impl_budget || { echo 'implementation is $impl added code lines, limit $impl_budget — split the task'; false; }"
