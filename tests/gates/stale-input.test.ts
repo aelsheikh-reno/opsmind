@@ -151,12 +151,12 @@ const MODES = ["full", "--summary"] as const;
 // ---------------------------------------------------------------------------//
 
 describe("assertion 1 · every run names the commit it measured", () => {
-  it.each(MODES)("prints the real HEAD sha on a clean tree in %s mode", (mode) => {
+  it("prints the real HEAD sha on a clean tree", () => {
     // A clean tree in full mode would npx-download a toolchain into a temp dir,
     // so the clean pass is taken in --summary; the dirty run below proves the
     // line is printed in full mode too, since it is printed before the branch.
     const dir = fixture();
-    const result = runGate(dir, mode === "full" ? "--summary" : mode);
+    const result = runGate(dir);
     expect(result.line("commit"), result.out).toContain(headSha(dir));
     expect(result.code, result.out).toBe(0);
   });
