@@ -163,6 +163,57 @@ export function isTimeZone(zone: string): boolean {
   return canonicalTimeZone(zone) !== null && !isFixedOffsetZone(zone);
 }
 
+// The civil zone of each jurisdiction this build serves, keyed on ISO 3166-1
+// alpha-2 — the same five countries, and the same map, that the backfill in
+// prisma/migrations/20260815090000_deadline_calendar_timezone states in full. A
+// zone is a decision about a country, so it is written out rather than derived.
+const CIVIL_ZONE_BY_CODE: Record<string, string> = {
+  AE: "Asia/Dubai",
+  EG: "Africa/Cairo",
+  SA: "Asia/Riyadh",
+  KW: "Asia/Kuwait",
+  BH: "Asia/Bahrain",
+};
+
+/**
+ * What to type instead of an offset, for the jurisdiction with this ISO code —
+ * or with `null` when the caller could not name it. A refusal that does not say
+ * what to type gets worked around, and the way it gets worked around is UTC.
+ *
+ * Prose rather than a zone, and deliberately: this is the sentence a refusal
+ * ends with, not a lookup. Nothing here may fill the column — it has no default
+ * precisely so that the zone is a decision somebody made about a country, and a
+ * suggestion an administrator types is that decision while one applied on their
+ * behalf is the defect the column exists to prevent. Returning a sentence
+ * nobody can store keeps the distinction honest.
+ *
+ * A CODE OUTSIDE THE FIVE IS NAMED, NEVER GUESSED AT. It gets the register and
+ * an instruction to choose that country's zone: inventing a sixth jurisdiction's
+ * zone is the guess CLAUDE.md rule 8 forbids, because a neighbour's zone looks
+ * configured, reads without complaint, and computes every deadline in that
+ * country on the wrong civil day. The backfill migration aborts on an unmapped
+ * code for the same reason; this is that refusal in the same words. `null` —
+ * no such jurisdiction, or a database that did not answer — gets the register
+ * too, so a refusal stays actionable even when nothing can be read.
+ */
+export function civilZoneAdvice(code: string | null): string {
+  const zone = code === null ? undefined : CIVIL_ZONE_BY_CODE[code];
+  if (zone !== undefined) {
+    return `${code} keeps civil time in ${zone}, so that is what this calendar should carry.`;
+  }
+  const register = Object.entries(CIVIL_ZONE_BY_CODE)
+    .map(([isoCode, isoZone]) => `${isoCode} ${isoZone}`)
+    .join(", ");
+  const missing =
+    code === null
+      ? "This jurisdiction could not be named here, so neither can its zone"
+      : `OpsMind has no civil zone recorded for ${code}`;
+  return (
+    `${missing}; the ones it serves are ${register}. Choose that country's own zone ` +
+    "deliberately — never a neighbour's, and never UTC."
+  );
+}
+
 export {
   businessCalendarFor,
   getJurisdiction,
