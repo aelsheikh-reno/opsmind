@@ -1529,7 +1529,7 @@
       - ".github/workflows/gates.yml runs the guard suite exactly once, through gate.sh"
   risk: low
   blocks_product: true
-  status: todo
+  status: done
   note: >
     THE DEFECT, OBSERVED. gate.sh was run on module-deadlines-sweep, printed ALL
     GATES PASS including size-total, the work was then committed, and the true
