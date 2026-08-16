@@ -1565,6 +1565,7 @@
     - docs/architecture/decisions.md
     - tasks/backlog.yaml
     - tests/baseline.json
+    - .gitignore
   done_when:
     gates: [lint, types, tests]
     assertions:
