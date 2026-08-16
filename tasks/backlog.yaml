@@ -1752,6 +1752,7 @@
       - "A deadline type whose every ThresholdTable row carries the lowest severity is flagged in Settings, naming the type"
       - "The flag says what it means: this type can never report above the lowest band, overdue included"
       - "A type with at least one window above the lowest severity is not flagged"
+      - "A type with no ThresholdTable row at all is NOT flagged here — that is the sweep's unconfigured-type alert, and one condition gets one signal"
       - "The warning never blocks the save, exactly as the misordered-threshold warning does not"
   risk: low
   status: todo
@@ -1770,9 +1771,12 @@
     Settings says it out loud and leaves the decision where it belongs. Blocking
     the save would forbid the legitimate case outright.
 
-    Open, for the implementing node to settle with Ahmed rather than choose: a
-    type with NO rows at all is already the sweep's unconfigured-type alert, so
-    whether it is also flagged here or deliberately left alone is undecided.
+    SETTLED (Ahmed, 2026-08-16): it does NOT fire for a type with no rows at
+    all. That condition is already the sweep's unconfigured-type alert, and two
+    signals for one condition teaches people to ignore both. The two cases are
+    different in kind and that is the whole line: no rows is a HOLE, and
+    minor-only rows is a DELIBERATE CHOICE worth a nudge.
+
     Declared only — do not build with this node's parent.
 
 - id: kernel-repository-integration-tests
