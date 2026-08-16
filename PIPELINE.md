@@ -116,6 +116,8 @@ Nothing merges until every gate passes. Gates are scripts, not judgements.
 
 | Gate | Enforces |
 |---|---|
+| `commit` | Printed on every run, pass or fail: the short SHA, branch and base the suite measured. A verdict with no stated subject is unreadable |
+| `worktree` | Refuses when a file the gate measures is uncommitted. The run stops there — no other gate is measured or printed (ADR-031) |
 | `lint` | Style, plus the module-boundary import rules |
 | `types` | `tsc --noEmit`, no `any` introduced in a diff |
 | `boundaries` | No module writes another's tables; no page imports a module; only `repository.ts` touches the database |
@@ -144,6 +146,19 @@ that stored integer is read from the PR base as well as the branch, so lowering
 it is treated exactly as lowering coverage and needs the same reasoned waiver.
 Every one of these fails closed — a gate that measured nothing must never print
 the same word as one that measured and passed.
+
+**A check states what it measured, and refuses when it cannot (ADR-031).** The
+suite reads two different subjects: `lint`, `types`, `tests` and `cov-report`
+read the working tree, while `size-impl`, `size-total` and `diff-cov` read the
+committed diff `origin/main...HEAD`. Run mid-edit those disagree, and the suite
+reports on a state that exists nowhere — that is how `ALL GATES PASS` was printed
+over a `size-total` of 2746 against a limit of 1700, the fourth time a check here
+has measured the wrong subject while printing the same word a correct one prints.
+So `gate.sh` names the commit on every run and refuses outright when anything it
+measures is uncommitted, in `--summary` as much as in the full suite. Measured
+means everything git tracks or would track, untracked files included, except
+`package-lock.json` and whatever `.gitignore` covers. The price is that the gate
+can no longer be run for a quick read mid-edit; commit or stash first.
 
 Two size budgets rather than one, because a single number cannot serve both
 jobs. `size-impl` forces a task to split, and an oversized task shows up in

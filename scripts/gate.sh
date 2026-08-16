@@ -18,6 +18,71 @@ run() {
   else echo "FAIL"; echo "$out" | tail -25 | sed 's/^/    /'; fail=1; fi
 }
 
+# ---- the subject: which commit, and is it the one you have ------------------
+# A check must state what it measured, and refuse when it cannot measure the
+# thing it claims to. This is the fourth instance of one pattern in this
+# repository — a check measuring the wrong subject while printing the same word
+# a correct one prints. The stale baseline read on every run; `gates=FAILURE`
+# treated as terminal, which merged a red gate (#30); an empty diff reading as
+# green, which reported size-impl pass on a 450-line task against 400; and this
+# one, a gate run before the commit it claimed to measure — ALL GATES PASS
+# including size-total, then the commit landed and the true figure was 2746
+# against a limit of 1700.
+#
+# The suite measures two different subjects: the WORKING TREE (lint, types,
+# tests, cov-report) and the COMMITTED DIFF `$base...HEAD` (size-impl,
+# size-total, diff-cov). While those agree the distinction is invisible. The
+# moment they disagree the run reports on a state that exists nowhere, in the
+# vocabulary of a run that measured something real.
+#
+# So: name the commit on every run, pass or fail, and refuse outright when the
+# tree does not match it. The refusal exits before any other gate prints, on
+# purpose — a verdict that could be about either of two trees is worse than no
+# verdict, so no other verdict is offered.
+#
+# WHERE THE LINE IS DRAWN. "Files the gate measures" is everything git tracks or
+# would track, minus two sets:
+#
+#   * package-lock.json, which the nolock pathspec below already excludes from
+#     size-impl and size-total, and which vitest's coverage.include never
+#     selects. Committing it moves no number this suite prints.
+#   * anything .gitignore covers — coverage/, node_modules/, .next/, generated/
+#     and .task-current.yaml. That is the gate's own output and its deliberately
+#     uncommitted input; none of it can appear in `$base...HEAD`. git status
+#     omits ignored files unless asked, which is why none is named here.
+#
+# Everything else is measured, because size-total counts every added line of it:
+# a dirty docs/ page, a dirty .claude/ prompt and a dirty backlog node each move
+# a printed number. The narrower rule — refuse only for lib/ and tests/ — was
+# rejected because it would have passed the exact defect that prompted this,
+# scripts/gate.sh being neither.
+#
+# Untracked files count, listed with -uall so a new directory is named by its
+# files rather than collapsed to a folder. An untracked file in a measured path
+# is precisely a file the committed diff does not have and the next commit will.
+#
+# Every pathspec carries :(top) for the reason the size measurement does: run
+# from a subtree without it, git status reports only that subtree and a dirty
+# file elsewhere goes unseen — under-refusing is the direction that reproduces
+# the defect.
+base="${GATE_BASE:-origin/main}"
+head_sha=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+head_ref=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "detached")
+printf '%-14s%s\n' "commit" "$head_sha on $head_ref, measured against $base"
+
+measured_dirty=$(git status --porcelain -uall -- \
+                 ':(top)' ':(top,exclude)*package-lock.json' 2>/dev/null)
+if [[ -n "$measured_dirty" ]]; then
+  printf '%-14s' "worktree"; echo "FAIL"
+  echo "    working tree dirty — the gate measures the committed diff"
+  echo "    ($base...HEAD, at $head_sha) and would report on a different state"
+  echo "    than you have. Uncommitted changes in measured paths:"
+  echo "$measured_dirty" | sed 's/^/        /'
+  echo "    Commit or stash them and re-run. Nothing else was measured."
+  echo "GATES FAILED — do not open a PR"
+  exit 1
+fi
+
 # ---- risk level -------------------------------------------------------------
 # Locally, /build-task writes .task-current.yaml. In CI that file is never
 # present — it is deliberately uncommitted — so before this fallback existed
@@ -166,7 +231,10 @@ if [[ "$mode" == "--summary" ]]; then
   report_waiver
   printf '%-14s%s\n' "size-impl" "$impl_budget"
   printf '%-14s%s\n' "size-total" "$total_budget"
-  echo "changed:     $(git status --porcelain 2>/dev/null | wc -l) files"
+  # Reachable only past the refusal above, so whatever this counts is in a path
+  # the gate does not measure — a lockfile, or nothing. Saying "files" flat
+  # would read as the old number and invite the old inference.
+  echo "changed:     $(git status --porcelain 2>/dev/null | wc -l | tr -d ' ') uncommitted file(s), none in a measured path"
   exit $fail
 fi
 
@@ -332,7 +400,6 @@ run "cov-report" "npx vitest run --coverage"
 # so that --summary can state them too.
 report_waiver
 nolock=(':(top,exclude)*package-lock.json')
-base="${GATE_BASE:-origin/main}"
 git rev-parse --verify -q "$base" >/dev/null || git fetch -q origin main 2>/dev/null || true
 if git rev-parse --verify -q "$base" >/dev/null; then
   # An empty diff is not a pass. The size gates measure `$base...HEAD`, so a
