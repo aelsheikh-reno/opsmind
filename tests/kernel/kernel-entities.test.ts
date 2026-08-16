@@ -82,13 +82,31 @@
 // the weekend-mask block makes one field over — but it is implementer-written,
 // not independently derived, and it is marked so a reader weighs it as such.
 //
+// THE BLOCK BELOW IT — "a business calendar may not be configured in UTC" —
+// HAS A THIRD PROVENANCE, AND IT IS THE STRICTEST OF THE THREE. It covers
+// tasks/backlog.yaml#timezone-reject-utc and was written from the specification
+// alone: components-core-deadline-monitor.md:60 and data-model.md:152, both
+// amended by Ahmed's decision of 2026-08-16, plus the four public names the task
+// states — `isTimeZone`, `isFixedOffsetZone`, `civilZoneAdvice`,
+// `setBusinessCalendar`. Neither `lib/kernel/jurisdiction/index.ts` nor its
+// `repository.ts` was opened while writing it, not even for a signature: the
+// calls are bound from the shapes already used by the block above and from the
+// task's statement of the surface. Every expected value below is quoted from a
+// document, never observed from a run.
+//
 // No other file under `lib/kernel/` was read by the author. The declarations
 // swept below are read by the test process, from `index.ts` and the
 // declarations it re-exports, and never from a function body.
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { managerChain, type Person } from "@/lib/kernel/person";
-import { isTimeZone, isWeekendMask, setBusinessCalendar } from "@/lib/kernel/jurisdiction";
+import {
+  civilZoneAdvice,
+  isFixedOffsetZone,
+  isTimeZone,
+  isWeekendMask,
+  setBusinessCalendar,
+} from "@/lib/kernel/jurisdiction";
 import { documentAmount, type Document } from "@/lib/kernel/document";
 import {
   KERNEL_DIR,
@@ -402,6 +420,348 @@ describe("a calendar's time zone is one Intl can resolve", () => {
       },
     );
   }, 30_000);
+});
+
+// ---- a calendar's zone is a CIVIL zone, and UTC is not one --------------------
+
+describe("a business calendar may not be configured in UTC", () => {
+  // tasks/backlog.yaml#timezone-reject-utc. Ahmed's decision, 2026-08-16, in
+  // components-core-deadline-monitor.md:60 — "A calendar may not be configured
+  // in UTC, and the refusal names the zone that jurisdiction uses …
+  // Required-with-no-default stops the zone being *inherited*; it does not stop
+  // it being *typed*, and `UTC` is a genuine IANA name, so a validator that asks
+  // only 'can Intl read this' accepts the one value the column exists to
+  // prevent"; and data-model.md:152 — "Refused on write, together with every
+  // equivalent spelling … and the fixed offsets `Etc/GMT±N`".
+  //
+  // WHY THIS IS NOT PEDANTRY. The sweep fires at 02:00, which in the Gulf is
+  // 22:00 the previous UTC day, so a calendar reading UTC scores four hours of
+  // every day against yesterday: every threshold window shifts by one, and on
+  // the last night before a filing the following night is already past it.
+  //
+  // The rule under test is "the name denotes a place, not an offset". That is
+  // why the acceptance cases below matter more than the refusals: an
+  // implementation that refuses on the OFFSET passes every rejection case here
+  // and is still wrong, because it would refuse Africa/Abidjan — a real civil
+  // zone with real civil rules that happens to sit at UTC+0 today.
+  //
+  // None of these need a database. The predicates and the advice are pure; the
+  // write-path cases are refused where the value enters, which is the claim.
+
+  // components-core-deadline-monitor.md:60 — "The error names the jurisdiction's
+  // own zone — AE `Asia/Dubai`, EG `Africa/Cairo`, SA `Asia/Riyadh`,
+  // KW `Asia/Kuwait`, BH `Asia/Bahrain`". The same map the backfill migration
+  // writes (prisma/migrations/20260815090000_deadline_calendar_timezone).
+  const CIVIL_ZONE_OF: Record<string, string> = {
+    AE: "Asia/Dubai",
+    EG: "Africa/Cairo",
+    SA: "Asia/Riyadh",
+    KW: "Asia/Kuwait",
+    BH: "Asia/Bahrain",
+  };
+  const CIVIL_ZONES = Object.values(CIVIL_ZONE_OF);
+
+  // The spellings the spec names one by one, all of which Intl resolves — which
+  // is the whole problem: every one of them passes a resolvability check.
+  const UTC_SPELLINGS = ["UTC", "Etc/UTC", "Etc/GMT", "Etc/Zulu", "GMT", "Zulu", "UCT"];
+
+  // The placeless area itself. Listed separately from the spellings above
+  // because the rule is the AREA — "IANA collects the placeless names in one
+  // area, `Etc/`, with the bare spellings linking into it — rather than a list
+  // of spellings someone hopes is complete".
+  const ETC_AREA = ["Etc/UCT", "Etc/Universal", "Etc/Greenwich", "Etc/GMT0", "Etc/GMT+0", "Etc/GMT-0"];
+
+  // "the fixed offsets `Etc/GMT±N`, which carry no civil rules and so cannot
+  // follow a country when it changes its clocks: `Etc/GMT-2` matched Cairo until
+  // Egypt reintroduced summer time in 2023".
+  const FIXED_OFFSETS = ["Etc/GMT+5", "Etc/GMT-3", "Etc/GMT-2", "Etc/GMT+12", "Etc/GMT-14"];
+
+  function resolvesInIntl(zone: string): boolean {
+    try {
+      new Intl.DateTimeFormat("en-GB", { timeZone: zone });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function refusal(write: Promise<unknown>): Promise<Error> {
+    const outcome = await write.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    if (!(outcome instanceof Error)) {
+      throw new Error(
+        `setBusinessCalendar resolved, or rejected with a non-Error (${String(outcome)}). ` +
+          "The value was supposed to be refused where it enters.",
+      );
+    }
+    return outcome;
+  }
+
+  it("rejects UTC itself — the one value the column exists to prevent", () => {
+    // Required-with-no-default stopped the zone being inherited. This stops it
+    // being typed. A calendar carrying UTC is the defect, chosen by hand.
+    expect(isTimeZone("UTC"), "a business calendar may not be configured in UTC").toBe(false);
+  });
+
+  it("rejects every equivalent spelling of UTC, or the rule is decoration", () => {
+    // All seven resolve in this runtime — asserted, so the case cannot quietly
+    // become "Intl refused it anyway" and stop testing anything.
+    for (const zone of UTC_SPELLINGS) {
+      expect(resolvesInIntl(zone), `${zone} resolves, so refusing it is this rule's work`).toBe(
+        true,
+      );
+      expect(isTimeZone(zone), `${zone} is UTC under another name, not a civil zone`).toBe(false);
+    }
+  });
+
+  it("rejects the whole placeless Etc area, not a list of spellings someone hopes is complete", () => {
+    for (const zone of ETC_AREA) {
+      expect(resolvesInIntl(zone), `${zone} resolves, so refusing it is this rule's work`).toBe(
+        true,
+      );
+      expect(isTimeZone(zone), `${zone} is in the placeless area, so it denotes no country`).toBe(
+        false,
+      );
+    }
+  });
+
+  it("rejects the fixed offsets, which cannot follow a country when it moves its clocks", () => {
+    for (const zone of FIXED_OFFSETS) {
+      expect(resolvesInIntl(zone), `${zone} resolves, so refusing it is this rule's work`).toBe(
+        true,
+      );
+      expect(isTimeZone(zone), `${zone} is an offset, and an offset has no civil rules`).toBe(false);
+    }
+  });
+
+  it("rejects all of them case-insensitively — a zone typed in another case is the same zone", () => {
+    // "case-insensitively" is in the decision by name. Without it the rule is a
+    // spelling test, and `utc` is the workaround anyone finds first.
+    const shouted = ["utc", "Utc", "uTc", "etc/utc", "Etc/UtC", "gmt", "GmT", "zulu", "uct"];
+    const offsets = ["etc/gmt+5", "ETC/GMT-3", "Etc/gmt+12"];
+    for (const zone of [...shouted, ...offsets]) {
+      expect(isTimeZone(zone), `${zone} is UTC in another case, and must not slip through`).toBe(
+        false,
+      );
+    }
+  });
+
+  it("tells a fixed offset from a civil zone", () => {
+    // `isFixedOffsetZone` is the half of the rule about offsets. Etc/GMT±N is
+    // one; a country's zone never is, however its offset happens to read today.
+    for (const zone of [...FIXED_OFFSETS, "Etc/GMT+0", "etc/gmt+5"]) {
+      expect(isFixedOffsetZone(zone), `${zone} names an offset, not a place`).toBe(true);
+    }
+    for (const zone of [...CIVIL_ZONES, "Africa/Abidjan", "Atlantic/Reykjavik", "US/Eastern"]) {
+      expect(isFixedOffsetZone(zone), `${zone} names a place, whatever its offset`).toBe(false);
+    }
+  });
+
+  it("never accepts a zone it calls a fixed offset", () => {
+    // The two predicates cannot disagree: a fixed offset is refused, always.
+    for (const zone of [...UTC_SPELLINGS, ...ETC_AREA, ...FIXED_OFFSETS, ...CIVIL_ZONES]) {
+      if (isFixedOffsetZone(zone)) {
+        expect(isTimeZone(zone), `${zone} is a fixed offset and must be refused`).toBe(false);
+      }
+    }
+  });
+
+  it("still accepts the civil zone of every jurisdiction this build serves", () => {
+    // The refusal above must not take the product with it. These five are the
+    // zones the error itself tells an administrator to type.
+    for (const zone of CIVIL_ZONES) {
+      expect(isTimeZone(zone), `${zone} is the civil zone of a jurisdiction OpsMind serves`).toBe(
+        true,
+      );
+    }
+  });
+
+  it("accepts a civil zone that happens to sit at UTC+0, because the rule is about the name", () => {
+    // "a zone at UTC+0 that names a place, `Africa/Abidjan`, stays valid,
+    // because the refusal is about civil rules and never about arithmetic".
+    // The instant is fixed, and the offset is asserted rather than assumed, so
+    // this case keeps testing what it says even if one of these zones later
+    // adopts an offset: the point is that isTimeZone is true WHILE the zone
+    // reads the same clock as UTC.
+    const instant = new Date("2026-08-16T12:00:00Z");
+    const inZone = (zone: string) =>
+      new Intl.DateTimeFormat("en-GB", { timeZone: zone, dateStyle: "short", timeStyle: "short" })
+        .format(instant);
+
+    for (const zone of ["Africa/Abidjan", "Atlantic/Reykjavik", "Africa/Accra"]) {
+      expect(inZone(zone), `${zone} is expected to read UTC's clock at this instant`).toBe(
+        inZone("UTC"),
+      );
+      expect(isTimeZone(zone), `${zone} names a place and carries civil rules`).toBe(true);
+    }
+  });
+
+  it("accepts the links and aliases the runtime resolves — the validator is not stricter than the reader", () => {
+    // "Links and aliases the runtime resolves (`Asia/Calcutta`, `US/Eastern`)
+    // stay valid too". A zone civilDateIn can read and setBusinessCalendar
+    // refuses is a calendar nobody can write and the monitor could still meet.
+    for (const zone of ["Asia/Calcutta", "US/Eastern", "Europe/Kiev"]) {
+      expect(resolvesInIntl(zone), `${zone} resolves in this runtime`).toBe(true);
+      expect(isTimeZone(zone), `${zone} is a link the reader accepts, so the writer must too`).toBe(
+        true,
+      );
+    }
+  });
+
+  it("accepts every canonical zone this runtime lists, none of which is placeless", () => {
+    // The property behind the individual cases: Intl's canonical list is all
+    // place-denoting names — it carries no Etc/ entry and no bare spelling — so
+    // every one of them is a zone a calendar may carry. An implementation that
+    // refuses on offset fails here on the Atlantic and West African zones; one
+    // that matches too broad a pattern fails on whatever it swallowed.
+    const zones = Intl.supportedValuesOf("timeZone");
+    expect(zones.length, "the runtime lists no zones, so this property proves nothing").toBeGreaterThan(
+      300,
+    );
+    const placeless = zones.filter((zone) => zone.startsWith("Etc/") || !zone.includes("/"));
+    expect(placeless, "the canonical list is expected to be place-denoting throughout").toEqual([]);
+    const refused = zones.filter((zone) => !isTimeZone(zone));
+    expect(refused, "these are real civil zones and a calendar may carry any of them").toEqual([]);
+  });
+
+  it("accepts nothing this runtime cannot read", () => {
+    // The other direction of the same invariant, over everything this block
+    // names: anything accepted must compute a civil date, or the refusal has
+    // simply moved to 02:00.
+    const candidates = [
+      ...UTC_SPELLINGS,
+      ...ETC_AREA,
+      ...FIXED_OFFSETS,
+      ...CIVIL_ZONES,
+      "Africa/Abidjan",
+      "Asia/Calcutta",
+      "US/Eastern",
+      "Mars/Phobos",
+      "Dubai",
+      "UTC+4",
+      "",
+      "   ",
+    ];
+    for (const zone of candidates.filter((zone) => isTimeZone(zone))) {
+      expect(resolvesInIntl(zone), `${zone} was accepted but Intl cannot read it`).toBe(true);
+    }
+  });
+
+  it("still rejects a zone no runtime can resolve, as before", () => {
+    // The older rule, restated here because this task must not relax it: the
+    // two refusals coexist. "UTC+4" is the shape someone reaches for once told
+    // UTC is refused — an offset typed as a name, and not a zone at all.
+    for (const zone of ["Mars/Phobos", "Dubai", "UTC+4", "+04:00", "Asia/Dubbai", "", "   "]) {
+      expect(isTimeZone(zone), `${zone} is not a zone any runtime can resolve`).toBe(false);
+    }
+  });
+
+  it("refuses to write a calendar configured in UTC, and says what to type instead", async () => {
+    // "Rejection happens on write, where the value enters, not later from Intl
+    // inside civilDateIn." Asserted without a database exactly as the block
+    // above does it: the refusal is the module's own, before any query.
+    //
+    // And it must not merely refuse. "A refusal that does not say what to type
+    // instead gets worked around" — so the message either names the
+    // jurisdiction's own civil zone or, for a jurisdiction outside the five,
+    // names the register the administrator must choose from.
+    const error = await refusal(setBusinessCalendar("jurisdiction-id", [5, 6], "UTC"));
+    expect(error.message, "the refusal must name the value that was written").toMatch(/UTC/i);
+    expect(
+      CIVIL_ZONES.some((zone) => error.message.includes(zone)) || /IANA/i.test(error.message),
+      `the refusal must say what to type instead, and this one does not: ${error.message}`,
+    ).toBe(true);
+  }, 30_000);
+
+  it("does not give the same refusal for UTC as for a zone that is not a zone", async () => {
+    // Two different mistakes. "Type your country's zone" and "that is not a
+    // zone" send an administrator to different places, and one message for both
+    // sends everyone to the wrong one. Compared with the offending value elided,
+    // so the difference cannot be the quoted value alone.
+    const utc = await refusal(setBusinessCalendar("jurisdiction-id", [5, 6], "UTC"));
+    const nonsense = await refusal(setBusinessCalendar("jurisdiction-id", [5, 6], "Mars/Phobos"));
+    const elide = (message: string, value: string) => message.split(value).join("<zone>");
+
+    expect(
+      elide(utc.message, "UTC"),
+      "a UTC calendar and an unreadable one must be told apart by their messages",
+    ).not.toBe(elide(nonsense.message, "Mars/Phobos"));
+  }, 60_000);
+
+  it("suggests each jurisdiction's own civil zone, and only its own", async () => {
+    // "The error names the jurisdiction's own zone — AE `Asia/Dubai`, EG
+    // `Africa/Cairo`, SA `Asia/Riyadh`, KW `Asia/Kuwait`, BH `Asia/Bahrain`".
+    // Its OWN: a sentence that lists all five names nothing and is a menu, not
+    // an answer.
+    for (const [code, zone] of Object.entries(CIVIL_ZONE_OF)) {
+      const advice = civilZoneAdvice(code);
+      expect(advice, `the advice for ${code} must name ${zone}`).toContain(zone);
+      for (const other of CIVIL_ZONES.filter((candidate) => candidate !== zone)) {
+        expect(advice, `the advice for ${code} names ${other}, which is not ${code}'s zone`).not.toContain(
+          other,
+        );
+      }
+    }
+  });
+
+  it("suggests no zone it would itself refuse", () => {
+    // A refusal that suggests a value the same validator rejects is worse than
+    // no suggestion: it sends the administrator round the loop twice.
+    for (const [code, zone] of Object.entries(CIVIL_ZONE_OF)) {
+      expect(civilZoneAdvice(code), `the advice for ${code} must name ${zone}`).toContain(zone);
+      expect(isTimeZone(zone), `${zone} is suggested, so it must be acceptable`).toBe(true);
+    }
+  });
+
+  it("invents no zone for a jurisdiction outside the five, and is no dead end either", () => {
+    // "For a jurisdiction outside those five it names the register and says the
+    // zone must be chosen for that country: inventing a sixth is the guess rule
+    // 8 forbids" (monitor:60), and "A jurisdiction outside those five is named,
+    // not guessed at" (data-model:152).
+    //
+    // ONE WORD HERE IS AMBIGUOUS AND THE TEST IS BUILT NOT TO PICK A SIDE.
+    // "the register" reads either as the IANA database or as OpsMind's own
+    // register of the five jurisdictions it serves; the docs settle which zone
+    // is NOT named but not which register IS. So what is asserted is the part
+    // both readings share and the guess rule turns on: no sixth zone invented,
+    // the unmapped jurisdiction named rather than silently substituted, and a
+    // sentence that is not one of the five answers wearing another country's
+    // label. Flagged for Ahmed rather than decided here.
+    //
+    // "Names none of the five" is too strong to be the test: a sentence that
+    // lists ALL five as the jurisdictions on file offers none of them as the
+    // answer for Qatar, which is what rule 8 forbids. Exactly one of the five,
+    // for a country that is not it, is the guess.
+    for (const code of ["QA", "GB", "XX", "OM", null]) {
+      const advice = civilZoneAdvice(code);
+      const label = String(code);
+      expect(advice.trim(), `the advice for ${label} must not be empty`).not.toBe("");
+
+      const named = CIVIL_ZONES.filter((zone) => advice.includes(zone));
+      expect(
+        named.length === 0 || named.length === CIVIL_ZONES.length,
+        `the advice for ${label} offers ${named.join(", ")} — a zone belonging to another ` +
+          `country, presented as this one's answer: ${advice}`,
+      ).toBe(true);
+
+      for (const [mapped, zone] of Object.entries(CIVIL_ZONE_OF)) {
+        expect(
+          advice,
+          `the advice for ${label} is word for word ${mapped}'s, which names ${zone} for a ` +
+            "jurisdiction that does not use it",
+        ).not.toBe(civilZoneAdvice(mapped));
+      }
+
+      if (code !== null) {
+        expect(
+          advice,
+          `the advice for ${label} does not say which jurisdiction has no zone on file`,
+        ).toContain(code);
+      }
+    }
+  });
 });
 
 // ---- the kernel's public surface loads ---------------------------------------
