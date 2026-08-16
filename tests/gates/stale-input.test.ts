@@ -326,6 +326,20 @@ describe("assertion 5 · a path the gate does not measure still runs", () => {
     expect(result.line("changed"), result.out).toContain("none in a measured path");
   });
 
+  it("still exempts the lockfile when run from a subdirectory", () => {
+    // The pathspec has two jobs — reach the whole repository and exempt the
+    // lockfile — and dropping :(top) breaks them asymmetrically. A lone
+    // `:(exclude)` pathspec resolved against a subdirectory stops excluding
+    // anything while still reporting repository-wide, so the sibling test above
+    // (which watches for under-refusal) passes and this one, watching for
+    // over-refusal, is the only thing that sees it.
+    const dir = fixture({ dirty: { "package-lock.json": '{"lockfileVersion":3,"x":1}\n' } });
+    mkdirSync(path.join(dir, "app/api"), { recursive: true });
+    const result = runGate(dir, "--summary", path.join(dir, "app/api"));
+    expect(result.code, result.out).toBe(0);
+    expect(result.out, "the lockfile stopped being exempt below the root").not.toContain("worktree");
+  });
+
   it("runs with the gate's own output sitting in the tree", () => {
     // coverage/ is written by cov-report during the run itself. A gate that
     // refused because of its own output could never pass.

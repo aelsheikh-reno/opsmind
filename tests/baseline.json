@@ -1,5 +1,5 @@
 {
-  "tests": 707,
+  "tests": 708,
   "coverage_bp": 8165,
   "why": [
     "The number of tests the suite must not drop below.",
