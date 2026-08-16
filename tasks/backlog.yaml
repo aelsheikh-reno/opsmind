@@ -1822,6 +1822,43 @@
     civil rules attached. Etc/GMT+N is a fixed offset rather than a civil zone
     and belongs in the same refusal.
 
+- id: timezone-reject-offset-abbreviations
+  title: Whether a business calendar may carry EET, CET or EST is unsettled
+  phase: 1
+  depends_on: [timezone-reject-utc]
+  spec: docs/architecture/components-core-deadline-monitor.md
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "Ahmed settles whether an offset-denoting abbreviation may be a jurisdiction's civil zone, and the rule the code enforces matches the rule the spec states"
+  risk: low
+  status: todo
+  note: >
+    RECORDED, NOT BUILT — the rule is Ahmed's to settle, not an agent's.
+
+    timezone-reject-utc refuses UTC, its spellings and the Etc/GMT±N fixed
+    offsets. It does NOT refuse EET, CET, MET, WET, EST, MST, HST or the
+    EST5EDT family: those are bare offset-denoting names that link into
+    GEOGRAPHIC zones rather than into Etc/, so they pass a predicate keyed on
+    the Etc/ area. An earlier version of that node claimed IANA collects every
+    placeless name under Etc/; it does not, and the claim has been corrected in
+    the code comment and the spec rather than left standing.
+
+    The hazard is demonstrated, not theoretical. Intl folds EET onto
+    Europe/Athens, whose DST does not coincide with Egypt's, so an Egypt
+    calendar typed EET reports a different civil date for the weeks the two
+    disagree — 2026-04-10T21:30Z is the 10th in Africa/Cairo and the 11th in
+    EET. Narrower than UTC's four hours a day, the same class of wrongness, and
+    the same invisibility. EET is also the plausible mistake: it is what a
+    European-trained administrator reaches for when asked for Egypt's zone.
+
+    Three readings are open and only Ahmed can choose. Refuse every
+    offset-denoting name, so the stated rule "the name denotes a place" holds
+    literally. Or accept them as valid IANA input, and narrow the spec to say
+    only UTC is refused. Or go narrower still and require a jurisdiction's
+    calendar to carry that jurisdiction's own zone, so EET for Egypt is refused
+    as the wrong country rather than the wrong kind of name.
+
 - id: kernel-repository-integration-tests
   title: Integration tests over the six kernel repositories, against CI Postgres
   phase: 1

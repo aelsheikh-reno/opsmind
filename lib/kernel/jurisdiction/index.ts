@@ -92,16 +92,24 @@ function canonicalTimeZone(zone: string): string | null {
  * "GMT-0", "Universal", "Zulu", "Greenwich". Matched case-insensitively,
  * because `Intl` accepts "utc" and "Etc/UtC" as readily as the canonical form.
  *
- * HOW THE BOUNDARY WAS DECIDED, since a list of spellings one hopes is complete
- * is decoration rather than a rule. IANA names a civil zone after the place
- * whose law it encodes — Asia/Dubai, Africa/Cairo — and collects in a single
- * file, `etcetera`, exactly the entries that name no place: UTC, GMT and the
- * fixed offsets, with the single-word forms in `backward` linking into them. So
- * the predicate is "this name denotes an offset, not a place", which is that
- * file and nothing else. It needs no maintenance when tzdata adds an alias, and
- * it does not have to enumerate the seven ways of writing UTC. Every zone that
- * does name a place sits under a geographic area or links to one, and none of
- * those is matched here.
+ * WHAT THIS DOES AND DOES NOT COVER. It refuses UTC, the ways of spelling it,
+ * and the `Etc/GMT±N` fixed offsets — the decision Ahmed took on 2026-08-16.
+ * `Etc/` plus the bare links into it is exactly that set, so tzdata adding an
+ * alias there needs no maintenance here.
+ *
+ * It does NOT cover every name that denotes an offset, and an earlier version of
+ * this comment claimed it did, on the false premise that IANA collects all
+ * placeless names under `Etc/`. It does not: `EET`, `CET`, `MET`, `WET`, `EST`,
+ * `MST`, `HST` and the `EST5EDT` family are bare offset names that link into
+ * GEOGRAPHIC zones, so they pass this predicate. That is a live hazard rather
+ * than a hypothetical — `Intl` folds `EET` onto Europe/Athens, whose DST does
+ * not coincide with Egypt's, so an Egypt calendar typed `EET` computes a
+ * different civil day for the weeks the two disagree. Narrower than UTC's four
+ * hours a day, same class of wrongness, same invisibility.
+ *
+ * Whether a calendar may carry those is a business rule nobody has settled, and
+ * inventing one here is what CLAUDE.md rule 8 forbids — so it is escalated and
+ * recorded, not quietly decided. See `timezone-reject-offset-abbreviations`.
  */
 const NAMES_AN_OFFSET_NOT_A_PLACE = /^(etc\/.*|utc|uct|universal|zulu|greenwich|gmt[+-]?\d*)$/i;
 
