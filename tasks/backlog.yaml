@@ -1685,11 +1685,10 @@
     re-measure rather than assume gate-suite-flakiness settled the question.
 
 - id: overdue-severity
-  title: An overdue deadline takes the highest severity band the system defines
+  title: An overdue deadline takes the highest severity configured for its type
   phase: 1
   depends_on: [module-deadlines-thresholds]
   spec: docs/architecture/components-core-deadline-monitor.md
-  legacy_reference: reference/legacy/lib/email.ts
   produces:
     - lib/modules/deadlines/thresholds.ts
     - tests/modules/deadlines/thresholds.test.ts
@@ -1699,39 +1698,82 @@
   done_when:
     gates: [lint, types, boundaries, tests, coverage, differential]
     assertions:
-      - "An overdue deadline reports the highest severity band the system defines, not the highest configured for its type"
-      - "A type configured with only minor windows still reports the top band once overdue"
+      - "An overdue deadline reports the highest severity configured for its type, not the top band of the severity scale"
+      - "A type configured with only minor windows reports minor once overdue, and that alert still fires and is still reported"
       - "A type with no ThresholdTable row is still unconfigured when overdue, never scored as safe"
       - "The spec sentence, the test and this assertion change together, so no commit leaves the build self-contradictory"
   risk: compliance
   status: todo
   note: >
-    A differential difference, resolved in legacy's favour (Ahmed, 2026-08-16).
+    Restores the per-type ceiling. An overdue deadline breaches every window its
+    type has and reports the highest severity configured FOR THAT TYPE, so a type
+    whose Settings rows are all minor reports minor however far past due it runs.
+    The severity column in Settings is how an administrator says "this type is
+    never urgent", and an overdue stationery order at the same band as a lapsed
+    visa empties the top band of meaning.
 
-    module-deadlines-thresholds built the spec's "reports the highest CONFIGURED
-    severity" as a restriction to the windows configured for that type, so a type
-    whose Settings rows are all minor stayed minor however far past due it went.
-    Two independently written test files reached that reading separately, which
-    is why it shipped.
+    This node earlier scored overdue at the top band of the SEVERITY SCALE
+    instead. That reversal was made on a false premise and is withdrawn (Ahmed,
+    2026-08-16; the error is his). Both grounds failed:
 
-    Legacy disagrees and legacy is right here: reference/legacy/lib/email.ts:174,
-    :238-239 and :260 put EVERY overdue item in the red "Overdue — action needed now"
-    section and counts it in the urgent subject line, regardless of type. Legacy
-    has no per-type severity, so overdue there is uniformly top-tier. Read as a
-    per-type ceiling, a minor-only type could never reach the top band however far
-    past due it ran. The oracle settles the SEMANTICS and not a volume comparison:
-    legacy's digest collects nothing already past due except payroll runs (every
-    query is `gte: now`), so on an expired visa legacy is silent.
+    Legacy is SILENT on this case rather than agreeing with either reading. Its
+    digest never collects an already-expired document, invoice or schedule —
+    every collection query is `gte: now` — so nothing but an unprocessed payroll
+    run reaches its overdue bucket, and on an expired visa it has no opinion at
+    all. It is not louder than this build there, so there is no legacy oracle for
+    this rule and none is cited: legacy_reference is deliberately absent.
 
-    Reversed here: overdue takes the highest band the SEVERITY SCALE defines, not
-    the highest row present for the type. The spec sentence, the pinned test in
-    #44 and the node assertion move in one PR — a reversal split across PRs
-    leaves the build self-contradictory in between, and this rule is pinned by a
-    passing test today.
+    A minor-only type reporting minor is NOT silence. The alert fires, appears in
+    the run and is reported; severity governs urgency, not visibility. The
+    reversal read a low band as no alert.
 
     Unconfigured is untouched. A type with no ThresholdTable row is still
     unconfigured rather than scored, overdue or not: absence of a row is a hole,
     not a severity, and the sweep raises a misconfiguration alert for it.
+
+    The decoupling this node's test work introduced stays: the overdue rule is
+    pinned in exactly one describe, other blocks defer to it by reference rather
+    than restating it, the two property tests hold non-negative domains, and the
+    0-versus-minus-1 boundary is pinned in both directions. That is why this
+    reversal is cheap, and it is the shape to keep if the rule moves again.
+
+- id: settings-warn-minor-only-threshold-type
+  title: Settings warns when a deadline type has no window above the lowest severity
+  phase: 1
+  depends_on: [overdue-severity]
+  spec: docs/architecture/components-core-deadline-monitor.md
+  produces:
+    - lib/modules/deadlines/{thresholds,index}.ts
+    - tests/modules/deadlines/
+    - docs/architecture/components-core-deadline-monitor.md
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "A deadline type whose every ThresholdTable row carries the lowest severity is flagged in Settings, naming the type"
+      - "The flag says what it means: this type can never report above the lowest band, overdue included"
+      - "A type with at least one window above the lowest severity is not flagged"
+      - "The warning never blocks the save, exactly as the misordered-threshold warning does not"
+  risk: low
+  status: todo
+  note: >
+    WARN, NEVER BLOCK — the same shape as the misordered-threshold warning the
+    spec already describes (a tighter window carrying a lower severity is flagged
+    as probably misconfigured without preventing the save). Match that one: same
+    surface, same non-blocking behaviour, same register of wording.
+
+    It exists because a minor-only threshold table is BOTH a legitimate
+    expression of "this type is never urgent" AND a plausible mistake — someone
+    filled in the windows and never revisited the severity column — and only the
+    administrator can tell which. Since overdue-severity restored the per-type
+    ceiling, such a type can never report above the lowest band, not even past
+    due; that is correct when it was meant and invisible when it was not, so
+    Settings says it out loud and leaves the decision where it belongs. Blocking
+    the save would forbid the legitimate case outright.
+
+    Open, for the implementing node to settle with Ahmed rather than choose: a
+    type with NO rows at all is already the sweep's unconfigured-type alert, so
+    whether it is also flagged here or deliberately left alone is undecided.
+    Declared only — do not build with this node's parent.
 
 - id: kernel-repository-integration-tests
   title: Integration tests over the six kernel repositories, against CI Postgres

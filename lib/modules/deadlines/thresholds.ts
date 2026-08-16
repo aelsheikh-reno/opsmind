@@ -51,12 +51,14 @@ function moreSevere(a: Severity, b: Severity): Severity {
 }
 
 /**
- * The most severe level this build can express. Used where the answer cannot
- * come from a row: a MISCONFIGURATION — a jurisdiction with no calendar, a type
- * with no threshold row — where by definition no row exists to read a severity
- * from, and an OVERDUE deadline, which takes the top of the scale rather than
- * the top of its own rows (`severityFor`). Derived from the enum rather than
- * written as a literal, so adding a level moves both.
+ * The most severe level this build can express. Used only for a
+ * MISCONFIGURATION — a jurisdiction with no calendar, a type with no threshold
+ * row — where by definition no row exists to read a severity from. Derived from
+ * the enum rather than written as a literal, so adding a level moves it.
+ *
+ * NOT used for an overdue deadline: an overdue deadline has rows, so its ceiling
+ * is read from them (`severityFor`). Reaching for this function there would put
+ * a type an administrator marked never-urgent at the same band as a lapsed visa.
  */
 export function highestSeverity(): Severity {
   return SEVERITY_ORDER[SEVERITY_ORDER.length - 1];
@@ -77,20 +79,23 @@ export function highestSeverity(): Severity {
  * A window is INCLUSIVE at its bound — exactly seven business days remaining
  * breaches a seven-day window.
  *
- * An OVERDUE deadline, with negative days remaining, takes the highest band the
- * SEVERITY SCALE defines — `highestSeverity()` — and not the highest row present
- * for its type. A type whose Settings rows are all `minor` still reports the top
- * band once it is past due. The oracle is legacy: `reference/legacy/lib/email.ts`
- * partitions every item with `daysLeft < 0` into one `overdue` bucket (:174),
- * renders it as the red "Overdue — action needed now" section ahead of critical
- * (:238-239), and counts all of it into the "urgent" subject line (:260) —
- * regardless of type, because legacy has no per-type severity at all. Reading
- * "configured" as a per-type ceiling capped a minor-only type below the top band
- * however far past due it ran. The oracle settles the SEMANTICS, not a volume
- * comparison: legacy's digest collects nothing already past due except payroll
- * runs (every query is `gte: now`), so on an expired visa it is silent
- * (spec, Note; Ahmed's
- * decision, 2026-08-16, reversing the earlier reading).
+ * An OVERDUE deadline, with negative days remaining, breaches every window its
+ * type has, so it takes the highest severity CONFIGURED FOR ITS TYPE — a
+ * per-type ceiling, not the top of the scale. A type whose Settings rows are all
+ * `minor` reports `minor` however far past due it runs, because the severity
+ * column in Settings is how an administrator says "this type is never urgent",
+ * and an overdue stationery order at the same band as a lapsed visa empties the
+ * top band of meaning (spec, Note).
+ *
+ * That low band is NOT silence: the alert still fires, appears in the run and is
+ * reported. Severity governs urgency, not visibility.
+ *
+ * A 2026-08-16 reversal scored overdue at the top of the scale instead. It was
+ * made on a false premise and is withdrawn (Ahmed, 2026-08-16): legacy is SILENT
+ * on this case rather than louder than this build — its digest collects nothing
+ * already past due except payroll runs, every collection query being `gte: now`
+ * — so it has no opinion on an expired visa, and there is no legacy oracle for
+ * this rule to cite.
  *
  * A type with no rows configured is never breached here, overdue or not. That is
  * a hole, not an answer, so the sweep raises a misconfiguration alert for the
@@ -98,13 +103,11 @@ export function highestSeverity(): Severity {
  * licence to score a type nobody configured.
  */
 export function severityFor(rules: readonly ThresholdRule[], deadlineType: string, businessDaysRemaining: number): Severity | null {
-  if (businessDaysRemaining < 0) {
-    return isConfigured(rules, deadlineType) ? highestSeverity() : null;
-  }
+  const overdue = businessDaysRemaining < 0;
   let worst: Severity | null = null;
   for (const rule of rules) {
     if (rule.deadlineType !== deadlineType) continue;
-    if (businessDaysRemaining > rule.businessDaysBefore) continue;
+    if (!overdue && businessDaysRemaining > rule.businessDaysBefore) continue;
     worst = worst === null ? rule.severity : moreSevere(worst, rule.severity);
   }
   return worst;
