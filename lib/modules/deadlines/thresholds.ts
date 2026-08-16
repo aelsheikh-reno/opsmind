@@ -55,6 +55,10 @@ function moreSevere(a: Severity, b: Severity): Severity {
  * MISCONFIGURATION — a jurisdiction with no calendar, a type with no threshold
  * row — where by definition no row exists to read a severity from. Derived from
  * the enum rather than written as a literal, so adding a level moves it.
+ *
+ * NOT used for an overdue deadline: an overdue deadline has rows, so its ceiling
+ * is read from them (`severityFor`). Reaching for this function there would put
+ * a type an administrator marked never-urgent at the same band as a lapsed visa.
  */
 export function highestSeverity(): Severity {
   return SEVERITY_ORDER[SEVERITY_ORDER.length - 1];
@@ -73,19 +77,36 @@ export function highestSeverity(): Severity {
  * row order (spec, Note; Ahmed's decision, 2026-08-14).
  *
  * A window is INCLUSIVE at its bound — exactly seven business days remaining
- * breaches a seven-day window — and an OVERDUE deadline, with negative days
- * remaining, takes the highest severity configured for its type, whatever
- * windows happen to be written.
+ * breaches a seven-day window.
  *
- * A type with no rows configured is never breached here. That is a hole, not an
- * answer, so the sweep raises a misconfiguration alert for the type rather than
- * this file inventing a default window.
+ * An OVERDUE deadline, with negative days remaining, breaches every window its
+ * type has, so it takes the highest severity CONFIGURED FOR ITS TYPE — a
+ * per-type ceiling, not the top of the scale. A type whose Settings rows are all
+ * `minor` reports `minor` however far past due it runs, because the severity
+ * column in Settings is how an administrator says "this type is never urgent",
+ * and an overdue stationery order at the same band as a lapsed visa empties the
+ * top band of meaning (spec, Note).
+ *
+ * That low band is NOT silence: the alert still fires, appears in the run and is
+ * reported. Severity governs urgency, not visibility.
+ *
+ * A 2026-08-16 reversal scored overdue at the top of the scale instead. It was
+ * made on a false premise and is withdrawn (Ahmed, 2026-08-16): legacy is SILENT
+ * on this case rather than louder than this build — its digest collects nothing
+ * already past due except payroll runs, every collection query being `gte: now`
+ * — so it has no opinion on an expired visa, and there is no legacy oracle for
+ * this rule to cite.
+ *
+ * A type with no rows configured is never breached here, overdue or not. That is
+ * a hole, not an answer, so the sweep raises a misconfiguration alert for the
+ * type rather than this file inventing a default window — and overdue is not a
+ * licence to score a type nobody configured.
  */
 export function severityFor(rules: readonly ThresholdRule[], deadlineType: string, businessDaysRemaining: number): Severity | null {
+  const overdue = businessDaysRemaining < 0;
   let worst: Severity | null = null;
   for (const rule of rules) {
     if (rule.deadlineType !== deadlineType) continue;
-    const overdue = businessDaysRemaining < 0;
     if (!overdue && businessDaysRemaining > rule.businessDaysBefore) continue;
     worst = worst === null ? rule.severity : moreSevere(worst, rule.severity);
   }
