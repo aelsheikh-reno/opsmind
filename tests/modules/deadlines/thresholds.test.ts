@@ -4,7 +4,9 @@
 //   2. "A threshold is inclusive at its bound — exactly seven business days
 //       remaining breaches a seven-day window"
 //   3. "An overdue deadline, with negative days remaining, reports the highest
-//       configured severity"
+//       severity band the severity scale defines — not the highest band
+//       configured for its type" (amended by node `overdue-severity`, Ahmed's
+//       decision of 2026-08-16, reversing the earlier per-type reading)
 //   4. "A deadline type with no ThresholdTable row is reported as unconfigured,
 //       never scored as safe"
 //   5. "A fingerprint is deterministic and carries no severity, so an escalation
@@ -14,11 +16,21 @@
 // and `lib/modules/deadlines/index.ts` were NOT read: a test written after the
 // code describes what the code does, bugs included, and then guards them with a
 // green check. Every expected value below comes from
-// docs/architecture/components-core-deadline-monitor.md (the four settled
-// threshold semantics, Ahmed's decisions of 2026-08-14, at :42-48) or from
-// docs/architecture/flows-alerting.md:34 (the fingerprint's segments). The only
-// thing taken from the module is the shape of the call — names, parameters and
-// types, handed over in the task, which is its public surface.
+// docs/architecture/components-core-deadline-monitor.md (the settled threshold
+// semantics: Ahmed's decisions of 2026-08-14 at :42-48, and the overdue
+// reversal of 2026-08-16 at :50-52) or from docs/architecture/flows-alerting.md:34
+// (the fingerprint's segments). The only thing taken from the module is the
+// shape of the call — names, parameters and types, handed over in the task,
+// which is its public surface.
+//
+// Node `overdue-severity` amended one of those rules after this file was first
+// written. It was re-derived from the amended spec, again without reading
+// `thresholds.ts` — including the two blocks that had picked the old rule up
+// incidentally through negative-day inputs. That coupling is the reason the
+// reversal was awkward: a rule restated in three places is three places to
+// forget. Overdue is now pinned in exactly one describe, and the other blocks
+// that happen to pass a negative distance defer to it by reference
+// (`highestSeverity()`) rather than restating what it answers.
 //
 // Why these four functions are worth this much test: the failure they exist to
 // prevent is silence. An under-warned deadline produces no output at all, so
@@ -141,6 +153,14 @@ describe("severity is the maximum across breached windows, never the tightest on
     // The anti-downgrade invariant, stated as a property rather than a table:
     // whatever else it does, the answer may not be less severe than any window
     // whose bound has been reached. Under-warning is the silent failure.
+    //
+    // Domain: NON-NEGATIVE distances only. This block is about the window rule,
+    // and a deadline already past due is governed by a different rule (spec:50)
+    // that answers from the severity scale rather than from the rows. Generating
+    // negative days here would make the expectation below a second, tacit copy
+    // of the overdue rule — which is exactly how the 2026-08-16 reversal came to
+    // break two describes that are not about overdue at all. Overdue is pinned
+    // once, in its own block.
     const next = random(20260814);
     for (let trial = 0; trial < 300; trial += 1) {
       const rules: ThresholdRule[] = [...OTHER_TYPE];
@@ -148,7 +168,7 @@ describe("severity is the maximum across breached windows, never the tightest on
       for (let i = 0; i < windows; i += 1) {
         rules.push(rule("visa", Math.floor(next() * 41), ALL_SEVERITIES[Math.floor(next() * 2)]));
       }
-      const days = Math.floor(next() * 56) - 10;
+      const days = Math.floor(next() * 46);
       const breached = rules.filter((r) => r.deadlineType === "visa" && r.businessDaysBefore >= days);
       const answer = severityFor(rules, "visa", days);
       const shown = JSON.stringify({ rules, days, answer });
@@ -182,7 +202,9 @@ describe("severity is the maximum across breached windows, never the tightest on
       expect(rank, `severity fell between ${days + 1} and ${days} days remaining`).toBeGreaterThanOrEqual(previous);
       previous = rank;
     }
-    expect(previous, "the walk never reached a breach at all").toBe(RANK.major);
+    // Where the walk ends is the overdue rule's answer, not this block's, so it
+    // is named by reference rather than as a literal severity.
+    expect(previous, "the walk never reached a breach at all").toBe(RANK[highestSeverity()]);
   });
 
   it("reads only the rows for the type it was asked about", () => {
@@ -207,15 +229,29 @@ describe("a threshold is inclusive at its bound", () => {
   // silently, and the day it loses is a day of notice.
   const SEVEN: readonly ThresholdRule[] = [rule("visa", 7, "minor"), ...OTHER_TYPE];
 
+  // Non-negative distances only: on or before the due date the window rule is
+  // the whole answer, so the expected severity is the row's own. A deadline
+  // already past due is scored by the overdue rule instead (spec:50), which is
+  // pinned in its own block and referenced — not restated — in the case below.
   it.each([
     { days: 9, breached: false, why: "two days outside the window" },
     { days: 8, breached: false, why: "one day outside — the last quiet day" },
     { days: 7, breached: true, why: "the bound itself, inclusive" },
     { days: 6, breached: true, why: "one day inside" },
-    { days: 0, breached: true, why: "due today" },
-    { days: -1, breached: true, why: "one day overdue" },
+    { days: 1, breached: true, why: "due tomorrow" },
+    { days: 0, breached: true, why: "due today — not yet overdue" },
   ])("$days business days remaining against a seven-day window: breached=$breached ($why)", ({ days, breached }) => {
     expect(severityFor(SEVEN, "visa", days)).toBe(breached ? "minor" : null);
+  });
+
+  it("is still breached one day overdue, at whatever severity the overdue rule gives", () => {
+    // Past the bound is still inside the window: the inclusive comparison does
+    // not stop applying once the distance goes negative, and a lapsed visa must
+    // not fall out of the breach set. WHICH severity comes back is the overdue
+    // rule's business (spec:50) and not this block's, so it is asserted by
+    // reference to the scale rather than written out as a severity here.
+    expect(severityFor(SEVEN, "visa", -1)).not.toBeNull();
+    expect(severityFor(SEVEN, "visa", -1)).toBe(highestSeverity());
   });
 
   it("is inclusive at the bound for a major window too", () => {
@@ -241,7 +277,8 @@ describe("a threshold is inclusive at its bound", () => {
     const rules = [rule("heartbeat", 0, "major")];
     expect(severityFor(rules, "heartbeat", 1)).toBeNull();
     expect(severityFor(rules, "heartbeat", 0)).toBe("major");
-    expect(severityFor(rules, "heartbeat", -1)).toBe("major");
+    // One day later it is overdue, and the overdue rule answers — by reference.
+    expect(severityFor(rules, "heartbeat", -1)).toBe(highestSeverity());
   });
 
   it("holds at the bound of every window in a multi-row table", () => {
@@ -259,66 +296,174 @@ describe("a threshold is inclusive at its bound", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Assertion 3 — an overdue deadline reports the highest configured severity.
+// Assertion 3 — an overdue deadline takes the top of the SEVERITY SCALE.
 // ---------------------------------------------------------------------------
+//
+// This is the one place the overdue rule is stated. Every other block that
+// passes a negative distance defers to `highestSeverity()` rather than naming a
+// band, so this rule can be changed again in one file and one describe.
 
-describe("an overdue deadline reports the highest configured severity", () => {
-  // spec:48 — "an **overdue** deadline, with negative days remaining, reports
-  // the highest configured severity."
+describe("an overdue deadline reports the highest severity band the scale defines", () => {
+  // spec:48,50 — "an **overdue** deadline, with negative days remaining, reports
+  // the **highest severity band the severity scale defines**, not the highest
+  // band configured for its type... A type whose Settings rows are all `minor`
+  // still reports the **highest** band once it is past due; the ceiling comes
+  // from the severity scale, not from which windows an admin happened to write
+  // for that type."
   //
-  // Reading taken, and the only one the sentence supports: "configured" is a
-  // restriction. The answer is the highest severity among the windows CONFIGURED
-  // FOR THAT TYPE, not the top of the `Severity` scale regardless of the table —
-  // otherwise the word does no work. It also follows from the other two settled
-  // rules: negative days are at or below every non-negative bound, so every
-  // window is breached, and assertion 1 makes the answer their maximum. Where
-  // the two readings differ is a type configured with minor windows only, pinned
-  // below.
-  it("reports major once past due when a major window is configured", () => {
-    expect(severityFor(MISORDERED, "visa", -1)).toBe("major");
-    expect(severityFor(MISORDERED, "visa", -40)).toBe("major");
+  // Ahmed's decision of 2026-08-16, REVERSING the earlier per-type reading that
+  // this file previously pinned. The oracle is legacy, which has no per-type
+  // severity at all: reference/legacy/lib/email.ts:174 buckets every item with
+  // `daysLeft < 0` together, :238-239 renders that bucket as the red "🔴 Overdue
+  // — action needed now" section ahead of critical, and :260 counts all of it
+  // into the "⚠️ N urgent" subject line — for every item, regardless of type.
+  // Read as a per-type ceiling, this build was quieter than the product it
+  // replaces on exactly the deadlines that are already late.
+  //
+  // The band is written as `highestSeverity()` throughout and never as the
+  // string "major": the claim is "the top of the scale", so a level added above
+  // major must move these tests with it rather than leave them passing against
+  // the old ceiling.
+
+  /** All-minor rows: the case where the two readings disagree. */
+  const MINOR_ONLY: readonly ThresholdRule[] = [
+    rule("stationery-order", 14, "minor"),
+    rule("stationery-order", 3, "minor"),
+  ];
+
+  it("has a scale whose top outranks minor, so the cases below can discriminate", () => {
+    // A guard, not a rule. If `Severity` ever collapsed to a single band, every
+    // "top of the scale" assertion below would pass without proving anything —
+    // the old per-type reading would satisfy them too. This fails loudly in that
+    // case instead of letting the block go quietly vacuous.
+    expect(RANK[highestSeverity()], "the scale has no band above minor").toBeGreaterThan(RANK.minor);
   });
 
-  it.each([-1, -2, -7, -30, -365])("stays at the highest configured severity %i days overdue", (days) => {
+  it("reports the top of the scale for a type whose only configured windows are minor", () => {
+    // THE discriminating case, and the one this node flips. Nothing here is
+    // configured major. The old reading answered `minor` — a lapsed item sitting
+    // below the urgent band forever because of which rows an admin wrote — and
+    // legacy would have had it in the red section. Under-warning is the silence
+    // this module exists to prevent (spec:42).
+    expect(severityFor(MINOR_ONLY, "stationery-order", -5)).toBe(highestSeverity());
+    expect(RANK[severityFor(MINOR_ONLY, "stationery-order", -5) as Severity]).toBeGreaterThan(RANK.minor);
+  });
+
+  it("reports the top of the scale for a type that does configure a major window", () => {
+    // The other polarity: where the two readings agree, the answer is unchanged.
+    // A reversal that only moved the disagreeing case and broke this one would
+    // be a different rule again.
+    expect(severityFor(MISORDERED, "visa", -1)).toBe(highestSeverity());
+    expect(severityFor(MISORDERED, "visa", -40)).toBe(highestSeverity());
+  });
+
+  it.each([-1, -2, -7, -30, -365, -3650])("is at the top of the scale %i days overdue, whatever the rows say", (days) => {
     // Long overdue is not less serious than newly overdue. An expired visa stops
-    // an engineer working (spec:7) for as long as it stays expired.
-    expect(severityFor(MISORDERED, "visa", days)).toBe("major");
+    // an engineer working (spec:7) for as long as it stays expired, and legacy
+    // counts it as urgent on day 3650 exactly as on day 1.
+    expect(severityFor(MINOR_ONLY, "stationery-order", days)).toBe(highestSeverity());
+    expect(severityFor(MISORDERED, "visa", days)).toBe(highestSeverity());
   });
 
-  it("reports minor for a type whose only configured windows are minor", () => {
-    // The discriminating case for the reading above: nothing here is configured
-    // major, so nothing may be reported major. Reporting the scale's maximum
-    // instead would over-warn on every type an admin chose to keep quiet, and
-    // would make the severity column in Settings unable to express "this one is
-    // never urgent".
-    const rules = [rule("stationery-order", 14, "minor"), rule("stationery-order", 3, "minor")];
-    expect(severityFor(rules, "stationery-order", -5)).toBe("minor");
+  it("answers the same band for two types configured completely differently", () => {
+    // Legacy's actual behaviour, stated as an equality rather than as a value:
+    // one overdue bucket for every item regardless of type (email.ts:174). If a
+    // type's own rows still capped it, these two would differ.
+    const minorOverdue = severityFor(MINOR_ONLY, "stationery-order", -9);
+    const majorOverdue = severityFor(MISORDERED, "visa", -9);
+    expect(minorOverdue).toBe(majorOverdue);
+    expect(minorOverdue).toBe(highestSeverity());
   });
 
-  it("breaches every configured window at once when overdue", () => {
-    // Why assertion 3 falls out of assertions 1 and 2 rather than being a
-    // special case in the code: negative days are inside every window, so the
-    // answer is the maximum over the whole table for that type.
-    const next = random(20260815);
+  it("does not vary with which windows the type happens to have", () => {
+    // Four tables for one type — minor-only, major-only, mixed, and a single
+    // zero-day row — all overdue by the same distance. The rows decide WHETHER a
+    // non-overdue deadline is breached; once it is past due they no longer
+    // decide how serious it is.
+    const tables: readonly (readonly ThresholdRule[])[] = [
+      [rule("filing", 1, "minor")],
+      [rule("filing", 90, "major")],
+      [rule("filing", 30, "major"), rule("filing", 7, "minor"), rule("filing", 2, "minor")],
+      [rule("filing", 0, "minor")],
+    ];
+    const answers = tables.map((table) => severityFor([...table, ...OTHER_TYPE], "filing", -3));
+    for (const [index, answer] of answers.entries()) {
+      expect(answer, `table ${index} answered differently: ${JSON.stringify(tables[index])}`).toBe(highestSeverity());
+    }
+    expect([...new Set(answers.map(String))], "the answer depended on the type's rows").toHaveLength(1);
+  });
+
+  it("treats zero days remaining as not overdue, and minus one as overdue", () => {
+    // The boundary of the rule, on the table where the two rules disagree: due
+    // TODAY is not late, so the window rule still answers and the answer is the
+    // row's own minor. One day later it is late, and the scale answers. Reading
+    // 0 as overdue would report every deadline due today at the top band —
+    // over-warning on the one day the thing can still be done on time.
+    expect(severityFor(MINOR_ONLY, "stationery-order", 1)).toBe("minor");
+    expect(severityFor(MINOR_ONLY, "stationery-order", 0)).toBe("minor");
+    expect(severityFor(MINOR_ONLY, "stationery-order", 0)).not.toBe(highestSeverity());
+    expect(severityFor(MINOR_ONLY, "stationery-order", -1)).toBe(highestSeverity());
+  });
+
+  it("does not escalate a type whose windows are not yet breached", () => {
+    // Overdue is about the DISTANCE, not about the type. A minor-only type well
+    // outside every window stays silent; the top band is not a default.
+    expect(severityFor(MINOR_ONLY, "stationery-order", 40)).toBeNull();
+    expect(severityFor(MINOR_ONLY, "stationery-order", 15)).toBeNull();
+    expect(severityFor(MINOR_ONLY, "stationery-order", 14)).toBe("minor");
+  });
+
+  it("is the top of the scale for every overdue distance, whatever the table", () => {
+    // The property, with the expectation held CONSTANT. The old version of this
+    // test computed its expectation as the maximum over the configured rows,
+    // which made it a second copy of the business rule — and a copy that agreed
+    // with the implementation by construction, so the reversal had to be made in
+    // two places. There is nothing to re-derive now: overdue is the top band.
+    const next = random(20260816);
     for (let trial = 0; trial < 200; trial += 1) {
       const rules: ThresholdRule[] = [...OTHER_TYPE];
       const windows = 1 + Math.floor(next() * 4);
+      // Half the trials are deliberately minor-only — the discriminating shape,
+      // which a uniform draw would produce in barely a tenth of them.
+      const minorOnly = next() < 0.5;
       for (let i = 0; i < windows; i += 1) {
-        rules.push(rule("visa", Math.floor(next() * 41), ALL_SEVERITIES[Math.floor(next() * 2)]));
+        const severity = minorOnly ? "minor" : ALL_SEVERITIES[Math.floor(next() * 2)];
+        rules.push(rule("visa", Math.floor(next() * 41), severity));
       }
       const days = -1 - Math.floor(next() * 90);
-      const configured = rules.filter((r) => r.deadlineType === "visa");
-      const highest = configured.some((r) => r.severity === "major") ? "major" : "minor";
-      expect(severityFor(rules, "visa", days), JSON.stringify({ rules, days })).toBe(highest);
+      const shown = JSON.stringify({ rules, days });
+      expect(severityFor(rules, "visa", days), shown).toBe(highestSeverity());
+      expect(severityFor(rules, "visa", days), `overdue answered nothing: ${shown}`).not.toBeNull();
     }
   });
 
   it("does not invent a severity for an overdue deadline of an unconfigured type", () => {
-    // The two decisions meet here. Overdue is as urgent as it gets, and it is
-    // still not a licence to score a type nobody configured: that raises as a
-    // misconfiguration (spec:46) instead of being silently scored.
+    // The two decisions meet here, and the reversal did NOT touch this one
+    // (spec:52): "Absence of a row is a hole, not a severity, and overdue is not
+    // a licence to score a type nobody configured." It raises as a
+    // misconfiguration (spec:46) instead of being silently scored — and a type
+    // scored at the top band would never raise at all.
     expect(severityFor(OTHER_TYPE, "visa", -30)).toBeNull();
     expect(isConfigured(OTHER_TYPE, "visa")).toBe(false);
+  });
+
+  it.each([-1, -2, -7, -30, -365, -3650])("leaves an unconfigured type unscored %i days overdue", (days) => {
+    // At EVERY negative distance, not just the one a table happened to pick: an
+    // implementation that short-circuits to the top band on `days < 0` before it
+    // looks for a row passes the single case and fails here.
+    expect(severityFor(OTHER_TYPE, "visa", days), "a type with no row was scored").toBeNull();
+    expect(severityFor([], "visa", days), "an empty table scored a type").toBeNull();
+    expect(isConfigured(OTHER_TYPE, "visa")).toBe(false);
+  });
+
+  it("scores an overdue type as soon as one row exists, and not before", () => {
+    // The two sides of the same boundary, one row apart. This is what makes the
+    // unconfigured hole a hole rather than a quiet band: adding any row at all —
+    // even a minor one-day window — turns silence into the top band.
+    const withoutRow: readonly ThresholdRule[] = [...OTHER_TYPE];
+    const withOneRow = [...OTHER_TYPE, rule("visa", 1, "minor")];
+    expect(severityFor(withoutRow, "visa", -2)).toBeNull();
+    expect(severityFor(withOneRow, "visa", -2)).toBe(highestSeverity());
   });
 });
 
