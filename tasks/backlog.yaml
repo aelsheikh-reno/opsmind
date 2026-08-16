@@ -1639,6 +1639,50 @@
     rule invisibly. Adding it means naming it in ALLOWED_EXTRA_IGNORES with a
     reason, or adding it to the template too.
 
+- id: gate-suite-test-timeouts
+  title: Six more files run under vitest's default 5s testTimeout and go red on a busy machine
+  phase: 0
+  depends_on: [gate-suite-flakiness]
+  spec: PIPELINE.md#the-gates
+  produces:
+    - tests/gates/coverage-gate.test.ts
+    - tests/gates/stale-input.test.ts
+    - tests/modules/deadlines/civil-date-unit.test.ts
+    - tests/config/legacy-prisma-client.test.ts
+    - tests/kernel/kernel-regime-data.test.ts
+    - tests/differential/harness.test.ts
+    - tests/baseline.json
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "Every bound raised is set from a measurement of what that test's work costs, written where the number is set"
+      - "The full suite passes repeatedly at 2x core oversubscription, and the measured pass rate is reported"
+  risk: low
+  status: todo
+  note: >
+    Found by gate-suite-flakiness's own verification and NOT fixed there — the
+    files are outside that node's produces, and each bound has to be set from
+    its own measurement rather than from one blanket number.
+
+    That node fixed the beforeAll in tests/scaffold/eslint-boundaries.test.ts
+    and the suite went from 1/10 to 10/10 at twelve background CPU hogs on a
+    14-core machine (`nproc` = 14, load1 8.8-20.1). Pushed further, to 28 hogs
+    and load1 27.6-39.8, it measured 5/10 — and the eslint hook was in none of
+    the five red runs. The failures were `Test timed out in 5000ms`, vitest's
+    default testTimeout, in the six files above: mostly tests that spawn a
+    subprocess or read the real filesystem, so their wall clock tracks the
+    machine and not the assertion.
+
+    Same defect as gate-suite-flakiness, one bound over: a default nobody chose
+    for the work, sitting close enough to the work's real cost that contention
+    crosses it. The verdict then describes the machine instead of the subject,
+    and the remedy it teaches is to re-run. See ADR-033.
+
+    28 hogs is 2x oversubscription and beyond the 5.4-12.0 load window observed
+    in the wild, so this is not currently producing false reds. It will as the
+    suite grows, and it is the reason the next node to add test files should
+    re-measure rather than assume gate-suite-flakiness settled the question.
+
 - id: kernel-repository-integration-tests
   title: Integration tests over the six kernel repositories, against CI Postgres
   phase: 1
