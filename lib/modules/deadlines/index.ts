@@ -13,4 +13,4 @@
 export { businessDaysUntil, civilDateIn, filingDueDate, statutoryDueDate, isWorkingDay, MissingBusinessCalendarError, requireCalendar } from "./calendar";
 export type { BusinessCalendar, CalendarSource } from "./calendar";
 export { APP_ID, fingerprintFor, highestSeverity, isConfigured, severityFor, SOURCE_ID } from "./thresholds";
-export type { Severity, ThresholdRule } from "./thresholds";
+export type { Severity, SeverityVerdict, ThresholdRule } from "./thresholds";

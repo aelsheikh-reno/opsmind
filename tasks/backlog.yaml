@@ -1012,6 +1012,56 @@
     three sweep-level files. This node is tested directly, against the exported
     functions — the same split civil-date.test.ts forced on the first node.
 
+- id: deadlines-fingerprint-and-severity-result
+  title: A fingerprint segment cannot collide, and a verdict cannot be conflated
+  phase: 1
+  depends_on: [module-deadlines-thresholds]
+  spec: docs/architecture/components-core-deadline-monitor.md
+  also_read:
+    - docs/architecture/flows-alerting.md          # the fingerprint's segments
+  produces:
+    - lib/modules/deadlines/{thresholds,index}.ts
+    - tests/modules/deadlines/thresholds.test.ts
+    - tasks/backlog.yaml
+    - tests/baseline.json
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage, differential]
+    assertions:
+      - "Two deadlines differing only by a colon inside a segment produce distinct fingerprints"
+      - "A segment containing no colon fingerprints byte for byte as it did before, so no open alert changes identity"
+      - "severityFor distinguishes not-breached from not-configured in its type, so a caller cannot conflate them"
+      - "Nothing that thresholds.test.ts pinned before is loosened by the new shape"
+  risk: compliance
+  status: todo
+  note: >
+    Both findings came out of review on module-deadlines-thresholds and were
+    carried rather than fixed. They land here, ahead of module-deadlines-sweep,
+    because the sweep's index.ts already consumes the discriminated result —
+    landing these second would mean writing the sweep against the old shape and
+    then changing it again (Ahmed, 2026-08-16).
+
+    THE COLON COLLISION. fingerprintFor joins its segments with ":", so
+    ("reno","document","123:expiry","renewal") and
+    ("reno","document","123","expiry:renewal") produce the same string. Two
+    alerts collapse into one and the second is invisible — silently deduped,
+    which is the failure mode the fingerprint exists to prevent.
+
+    Escaped rather than rejected at registerDeadline: jurisdiction ids and policy
+    names are fingerprinted too, by both misconfiguration alerts, so a check on
+    one caller leaves every other caller colliding. A segment containing neither
+    the separator nor the escape is returned byte for byte, so no existing alert
+    identity moves — a fingerprint is a stable identity and changing one
+    resolves-then-reopens the alert it names.
+
+    THE CONFLATED NULL. severityFor returned null for both "not breached" and
+    "not configured", so a caller writing `if (severityFor(...) === null) return;`
+    silently drops an unwatched type — spec:46's exact failure, and one the type
+    system was not being asked to prevent. It now returns
+    {status:"breached", severity} | {status:"safe"} | {status:"unconfigured"},
+    so the compiler enforces the distinction rather than the caller remembering
+    to also call isConfigured. isConfigured stays: the sweep's per-type pre-pass
+    has to run for jurisdictions that have no calendar at all.
+
 - id: module-deadlines-sweep
   title: Deadline monitor — registration, the nightly sweep and the alert contract
   phase: 1

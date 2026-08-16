@@ -44,9 +44,20 @@
 // Why these four functions are worth this much test: the failure they exist to
 // prevent is silence. An under-warned deadline produces no output at all, so
 // nothing on the surface distinguishes "not breached", "not watched" and "wrong
-// answer". The three are pulled apart deliberately here — a `null` severity
-// with `isConfigured` true is safe, a `null` severity with `isConfigured` false
-// is a misconfiguration that must raise (spec:46).
+// answer". The three are pulled apart deliberately here — a safe answer with
+// `isConfigured` true is safe, a non-answer with `isConfigured` false is a
+// misconfiguration that must raise (spec:46).
+//
+// UPDATED BY `module-deadlines-sweep`, WITHOUT LOOSENING ANYTHING IT PINS.
+// `severityFor` returned `Severity | null` when this file was written, which
+// gave those last two the SAME answer and left it to each caller to remember to
+// call `isConfigured` as well; the sweep node made it return a discriminated
+// verdict — breached / safe / unconfigured — so the compiler asks instead. Every
+// expectation below is unchanged: the local `scored()` collapses both
+// non-breaching outcomes back to `null`, so each assertion still says exactly
+// what it said. What changed is where the DISTINCTION is pinned — on the verdict
+// itself, in "distinguishes not-breached from not-configured in its type", which
+// is the assertion that could not be written against the old signature at all.
 //
 // No database, no fakes, no sweep: these are pure functions over values. The
 // sweep-level pinning of the same rules belongs to a later node.
@@ -69,6 +80,25 @@ const rule = (deadlineType: string, businessDaysBefore: number, severity: Severi
   businessDaysBefore,
   severity,
 });
+
+/**
+ * The severity a table reports for a distance, or `null` when it reports none.
+ *
+ * The adapter described in the header: it maps the verdict's two non-breaching
+ * outcomes — `safe` and `unconfigured` — back onto the single `null` the
+ * expectations in this file were written against, so none of them had to be
+ * restated when the signature changed. Used everywhere a case is about WHICH
+ * severity is reported; the cases about telling the two non-answers apart call
+ * `severityFor` directly, because that is the whole of what they assert.
+ */
+function scored(
+  rules: readonly ThresholdRule[],
+  deadlineType: string,
+  businessDaysRemaining: number,
+): Severity | null {
+  const verdict = severityFor(rules, deadlineType, businessDaysRemaining);
+  return verdict.status === "breached" ? verdict.severity : null;
+}
 
 /**
  * The severity order, stated once. "Maximum" and "highest" in the spec are
@@ -141,8 +171,8 @@ describe("severity is the maximum across breached windows, never the tightest on
     // The named case. Both windows are breached at 5 days remaining; the
     // NEAREST window is the 7-day minor one, and reporting minor here is the
     // exact downgrade the decision forbids.
-    expect(severityFor(MISORDERED, "visa", 5)).toBe("major");
-    expect(severityFor(MISORDERED, "visa", 5)).not.toBe("minor");
+    expect(scored(MISORDERED, "visa", 5)).toBe("major");
+    expect(scored(MISORDERED, "visa", 5)).not.toBe("minor");
   });
 
   it("reports major at five days out however the rows are ordered", () => {
@@ -153,7 +183,7 @@ describe("severity is the maximum across breached windows, never the tightest on
     // correct for the one order somebody happened to try.
     for (const ordering of permutations(MISORDERED)) {
       const shown = ordering.map((r) => `${r.businessDaysBefore}→${r.severity}`).join(", ");
-      expect(severityFor(ordering, "visa", 5), `rows ordered {${shown}}`).toBe("major");
+      expect(scored(ordering, "visa", 5), `rows ordered {${shown}}`).toBe("major");
     }
   });
 
@@ -171,7 +201,7 @@ describe("severity is the maximum across breached windows, never the tightest on
     const orderings = permutations(rules);
     expect(orderings.length, "the permutation helper produced nothing to compare").toBe(720);
     for (const days of [45, 31, 30, 20, 14, 8, 7, 3, -1]) {
-      const answers = new Set(orderings.map((ordering) => String(severityFor(ordering, "visa", days))));
+      const answers = new Set(orderings.map((ordering) => String(scored(ordering, "visa", days))));
       expect([...answers], `distance ${days} answered differently depending on row order`).toHaveLength(1);
     }
   });
@@ -197,7 +227,7 @@ describe("severity is the maximum across breached windows, never the tightest on
       }
       const days = Math.floor(next() * 46);
       const breached = rules.filter((r) => r.deadlineType === "visa" && r.businessDaysBefore >= days);
-      const answer = severityFor(rules, "visa", days);
+      const answer = scored(rules, "visa", days);
       const shown = JSON.stringify({ rules, days, answer });
 
       if (breached.length === 0) {
@@ -224,7 +254,7 @@ describe("severity is the maximum across breached windows, never the tightest on
     const rules = [rule("filing", 30, "major"), rule("filing", 7, "minor"), rule("filing", 2, "minor")];
     let previous = 0;
     for (let days = 40; days >= -5; days -= 1) {
-      const answer = severityFor(rules, "filing", days);
+      const answer = scored(rules, "filing", days);
       const rank = answer === null ? 0 : RANK[answer];
       expect(rank, `severity fell between ${days + 1} and ${days} days remaining`).toBeGreaterThanOrEqual(previous);
       previous = rank;
@@ -241,9 +271,9 @@ describe("severity is the maximum across breached windows, never the tightest on
     // an unbreached visa breach. Cross-type leakage is invisible in production:
     // it produces a plausible-looking severity for the wrong reason.
     const rules = [rule("visa", 7, "minor"), rule("trade-licence", 90, "major")];
-    expect(severityFor(rules, "visa", 5)).toBe("minor");
-    expect(severityFor(rules, "visa", 60)).toBeNull();
-    expect(severityFor(rules, "trade-licence", 60)).toBe("major");
+    expect(scored(rules, "visa", 5)).toBe("minor");
+    expect(scored(rules, "visa", 60)).toBeNull();
+    expect(scored(rules, "trade-licence", 60)).toBe("major");
   });
 });
 
@@ -270,7 +300,7 @@ describe("a threshold is inclusive at its bound", () => {
     { days: 1, breached: true, why: "due tomorrow" },
     { days: 0, breached: true, why: "due today — not yet overdue" },
   ])("$days business days remaining against a seven-day window: breached=$breached ($why)", ({ days, breached }) => {
-    expect(severityFor(SEVEN, "visa", days)).toBe(breached ? "minor" : null);
+    expect(scored(SEVEN, "visa", days)).toBe(breached ? "minor" : null);
   });
 
   it("is still breached one day overdue, at whatever severity the overdue rule gives", () => {
@@ -280,24 +310,24 @@ describe("a threshold is inclusive at its bound", () => {
     // block. WHICH severity comes back is the overdue rule's business (spec:50)
     // and not this block's, so it is asserted by reference to that type's
     // configured ceiling rather than written out as a band here.
-    expect(severityFor(SEVEN, "visa", -1)).not.toBeNull();
-    expect(severityFor(SEVEN, "visa", -1)).toBe(highestConfiguredFor(SEVEN, "visa"));
+    expect(scored(SEVEN, "visa", -1)).not.toBeNull();
+    expect(scored(SEVEN, "visa", -1)).toBe(highestConfiguredFor(SEVEN, "visa"));
   });
 
   it("is inclusive at the bound for a major window too", () => {
     // The rule is about the comparison, not about which severity sits on it.
     const rules = [rule("filing", 7, "major")];
-    expect(severityFor(rules, "filing", 8)).toBeNull();
-    expect(severityFor(rules, "filing", 7)).toBe("major");
+    expect(scored(rules, "filing", 8)).toBeNull();
+    expect(scored(rules, "filing", 7)).toBe("major");
   });
 
   it("escalates exactly at the wider bound, not a day late", () => {
     // {30 → major, 7 → minor}: at 31 days nothing is breached, at exactly 30 the
     // major window is. Inclusivity and "maximum across breached windows" meet
     // here — the day the escalation lands is the day the wider bound is reached.
-    expect(severityFor(MISORDERED, "visa", 31)).toBeNull();
-    expect(severityFor(MISORDERED, "visa", 30)).toBe("major");
-    expect(severityFor(MISORDERED, "visa", 8)).toBe("major");
+    expect(scored(MISORDERED, "visa", 31)).toBeNull();
+    expect(scored(MISORDERED, "visa", 30)).toBe("major");
+    expect(scored(MISORDERED, "visa", 8)).toBe("major");
   });
 
   it("treats a zero-day window as breaching on the due date and not before", () => {
@@ -305,23 +335,23 @@ describe("a threshold is inclusive at its bound", () => {
     // due". One day before is not that day; the day itself, and every day after
     // it, is.
     const rules = [rule("heartbeat", 0, "major")];
-    expect(severityFor(rules, "heartbeat", 1)).toBeNull();
-    expect(severityFor(rules, "heartbeat", 0)).toBe("major");
+    expect(scored(rules, "heartbeat", 1)).toBeNull();
+    expect(scored(rules, "heartbeat", 0)).toBe("major");
     // One day later it is overdue, and the overdue rule answers — by reference.
-    expect(severityFor(rules, "heartbeat", -1)).toBe(highestConfiguredFor(rules, "heartbeat"));
+    expect(scored(rules, "heartbeat", -1)).toBe(highestConfiguredFor(rules, "heartbeat"));
   });
 
   it("holds at the bound of every window in a multi-row table", () => {
     // Each bound checked at bound+1, bound and bound-1, with the answer being
     // the maximum of everything breached at that distance.
     const rules = [rule("visa", 30, "minor"), rule("visa", 14, "minor"), rule("visa", 5, "major")];
-    expect(severityFor(rules, "visa", 31)).toBeNull();
-    expect(severityFor(rules, "visa", 30)).toBe("minor");
-    expect(severityFor(rules, "visa", 15)).toBe("minor");
-    expect(severityFor(rules, "visa", 14)).toBe("minor");
-    expect(severityFor(rules, "visa", 6)).toBe("minor");
-    expect(severityFor(rules, "visa", 5)).toBe("major");
-    expect(severityFor(rules, "visa", 4)).toBe("major");
+    expect(scored(rules, "visa", 31)).toBeNull();
+    expect(scored(rules, "visa", 30)).toBe("minor");
+    expect(scored(rules, "visa", 15)).toBe("minor");
+    expect(scored(rules, "visa", 14)).toBe("minor");
+    expect(scored(rules, "visa", 6)).toBe("minor");
+    expect(scored(rules, "visa", 5)).toBe("major");
+    expect(scored(rules, "visa", 4)).toBe("major");
   });
 });
 
@@ -377,9 +407,9 @@ describe("an overdue deadline reports the highest severity configured for its ty
     // severity column in Settings is how that administrator says "this type is
     // never urgent" (spec:50), and an overdue stationery order sitting at the
     // same band as a lapsed visa empties the top band of meaning.
-    expect(severityFor(MINOR_ONLY, "stationery-order", -5)).not.toBeNull();
-    expect(severityFor(MINOR_ONLY, "stationery-order", -5)).toBe("minor");
-    expect(severityFor(MINOR_ONLY, "stationery-order", -5)).not.toBe(highestSeverity());
+    expect(scored(MINOR_ONLY, "stationery-order", -5)).not.toBeNull();
+    expect(scored(MINOR_ONLY, "stationery-order", -5)).toBe("minor");
+    expect(scored(MINOR_ONLY, "stationery-order", -5)).not.toBe(highestSeverity());
   });
 
   it("reports major for a type that does configure a major window", () => {
@@ -388,9 +418,9 @@ describe("an overdue deadline reports the highest severity configured for its ty
     // not a demotion. A rule that answered the TIGHTEST configured band would
     // give minor here: the nearest window of {30 → major, 7 → minor} is the
     // minor one, and that is the downgrade spec:42 forbids.
-    expect(severityFor(MISORDERED, "visa", -1)).toBe("major");
-    expect(severityFor(MISORDERED, "visa", -40)).toBe("major");
-    expect(severityFor(MISORDERED, "visa", -1)).not.toBe("minor");
+    expect(scored(MISORDERED, "visa", -1)).toBe("major");
+    expect(scored(MISORDERED, "visa", -40)).toBe("major");
+    expect(scored(MISORDERED, "visa", -1)).not.toBe("minor");
   });
 
   it.each([-1, -2, -7, -30, -365, -3650])("reports its type's own ceiling %i days overdue", (days) => {
@@ -398,8 +428,8 @@ describe("an overdue deadline reports the highest severity configured for its ty
     // overdue is not less serious than newly overdue for the visa, and it is not
     // MORE serious than its rows for the stationery order: there is no distance
     // at which a minor-only type drifts up into the urgent band.
-    expect(severityFor(MINOR_ONLY, "stationery-order", days)).toBe("minor");
-    expect(severityFor(MISORDERED, "visa", days)).toBe("major");
+    expect(scored(MINOR_ONLY, "stationery-order", days)).toBe("minor");
+    expect(scored(MISORDERED, "visa", days)).toBe("major");
   });
 
   it("answers different bands for two types configured differently", () => {
@@ -407,8 +437,8 @@ describe("an overdue deadline reports the highest severity configured for its ty
     // ceiling came from the scale instead of from the rows, these two would be
     // equal — one bucket for every overdue item regardless of type. They are not
     // equal, and which one is higher is decided by the Settings rows alone.
-    const minorOverdue = severityFor(MINOR_ONLY, "stationery-order", -9);
-    const majorOverdue = severityFor(MISORDERED, "visa", -9);
+    const minorOverdue = scored(MINOR_ONLY, "stationery-order", -9);
+    const majorOverdue = scored(MISORDERED, "visa", -9);
     expect(minorOverdue).not.toBe(majorOverdue);
     expect(minorOverdue).toBe("minor");
     expect(majorOverdue).toBe("major");
@@ -430,7 +460,7 @@ describe("an overdue deadline reports the highest severity configured for its ty
       },
       { table: [rule("filing", 0, "minor")], ceiling: "minor" },
     ];
-    const answers = cases.map(({ table }) => severityFor([...table, ...OTHER_TYPE], "filing", -3));
+    const answers = cases.map(({ table }) => scored([...table, ...OTHER_TYPE], "filing", -3));
     for (const [index, answer] of answers.entries()) {
       expect(answer, `table ${index}: ${JSON.stringify(cases[index].table)}`).toBe(cases[index].ceiling);
     }
@@ -449,31 +479,31 @@ describe("an overdue deadline reports the highest severity configured for its ty
     //
     // 0 is not overdue: due TODAY is not late, and nothing may be scored above
     // this type's rows on the one day the thing can still be done on time.
-    expect(severityFor(MINOR_ONLY, "stationery-order", 1)).toBe("minor");
-    expect(severityFor(MINOR_ONLY, "stationery-order", 0)).toBe("minor");
-    expect(severityFor(MINOR_ONLY, "stationery-order", 0)).not.toBe(highestSeverity());
+    expect(scored(MINOR_ONLY, "stationery-order", 1)).toBe("minor");
+    expect(scored(MINOR_ONLY, "stationery-order", 0)).toBe("minor");
+    expect(scored(MINOR_ONLY, "stationery-order", 0)).not.toBe(highestSeverity());
     // -1 IS overdue: it has not fallen out of the breach set, and it is still
     // capped by the same rows.
-    expect(severityFor(MINOR_ONLY, "stationery-order", -1)).not.toBeNull();
-    expect(severityFor(MINOR_ONLY, "stationery-order", -1)).toBe("minor");
-    expect(severityFor(MINOR_ONLY, "stationery-order", -1)).not.toBe(highestSeverity());
+    expect(scored(MINOR_ONLY, "stationery-order", -1)).not.toBeNull();
+    expect(scored(MINOR_ONLY, "stationery-order", -1)).toBe("minor");
+    expect(scored(MINOR_ONLY, "stationery-order", -1)).not.toBe(highestSeverity());
     // The one table where 0 and -1 are observably a different STATE: a single
     // zero-day window. One day out, nothing is breached at all; on the day, and
     // every day after it, the window is breached. An implementation reading the
     // distance one day late breaches at 1, and one reading it a day early stops
     // breaching at -1.
     const dueToday = [rule("heartbeat", 0, "minor")];
-    expect(severityFor(dueToday, "heartbeat", 1), "a day early is not due").toBeNull();
-    expect(severityFor(dueToday, "heartbeat", 0), "due today breaches").toBe("minor");
-    expect(severityFor(dueToday, "heartbeat", -1), "past due did not fall out").toBe("minor");
+    expect(scored(dueToday, "heartbeat", 1), "a day early is not due").toBeNull();
+    expect(scored(dueToday, "heartbeat", 0), "due today breaches").toBe("minor");
+    expect(scored(dueToday, "heartbeat", -1), "past due did not fall out").toBe("minor");
   });
 
   it("does not escalate a type whose windows are not yet breached", () => {
     // Overdue is about the DISTANCE, not about the type. A minor-only type well
     // outside every window stays silent; no band is a default.
-    expect(severityFor(MINOR_ONLY, "stationery-order", 40)).toBeNull();
-    expect(severityFor(MINOR_ONLY, "stationery-order", 15)).toBeNull();
-    expect(severityFor(MINOR_ONLY, "stationery-order", 14)).toBe("minor");
+    expect(scored(MINOR_ONLY, "stationery-order", 40)).toBeNull();
+    expect(scored(MINOR_ONLY, "stationery-order", 15)).toBeNull();
+    expect(scored(MINOR_ONLY, "stationery-order", 14)).toBe("minor");
   });
 
   it("reports its type's configured ceiling at every overdue distance, whatever the table", () => {
@@ -500,8 +530,8 @@ describe("an overdue deadline reports the highest severity configured for its ty
       }
       const days = -1 - Math.floor(next() * 90);
       const shown = JSON.stringify({ rules, days, ceiling });
-      expect(severityFor(rules, "visa", days), shown).toBe(ceiling);
-      expect(severityFor(rules, "visa", days), `overdue answered nothing: ${shown}`).not.toBeNull();
+      expect(scored(rules, "visa", days), shown).toBe(ceiling);
+      expect(scored(rules, "visa", days), `overdue answered nothing: ${shown}`).not.toBeNull();
     }
     // The minor-ceiling trials are the discriminating ones; a generator drift
     // that stopped producing them would leave this test passing vacuously
@@ -514,7 +544,7 @@ describe("an overdue deadline reports the highest severity configured for its ty
     // hole, not a severity, and overdue is not a licence to score a type nobody
     // configured." It raises as a misconfiguration (spec:46) instead of being
     // silently scored — and a type given a band would never raise at all.
-    expect(severityFor(OTHER_TYPE, "visa", -30)).toBeNull();
+    expect(scored(OTHER_TYPE, "visa", -30)).toBeNull();
     expect(isConfigured(OTHER_TYPE, "visa")).toBe(false);
   });
 
@@ -522,8 +552,8 @@ describe("an overdue deadline reports the highest severity configured for its ty
     // At EVERY negative distance, not just the one a table happened to pick: an
     // implementation that short-circuits to a band on `days < 0` before it looks
     // for a row passes the single case and fails here.
-    expect(severityFor(OTHER_TYPE, "visa", days), "a type with no row was scored").toBeNull();
-    expect(severityFor([], "visa", days), "an empty table scored a type").toBeNull();
+    expect(scored(OTHER_TYPE, "visa", days), "a type with no row was scored").toBeNull();
+    expect(scored([], "visa", days), "an empty table scored a type").toBeNull();
     expect(isConfigured(OTHER_TYPE, "visa")).toBe(false);
   });
 
@@ -534,9 +564,9 @@ describe("an overdue deadline reports the highest severity configured for its ty
     // the scale and not into the major band the other type carries.
     const withoutRow: readonly ThresholdRule[] = [...OTHER_TYPE];
     const withOneRow = [...OTHER_TYPE, rule("visa", 1, "minor")];
-    expect(severityFor(withoutRow, "visa", -2)).toBeNull();
-    expect(severityFor(withOneRow, "visa", -2)).not.toBeNull();
-    expect(severityFor(withOneRow, "visa", -2)).toBe("minor");
+    expect(scored(withoutRow, "visa", -2)).toBeNull();
+    expect(scored(withOneRow, "visa", -2)).not.toBeNull();
+    expect(scored(withOneRow, "visa", -2)).toBe("minor");
   });
 });
 
@@ -565,42 +595,76 @@ describe("a deadline type with no ThresholdTable row is unconfigured, never safe
     expect(isConfigured([...OTHER_TYPE, rule("visa", 1, "minor")], "visa")).toBe(true);
   });
 
-  it("distinguishes not-breached from not-configured", () => {
-    // Both answer `null` from severityFor, and they are opposite facts: the
-    // first is "I looked, it is fine", the second is "nobody is looking". If a
-    // caller cannot tell them apart, an unwatched visa reads as a healthy one.
+  it("distinguishes not-breached from not-configured in its type, so a caller cannot conflate them", () => {
+    // tasks/backlog.yaml#module-deadlines-sweep, assertion 14. They are opposite
+    // facts: the first is "I looked, it is fine", the second is "nobody is
+    // looking". They used to be the same `null`, so a caller writing
+    // `if (severityFor(...) === null) return;` dropped an unwatched visa
+    // silently and read it as a healthy one — the failure spec:46 exists to
+    // prevent. The verdict says which, and says it in the type.
     const configured = [rule("visa", 7, "minor")];
-    expect(severityFor(configured, "visa", 40)).toBeNull();
+    expect(severityFor(configured, "visa", 40).status, "a configured type inside every window").toBe("safe");
     expect(isConfigured(configured, "visa")).toBe(true);
 
-    expect(severityFor(OTHER_TYPE, "visa", 40)).toBeNull();
+    expect(severityFor(OTHER_TYPE, "visa", 40).status, "a type with no row at all").toBe("unconfigured");
     expect(isConfigured(OTHER_TYPE, "visa")).toBe(false);
 
+    expect(severityFor(configured, "visa", 40).status).not.toBe(
+      severityFor(OTHER_TYPE, "visa", 40).status,
+    );
     expect(isConfigured(configured, "visa")).not.toBe(isConfigured(OTHER_TYPE, "visa"));
+  });
+
+  it("makes the distinction at every distance, and a breach a third answer again", () => {
+    // The three outcomes over the whole range, so an implementation that
+    // answers `unconfigured` only when the table is empty, or that forgets the
+    // distinction once a deadline is overdue, fails here. `isConfigured` is
+    // asserted alongside: the two must never disagree, or the sweep's per-type
+    // misconfiguration count and the per-deadline score come from two different
+    // opinions about the same table.
+    const configured = [rule("visa", 7, "minor")];
+    for (const days of [120, 30, 8, 7, 1, 0, -1, -90]) {
+      const breached = days <= 7;
+      expect(severityFor(configured, "visa", days).status, `${days} days, configured`).toBe(
+        breached ? "breached" : "safe",
+      );
+      expect(severityFor(OTHER_TYPE, "visa", days).status, `${days} days, no row`).toBe("unconfigured");
+      expect(severityFor([], "visa", days).status, `${days} days, empty table`).toBe("unconfigured");
+      expect(isConfigured(configured, "visa")).toBe(true);
+      expect(isConfigured(OTHER_TYPE, "visa")).toBe(false);
+    }
   });
 
   it.each([120, 30, 7, 1, 0, -1, -90])("stays unconfigured at %i days remaining", (days) => {
     // Distance cannot configure a type. There is no number of days at which a
     // missing row starts answering, in either direction.
     expect(isConfigured(OTHER_TYPE, "visa")).toBe(false);
-    expect(severityFor(OTHER_TYPE, "visa", days)).toBeNull();
+    expect(scored(OTHER_TYPE, "visa", days)).toBeNull();
   });
 
-  it("returns null, not a falsy severity, when nothing is breached", () => {
-    // `""`, `undefined` and `false` would all read as "no breach" at a call
-    // site written with `if (severity)`, and all three would then be reported
-    // to the Alert Manager as a severity if written with `severity ?? …`.
-    // The absence has to be exactly null.
-    const answer = severityFor([rule("visa", 7, "minor")], "visa", 40);
-    expect(answer).toBeNull();
-    expect(answer).not.toBeUndefined();
-    expect(ALL_SEVERITIES).not.toContain(answer);
+  it("carries no severity at all when nothing is breached", () => {
+    // The same hazard this pinned against `Severity | null`: `""`, `undefined`
+    // and `false` all read as "no breach" at a call site written with
+    // `if (severity)`, and all three are then reported to the Alert Manager as a
+    // severity if written with `severity ?? …`. Under the verdict the answer
+    // must carry no severity field to reach for at all — neither a falsy one nor
+    // an undefined one — so `verdict.severity` is a type error rather than a
+    // value that flows on.
+    const safe = severityFor([rule("visa", 7, "minor")], "visa", 40);
+    expect(safe.status).toBe("safe");
+    expect(safe).not.toHaveProperty("severity");
+    expect(ALL_SEVERITIES).not.toContain((safe as { severity?: unknown }).severity);
+    expect(scored([rule("visa", 7, "minor")], "visa", 40)).toBeNull();
+
+    const hole = severityFor(OTHER_TYPE, "visa", 40);
+    expect(hole.status).toBe("unconfigured");
+    expect(hole).not.toHaveProperty("severity");
   });
 
   it("does not treat an empty table as a clean bill of health for any type", () => {
     for (const type of ["visa", "filing", "trade-licence", "passport"]) {
       expect(isConfigured([], type), `${type} reported as configured against an empty table`).toBe(false);
-      expect(severityFor([], type, 3), `${type} scored against an empty table`).toBeNull();
+      expect(scored([], type, 3), `${type} scored against an empty table`).toBeNull();
     }
   });
 });
@@ -632,6 +696,37 @@ describe("the fingerprint is deterministic and carries no severity", () => {
     expect(APP_ID).not.toBe("");
     expect(APP_ID).not.toContain(":");
     expect(SOURCE_ID).not.toContain(":");
+  });
+
+  it("gives two deadlines differing only by a colon inside a segment distinct fingerprints", () => {
+    // tasks/backlog.yaml#module-deadlines-sweep, assertion 13. The runtime half
+    // of the case above, which only pinned the two segments the module chooses
+    // itself. An entity id or a deadline type arrives from data — a document
+    // reference, a type name someone typed into Settings — so a colon in one is
+    // a value, not a bug, and joining on `:` made these two the same string.
+    // Two deadlines, one identity: the Alert Manager dedupes the second away and
+    // it is never seen, which is worse than a wrong alert because it is silent.
+    const collidingOnId = fingerprintFor("reno", "document", "123:expiry", "renewal");
+    const collidingOnType = fingerprintFor("reno", "document", "123", "expiry:renewal");
+    expect(collidingOnId).not.toBe(collidingOnType);
+
+    // Whichever way the separator is dealt with, the two must stay apart in the
+    // tenant and entity-type segments too.
+    expect(fingerprintFor("reno:x", "document", "123", "expiry")).not.toBe(
+      fingerprintFor("reno", "x:document", "123", "expiry"),
+    );
+    expect(fingerprintFor("reno", "document:123", "expiry", "renewal")).not.toBe(
+      fingerprintFor("reno", "document", "123:expiry", "renewal"),
+    );
+  });
+
+  it("leaves a fingerprint with no colon in any segment byte for byte unchanged", () => {
+    // The other half, and the reason the fix is escaping rather than rewriting:
+    // a fingerprint IS the alert's identity. Changing the string an ordinary
+    // registration produces would resolve every open alert and reopen it as a
+    // new one — a fleet-wide false all-clear followed by a duplicate page.
+    expect(FP()).toBe(["reno", APP_ID, SOURCE_ID, "document", "123", "expiry"].join(":"));
+    expect(FP().split(":")).toHaveLength(6);
   });
 
   it("carries tenant, app, source, entity and policy, in that order", () => {
@@ -694,8 +789,8 @@ describe("the fingerprint is deterministic and carries no severity", () => {
     // Alert Manager keys on the fingerprint, so if identity moved on escalation
     // the open alert would be abandoned and a second one raised beside it.
     const rules = [rule("expiry", 30, "minor"), rule("expiry", 7, "major")];
-    const early = severityFor(rules, "expiry", 20);
-    const late = severityFor(rules, "expiry", 5);
+    const early = scored(rules, "expiry", 20);
+    const late = scored(rules, "expiry", 5);
     expect(early).toBe("minor");
     expect(late).toBe("major");
     expect(RANK[late as Severity]).toBeGreaterThan(RANK[early as Severity]);
@@ -712,8 +807,8 @@ describe("the fingerprint is deterministic and carries no severity", () => {
     // the rules not being an input at all.
     const before = [rule("expiry", 7, "minor")];
     const after = [rule("expiry", 14, "major")];
-    expect(severityFor(before, "expiry", 10)).toBeNull();
-    expect(severityFor(after, "expiry", 10)).toBe("major");
+    expect(scored(before, "expiry", 10)).toBeNull();
+    expect(scored(after, "expiry", 10)).toBe("major");
     expect(FP().split(":")[5]).toBe("expiry");
     expect(FP()).toBe(fingerprintFor("reno", "document", "123", "expiry"));
   });
@@ -744,7 +839,7 @@ describe("highestSeverity", () => {
     // for.
     const rules = [rule("visa", 30, "major"), rule("visa", 7, "minor")];
     for (let days = 40; days >= -10; days -= 1) {
-      const answer = severityFor(rules, "visa", days);
+      const answer = scored(rules, "visa", days);
       if (answer === null) continue;
       expect(RANK[answer], `${days} days remaining exceeded the maximum severity`).toBeLessThanOrEqual(
         RANK[highestSeverity()],
