@@ -96,17 +96,61 @@ def gate_summary(head_ref, cwd=REPO):
         return ("TIMED OUT", 124)
     return (r.stdout + r.stderr, r.returncode)
 
-def sandbox(backlog, task_current=None):
-    d = tempfile.mkdtemp(prefix="gate-size-probe-")
+def stub(path, body="#!/bin/sh\nexit 0\n"):
+    with open(path, "w") as f:
+        f.write(body)
+    os.chmod(path, 0o755)
+
+def git_in(d, *a):
+    return subprocess.run(["git"] + list(a), cwd=d, capture_output=True, text=True)
+
+def fixture_repo(backlog, task_current=None, prepare=None, prefix="gate-size-probe-"):
+    """A throwaway directory that is a REAL git repository with a clean tree.
+
+    gate.sh refuses to report anything about a tree it cannot read (ADR-031),
+    and a directory that is not a repository is exactly that case: `git status`
+    exits 128, the refusal fires, and every probe below it measures nothing.
+    These fixtures used to be bare directories and passed only because the gate
+    did not yet notice. Initialising them is not a softening of the refusal — it
+    is the opposite. A real run needs a readable repository and a clean tree, so
+    a fixture that has both exercises the same code path the real run takes,
+    while the unreadable and dirty cases stay pinned, in both directions, by
+    tests/gates/stale-input.test.ts.
+
+    scripts/test-guards.sh is stubbed inside the fixture because gate.sh now
+    runs the guard suite as a gate line: without the stub a full-mode run in
+    here would re-enter this file and never terminate. Same reasoning as the
+    npx/npm stubs in measure() — the sandbox exists to observe one gate, and
+    re-running the whole suite inside it proves nothing. The stub lives in a
+    temporary copy of scripts/; the real gate.sh has no such escape.
+    """
+    d = tempfile.mkdtemp(prefix=prefix)
     SANDBOXES.append(d)
     shutil.copytree(os.path.join(REPO, "scripts"), os.path.join(d, "scripts"))
+    stub(os.path.join(d, "scripts", "test-guards.sh"))
     os.mkdir(os.path.join(d, "tasks"))
     with open(os.path.join(d, "tasks", "backlog.yaml"), "w") as f:
         f.write(backlog)
+    if prepare is not None:
+        prepare(d)
+    # .task-current.yaml is gitignored in the real repository, and that is half
+    # the reason a waiver must never be read from it. The fixture ignores it for
+    # the same reason: an ignored path is not a dirty tree, so the probe below
+    # tests waiver resolution rather than the refusal.
+    with open(os.path.join(d, ".gitignore"), "w") as f:
+        f.write(".task-current.yaml\n")
     if task_current is not None:
         with open(os.path.join(d, ".task-current.yaml"), "w") as f:
             f.write(task_current)
+    git_in(d, "init", "-q")
+    git_in(d, "config", "user.email", "guards@opsmind.test")
+    git_in(d, "config", "user.name", "guards")
+    git_in(d, "add", "-A")
+    git_in(d, "commit", "-qm", "base")
     return d
+
+def sandbox(backlog, task_current=None):
+    return fixture_repo(backlog, task_current)
 
 def shows(out, n):
     """The number n appears in the output as a number, not inside a longer one."""
@@ -320,13 +364,22 @@ for keys, name in (
           "exit %s: %s" % (code, out))
 
 # --- the committed backlog, read-only: the waiver that actually exists --------
-out, code = gate_summary("task/staging-deploy")
+# The real tasks/backlog.yaml, read through a fixture repository rather than by
+# running gate.sh in this checkout. gate.sh refuses outright on a dirty tree
+# (ADR-031), so probing it here would make these three report on whether the
+# developer has uncommitted work instead of on waiver resolution — and this file
+# has to stay runnable mid-task, which is when a guard gets broken. mark_done()
+# already copies the real backlog into a throwaway repository for its own
+# reasons; this is the same move.
+real_backlog = open(os.path.join(REPO, "tasks", "backlog.yaml")).read()
+sbr = sandbox(real_backlog)
+out, code = gate_summary("task/staging-deploy", cwd=sbr)
 check("the committed staging-deploy waiver resolves to its 1800 budget",
       shows(out, 1800), out)
 check("the committed waiver is printed with its recorded reason",
       "staging-deploy.test.ts" in out, out)
 
-out, code = gate_summary("task/gate-size-waiver")
+out, code = gate_summary("task/gate-size-waiver", cwd=sbr)
 check("a neighbouring task on the same backlog keeps the default budget",
       shows(out, 1500) and not shows(out, 1800), out)
 
@@ -350,41 +403,25 @@ def size_lines(out, gate):
 
 def measure(files):
     """Commit `files` (path -> line count) onto a base; return gate.sh output."""
-    d = tempfile.mkdtemp(prefix="gate-size-measure-")
-    SANDBOXES.append(d)
-    shutil.copytree(os.path.join(REPO, "scripts"), os.path.join(d, "scripts"))
-    os.mkdir(os.path.join(d, "tasks"))
-    with open(os.path.join(d, "tasks", "backlog.yaml"), "w") as f:
-        f.write(FIXTURE)
-    stub = os.path.join(d, "stub-bin")
-    os.mkdir(stub)
-    for tool in ("npx", "npm"):
-        p = os.path.join(stub, tool)
-        with open(p, "w") as f:
-            f.write("#!/bin/sh\nexit 0\n")
-        os.chmod(p, 0o755)
-
-    def git(*a):
-        subprocess.run(["git"] + list(a), cwd=d, capture_output=True, text=True)
-    git("init", "-q")
-    git("config", "user.email", "guards@opsmind.test")
-    git("config", "user.name", "guards")
-    git("add", "-A")
-    git("commit", "-qm", "base")
-    base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=d,
-                          capture_output=True, text=True).stdout.strip()
+    def prepare(d):
+        binder = os.path.join(d, "stub-bin")
+        os.mkdir(binder)
+        for tool in ("npx", "npm"):
+            stub(os.path.join(binder, tool))
+    d = fixture_repo(FIXTURE, prepare=prepare, prefix="gate-size-measure-")
+    base = git_in(d, "rev-parse", "HEAD").stdout.strip()
     for path, count in files.items():
         full = os.path.join(d, path)
         os.makedirs(os.path.dirname(full), exist_ok=True)
         with open(full, "w") as f:
             f.write("".join("line %d\n" % i for i in range(count)))
-    git("add", "-A")
-    git("commit", "-qm", "change")
+    git_in(d, "add", "-A")
+    git_in(d, "commit", "-qm", "change")
 
     env = dict(os.environ)
     env["GATE_BASE"] = base
     env["GITHUB_HEAD_REF"] = "task/probe-plain"
-    env["PATH"] = stub + os.pathsep + env["PATH"]
+    env["PATH"] = os.path.join(d, "stub-bin") + os.pathsep + env["PATH"]
     r = subprocess.run(["bash", "scripts/gate.sh"], cwd=d, env=env,
                        capture_output=True, text=True, timeout=180)
     return r.stdout + r.stderr
@@ -428,7 +465,11 @@ out = measure({"docs/architecture/data-model.md": 600,
 check("documentation never masks an oversized implementation",
       "FAIL" in size_lines(out, "size-impl"), out)
 
-# tests/ and the guard harness keep the exemption they already had.
+# tests/ and the guard harness keep the exemption they already had. The second
+# case overwrites the fixture's stubbed copy of this file with 600 lines of
+# "line N", so the sandbox's own `guards` line fails noisily inside that run.
+# Only the size-* lines are read, and the same is already true of lint, types
+# and tests there.
 check("tests/ stays out of size-impl",
       size_lines(measure({"tests/modules/deadlines/calendar.test.ts": 600,
                           "lib/modules/deadlines/calendar.ts": 40}),

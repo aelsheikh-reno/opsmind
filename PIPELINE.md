@@ -121,6 +121,7 @@ Nothing merges until every gate passes. Gates are scripts, not judgements.
 | `lint` | Style, plus the module-boundary import rules |
 | `types` | `tsc --noEmit`, no `any` introduced in a diff |
 | `boundaries` | No module writes another's tables; no page imports a module; only `repository.ts` touches the database |
+| `guards` | `scripts/test-guards.sh`: every guard still blocks what it claims to, in both directions. Full suite only — the fixtures call `gate.sh --summary`, so a guard line reachable from `--summary` would never terminate |
 | `tests` | Unit and integration pass |
 | `test-count` | The suite never shrinks: the runtime test total against the `tests` floor in `tests/baseline.json` |
 | `cov-report` | `vitest run --coverage` ran and exited clean. The report it must produce is `coverage/lcov.info`; a report that is absent, empty or declares no measurable line is caught by the two gates below, which read it — and is a failure there, never a pass |
@@ -168,6 +169,17 @@ as a clean tree. That failure direction is the defect itself, not a variant of
 it: every later gate reads commits rather than the index, so a run over rubble
 would otherwise measure normally and reach `ALL GATES PASS`. "The tree is dirty"
 and "the tree could not be read" are different facts and print different words.
+
+**The local gate runs the guard suite, so a broken guard is caught before the
+PR.** Adding the refusal above broke every budget probe in
+`scripts/test-guards.sh` — those fixtures were bare temp directories, not git
+repositories — and `./scripts/gate.sh` still printed `ALL GATES PASS`, because
+the guard suite ran only as a step of its own in `gates.yml`. A local gate that
+omits a check the PR is judged on is the same defect one level up. It is now the
+first line of the full suite and no longer a separate CI step: one invocation,
+not two to keep in sync. The fixtures were fixed by making them real git
+repositories with a clean tree — the state a real run requires — and not by
+relaxing the refusal for anything shaped like a test.
 
 Two size budgets rather than one, because a single number cannot serve both
 jobs. `size-impl` forces a task to split, and an oversized task shows up in

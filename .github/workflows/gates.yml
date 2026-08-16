@@ -77,8 +77,12 @@ jobs:
         # falling back to the shared client if this is missing.
         run: node prisma/generate-legacy-client.mjs
 
-      - name: Verify the guards still fire
-        run: ./scripts/test-guards.sh
+      # scripts/test-guards.sh used to run here as a step of its own. It is now
+      # the first line of gate.sh's full suite, so it is not repeated: two
+      # invocations mean two places to keep in sync, and the one that mattered
+      # was the one the developer never ran. A guard suite that only CI runs is
+      # a guard suite found broken after the pull request is open — which is
+      # exactly how it was found broken.
       - name: Run all gates
         run: GATE_BASE=origin/${{ github.base_ref || 'main' }} ./scripts/gate.sh
       - run: npm run build

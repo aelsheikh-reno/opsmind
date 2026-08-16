@@ -290,6 +290,28 @@ if [[ "$mode" == "--summary" ]]; then
 fi
 
 # ---- full suite -------------------------------------------------------------
+# THE GUARDS FIRST — the checks that check the checks. This line exists because
+# of a fifth instance of the pattern the commit line above documents, and this
+# time the check that measured the wrong thing was this file. The refusal above
+# was added, `./scripts/gate.sh` printed ALL GATES PASS, and CI went red: every
+# sandbox fixture in scripts/test-guards.sh was a bare directory rather than a
+# git repository, so the refusal fired inside all ten budget probes and the
+# whole guard suite was broken. The local gate calls itself the pre-PR verdict
+# while not running a check CI runs, so "pass" here and "pass" there were
+# answers to different questions — the same defect one level up.
+#
+# FULL MODE ONLY, and the reason is structural rather than a matter of speed
+# (the suite takes about three seconds, which --summary could afford).
+# test-guards.sh probes gate.sh by running it inside throwaway fixture
+# repositories. From --summary — which the fixtures call — this line would
+# re-enter the suite on every probe and would not terminate. The fixtures stub
+# their own copy of test-guards.sh for the same reason, exactly as they already
+# stub npx and npm: a sandbox built to observe one measurement proves nothing by
+# re-running the whole suite inside itself. That stub is a file in a temporary
+# copy of scripts/. There is no flag, and no environment variable, that turns
+# this line off in a real checkout.
+run "guards" "bash \"$here/test-guards.sh\""
+
 run "lint"   "npx eslint ."
 run "types"  "npx tsc --noEmit"
 run "tests"  "npx vitest run"
@@ -391,8 +413,8 @@ run "cov-report" "npx vitest run --coverage"
 # fails on size-impl regardless of how few tests accompany it.
 #
 # scripts/test-guards.sh is test code that happens to sit outside tests/: it
-# does nothing but assert the guards still block what they claim to, and
-# gates.yml runs it as a step of its own. Counted as implementation it caused
+# does nothing but assert the guards still block what they claim to, and the
+# full suite above runs it as a gate line. Counted as implementation it caused
 # precisely the damage the split exists to prevent — gate-size-waiver measured
 # 413 impl lines against the 400 limit with 276 of them guard probes, so the
 # cheapest way to pass was to stop probing the guards, and a guard that has

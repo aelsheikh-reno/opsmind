@@ -1505,6 +1505,8 @@
   spec: PIPELINE.md#the-gates
   produces:
     - scripts/gate.sh
+    - scripts/test-guards.sh
+    - .github/workflows/gates.yml
     - tests/gates/stale-input.test.ts
     - tests/baseline.json
     - docs/architecture/decisions.md
@@ -1519,6 +1521,12 @@
       - "--summary refuses on a stale tree exactly as the full suite does"
       - "A change confined to a path the gate does not measure still runs — it does not over-refuse"
       - "The refusal exits before any other gate prints a verdict"
+      - "A tree the gate cannot read is refused in different words from a dirty one, and git's own stderr is printed"
+      - "gate.sh's full suite runs scripts/test-guards.sh as a gate line, so a broken guard is caught before the PR and not by CI"
+      - "The guard line is in the full suite only, because the fixtures call --summary and would otherwise re-enter it without terminating"
+      - "Every fixture scripts/test-guards.sh builds is a real git repository with a clean tree, so each probe runs the code path a real run takes"
+      - "The refusal is not softened for the fixtures — no flag, no environment variable and no shape test turns it off in a real checkout"
+      - ".github/workflows/gates.yml runs the guard suite exactly once, through gate.sh"
   risk: low
   blocks_product: true
   status: todo
