@@ -317,8 +317,10 @@ describe("an overdue deadline reports the highest severity band the scale define
   // `daysLeft < 0` together, :238-239 renders that bucket as the red "🔴 Overdue
   // — action needed now" section ahead of critical, and :260 counts all of it
   // into the "⚠️ N urgent" subject line — for every item, regardless of type.
-  // Read as a per-type ceiling, this build was quieter than the product it
-  // replaces on exactly the deadlines that are already late.
+  // Read as a per-type ceiling, a minor-only type could never reach the top
+  // band however far past due it ran. The oracle settles the semantics, not a
+  // volume comparison: legacy collects nothing already past due except payroll
+  // runs, so on an expired visa it is silent.
   //
   // The band is written as `highestSeverity()` throughout and never as the
   // string "major": the claim is "the top of the scale", so a level added above

@@ -85,8 +85,11 @@ export function highestSeverity(): Severity {
  * renders it as the red "Overdue — action needed now" section ahead of critical
  * (:238-239), and counts all of it into the "urgent" subject line (:260) —
  * regardless of type, because legacy has no per-type severity at all. Reading
- * "configured" as a per-type ceiling made this build quieter than the product it
- * replaces on exactly the deadlines that are already late (spec, Note; Ahmed's
+ * "configured" as a per-type ceiling capped a minor-only type below the top band
+ * however far past due it ran. The oracle settles the SEMANTICS, not a volume
+ * comparison: legacy's digest collects nothing already past due except payroll
+ * runs (every query is `gte: now`), so on an expired visa it is silent
+ * (spec, Note; Ahmed's
  * decision, 2026-08-16, reversing the earlier reading).
  *
  * A type with no rows configured is never breached here, overdue or not. That is

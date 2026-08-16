@@ -1695,6 +1695,7 @@
     - tests/modules/deadlines/thresholds.test.ts
     - docs/architecture/components-core-deadline-monitor.md
     - tasks/backlog.yaml
+    - tests/baseline.json
   done_when:
     gates: [lint, types, boundaries, tests, coverage, differential]
     assertions:
@@ -1716,9 +1717,11 @@
     Legacy disagrees and legacy is right here: reference/legacy/lib/email.ts:174,
     :238-239 and :260 put EVERY overdue item in the red "Overdue — action needed now"
     section and counts it in the urgent subject line, regardless of type. Legacy
-    has no per-type severity, so overdue there is uniformly top-tier. That made
-    the new build quieter than the product it replaces, on exactly the deadlines
-    that are already late.
+    has no per-type severity, so overdue there is uniformly top-tier. Read as a
+    per-type ceiling, a minor-only type could never reach the top band however far
+    past due it ran. The oracle settles the SEMANTICS and not a volume comparison:
+    legacy's digest collects nothing already past due except payroll runs (every
+    query is `gte: now`), so on an expired visa legacy is silent.
 
     Reversed here: overdue takes the highest band the SEVERITY SCALE defines, not
     the highest row present for the type. The spec sentence, the pinned test in
