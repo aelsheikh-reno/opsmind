@@ -117,7 +117,7 @@ Nothing merges until every gate passes. Gates are scripts, not judgements.
 | Gate | Enforces |
 |---|---|
 | `commit` | Printed on every run, pass or fail: the short SHA, branch and base the suite measured. A verdict with no stated subject is unreadable |
-| `worktree` | Refuses when a file the gate measures is uncommitted. The run stops there — no other gate is measured or printed (ADR-031) |
+| `worktree` | Refuses when a file the gate measures is uncommitted, and refuses separately — in different words, carrying git's own error — when it cannot read the tree at all. The run stops there either way: no other gate is measured or printed (ADR-031) |
 | `lint` | Style, plus the module-boundary import rules |
 | `types` | `tsc --noEmit`, no `any` introduced in a diff |
 | `boundaries` | No module writes another's tables; no page imports a module; only `repository.ts` touches the database |
@@ -159,6 +159,15 @@ measures is uncommitted, in `--summary` as much as in the full suite. Measured
 means everything git tracks or would track, untracked files included, except
 `package-lock.json` and whatever `.gitignore` covers. The price is that the gate
 can no longer be run for a quick read mid-edit; commit or stash first.
+
+The same rule closes the case where the measurement cannot be taken at all. If
+the `git status` that reads the tree fails — `safe.directory` refusing a checkout
+git does not own, a damaged index, a lock held by another process, no repository
+— the gate refuses and prints git's message, rather than reading the empty result
+as a clean tree. That failure direction is the defect itself, not a variant of
+it: every later gate reads commits rather than the index, so a run over rubble
+would otherwise measure normally and reach `ALL GATES PASS`. "The tree is dirty"
+and "the tree could not be read" are different facts and print different words.
 
 Two size budgets rather than one, because a single number cannot serve both
 jobs. `size-impl` forces a task to split, and an oversized task shows up in

@@ -410,6 +410,143 @@ describe("assertions 4 and 6 · the refusal stops the suite", () => {
 });
 
 // ---------------------------------------------------------------------------//
+// Assertion 2, the other half — a measurement that CANNOT be taken refuses
+//
+// The refusal above fires when git says "dirty". These fire when git says
+// nothing at all. Discarding the exit status made the whole guard fail OPEN: an
+// unreadable tree yielded the empty string, `-n` read it as clean, and the run
+// reached ALL GATES PASS having looked at no tree. It does not self-rescue —
+// rev-parse, `diff --quiet` and `diff --numstat` read commits rather than the
+// index, so every later gate measures normally on a repository whose index is
+// rubble.
+//
+// The fixtures therefore break GIT, not the pathspec. A pathspec-level fixture
+// pins nothing here: the defect is that the script never asked whether the
+// command worked.
+// ---------------------------------------------------------------------------//
+
+/** A directory that is not, and is not inside, a git repository. */
+function nonRepo(): string {
+  const dir = mkdtempSync(path.join(tmpdir(), "opsmind-norepo-"));
+  temps.push(dir);
+  write(dir, "lib/a.ts", "export const a = 1;\n");
+  return dir;
+}
+
+/**
+ * The reviewer's reproduction: a genuinely dirty `lib/a.ts` AND an index git
+ * cannot read. Before the fix this printed a real short SHA, no `worktree`
+ * line, `changed: 0 uncommitted file(s), none in a measured path`, and
+ * `ALL GATES PASS`.
+ */
+function brokenIndex(bytes: "truncated" | "garbage"): string {
+  const dir = fixture({ dirty: { "lib/a.ts": "export const a = 99;\n" } });
+  const index = path.join(dir, ".git", "index");
+  writeFileSync(
+    index,
+    bytes === "truncated" ? readFileSync(index).subarray(0, 12) : Buffer.from("not an index\n"),
+  );
+  return dir;
+}
+
+describe("a tree the gate cannot read is refused, not assumed clean", () => {
+  it.each(MODES)("refuses a damaged index in %s mode, exiting 1", (mode) => {
+    const result = runGate(brokenIndex("truncated"), mode);
+    expect(result.code, result.out).toBe(1);
+    expect(result.line("worktree"), result.out).toContain("FAIL");
+    expect(result.out, "the run reached a verdict on a tree it never read").not.toContain(
+      "ALL GATES PASS",
+    );
+  });
+
+  it("refuses an index of garbage bytes too — it is not one corruption it knows", () => {
+    const result = runGate(brokenIndex("garbage"));
+    expect(result.code, result.out).toBe(1);
+    expect(result.line("worktree"), result.out).toContain("FAIL");
+  });
+
+  it("refuses outside any git repository", () => {
+    const result = runGate(nonRepo());
+    expect(result.code, result.out).toBe(1);
+    expect(result.line("worktree"), result.out).toContain("FAIL");
+  });
+
+  it("says it could not READ the tree, which is not what 'dirty' says", () => {
+    // The whole thesis of this node is that two different facts must not print
+    // the same word. "The tree is dirty" is a measurement; "the tree could not
+    // be measured" is the absence of one, and the remedies differ — commit or
+    // stash versus repair the repository.
+    for (const dir of [brokenIndex("truncated"), nonRepo()]) {
+      const result = runGate(dir);
+      expect(result.out, "the refusal does not say the tree could not be read").toMatch(
+        /could not read the working tree/i,
+      );
+      expect(result.out, "an unreadable tree was reported as a dirty one").not.toMatch(/dirty/i);
+    }
+  });
+
+  it("surfaces git's own stderr rather than swallowing it", () => {
+    // `fatal: detected dubious ownership` is the line an operator acts on. A
+    // refusal that hides it says only that something is wrong somewhere.
+    const truncated = runGate(brokenIndex("truncated"));
+    expect(truncated.out, "git's message was swallowed").toMatch(/fatal:/);
+    expect(truncated.out).toMatch(/index file smaller than expected/);
+    const outside = runGate(nonRepo());
+    expect(outside.out).toMatch(/not a git repository/);
+  });
+
+  it("prints no other gate verdict past the refusal", () => {
+    const result = runGate(brokenIndex("truncated"));
+    for (const label of ["boundaries", "risk", "size-impl", "size-total", "changed"]) {
+      expect(result.line(label), `${label} reported on an unread tree:\n${result.out}`).toBe("");
+    }
+  });
+
+  it("does not refuse a tree it CAN read — the polarity check", () => {
+    // A guard that refuses whenever git is involved would pass every check
+    // above. These are the same code path with git working.
+    expect(runGate(fixture()).code).toBe(0);
+    expect(runGate(fixture({ dirty: { "package-lock.json": '{"x":1}\n' } })).code).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------//
+// Assertion 1, continued — the branch field names the ref it is actually on
+// ---------------------------------------------------------------------------//
+
+describe("the commit line's ref field is true in both directions", () => {
+  it("calls a detached HEAD detached, not a branch named HEAD", () => {
+    // `git rev-parse --abbrev-ref HEAD` prints the literal "HEAD" here and exits
+    // 0, so the line read `commit 3ec798a on HEAD, ...` — a branch name no
+    // branch has, on the one line ADR-031 exists to make trustworthy.
+    const dir = fixture();
+    git(dir, ["checkout", "-q", git(dir, ["rev-parse", "HEAD"]).trim()]);
+    const result = runGate(dir);
+    expect(result.line("commit"), result.out).toMatch(/detached/i);
+    expect(result.line("commit"), "a detached HEAD was labelled as a branch").not.toMatch(
+      /on HEAD,/,
+    );
+    expect(result.line("commit"), result.out).toContain(headSha(dir));
+  });
+
+  it("does not call an unreadable repository detached", () => {
+    // The old fallback fired only when git could not answer at all, and what it
+    // asserted there was detachment — a fact about a repository it had not read.
+    const result = runGate(nonRepo());
+    expect(result.line("commit"), "detachment was asserted about an unread repository").not.toMatch(
+      /detach/i,
+    );
+    expect(result.line("commit"), result.out).toMatch(/unreadable/i);
+  });
+
+  it("still names a real branch when there is one", () => {
+    const result = runGate(fixture({ branch: "task/some-node" }));
+    expect(result.line("commit")).toContain("on task/some-node,");
+    expect(result.line("commit")).not.toMatch(/detach|unreadable/i);
+  });
+});
+
+// ---------------------------------------------------------------------------//
 // The record
 // ---------------------------------------------------------------------------//
 

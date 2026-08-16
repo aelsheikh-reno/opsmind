@@ -46,10 +46,16 @@ run() {
 #   * package-lock.json, which the nolock pathspec below already excludes from
 #     size-impl and size-total, and which vitest's coverage.include never
 #     selects. Committing it moves no number this suite prints.
-#   * anything .gitignore covers — coverage/, node_modules/, .next/, generated/
-#     and .task-current.yaml. That is the gate's own output and its deliberately
-#     uncommitted input; none of it can appear in `$base...HEAD`. git status
-#     omits ignored files unless asked, which is why none is named here.
+#   * anything .gitignore covers, as a rule and not as a list. An ignored path
+#     cannot reach `$base...HEAD`, so it can move no number this suite prints —
+#     that argument holds for whatever .gitignore happens to say, which is why
+#     the set is deliberately not enumerated. An enumeration drifts from the file
+#     it paraphrases and then describes a set that is not the set. git status
+#     omits ignored files unless asked, so the rule needs no pathspec here.
+#     Where ignoring and measuring meet is a path .gitignore covers that a commit
+#     carries anyway — `git add -f`, or a re-include such as the
+#     !prisma/migrations/**/*.sql rule. That is in the committed diff, so it is
+#     measured, exactly like any other committed file.
 #
 # Everything else is measured, because size-total counts every added line of it:
 # a dirty docs/ page, a dirty .claude/ prompt and a dirty backlog node each move
@@ -65,13 +71,58 @@ run() {
 # from a subtree without it, git status reports only that subtree and a dirty
 # file elsewhere goes unseen — under-refusing is the direction that reproduces
 # the defect.
+#
+# THE REF IS NAMED FROM symbolic-ref, NOT FROM rev-parse --abbrev-ref. On a
+# detached HEAD the latter prints the literal string "HEAD" and exits 0, so a
+# `|| echo detached` fallback after it is unreachable and the line reads
+# "on HEAD" — a branch name no branch has. The fallback then fires only where
+# git could not answer at all, asserting detachment about a repository the
+# script could not read. Both halves are the failure this file exists to stop: a
+# line stating a subject it did not measure. symbolic-ref fails on a detached
+# HEAD and only then, so the three cases separate cleanly — on a branch, off a
+# branch, and no readable HEAD, which is a different sentence from either.
 base="${GATE_BASE:-origin/main}"
 head_sha=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-head_ref=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "detached")
+if head_ref=$(git symbolic-ref --quiet --short HEAD 2>/dev/null); then :
+elif git rev-parse --verify -q HEAD >/dev/null 2>&1; then head_ref="a detached HEAD"
+else head_ref="an unreadable repository"; fi
 printf '%-14s%s\n' "commit" "$head_sha on $head_ref, measured against $base"
 
+# FAIL CLOSED WHEN THE MEASUREMENT CANNOT BE TAKEN. Discarding git's exit status
+# here makes the whole refusal fail OPEN: any failure of this command yields the
+# empty string, `-n` reads that as "clean tree", and the run proceeds to report
+# on a tree it never looked at — the exact defect one level up. It does not
+# self-rescue either, because rev-parse, `diff --quiet` and `diff --numstat` all
+# read commits rather than the index and keep answering normally.
+#
+# The triggers are routine, not exotic: safe.directory refusing a checkout it
+# does not own (containers, the self-hosted runner), an unreadable object store,
+# a concurrent git holding a lock, a damaged index, a git too old for :(top)
+# pathspec magic, and no repository at all. "The tree is dirty" and "the tree
+# could not be read" are different facts and must not print the same word, so
+# they get different messages — and git's own stderr is surfaced rather than
+# swallowed, because `fatal: detected dubious ownership` is the line an operator
+# acts on. stderr is captured separately from stdout: folded together, a mere
+# warning on a successful run would be reported as an offending file.
+#
+# Both refusals sit ahead of the mode branch, so --summary gets them unchanged.
+status_err=$(mktemp 2>/dev/null) || status_err=/dev/null
 measured_dirty=$(git status --porcelain -uall -- \
-                 ':(top)' ':(top,exclude)*package-lock.json' 2>/dev/null)
+                 ':(top)' ':(top,exclude)*package-lock.json' 2>"$status_err")
+status_rc=$?
+status_msg=$(cat "$status_err" 2>/dev/null)
+[[ "$status_err" == /dev/null ]] || rm -f "$status_err"
+if (( status_rc != 0 )); then
+  printf '%-14s' "worktree"; echo "FAIL"
+  echo "    could not read the working tree — git status exited $status_rc. Whether any"
+  echo "    measured file is uncommitted is unknown here, and a check that cannot"
+  echo "    measure what it claims to must refuse rather than assume the good case."
+  echo "    git said:"
+  echo "${status_msg:-(no message on stderr)}" | sed 's/^/        /'
+  echo "    Fix the repository and re-run. Nothing was measured."
+  echo "GATES FAILED — do not open a PR"
+  exit 1
+fi
 if [[ -n "$measured_dirty" ]]; then
   printf '%-14s' "worktree"; echo "FAIL"
   echo "    working tree dirty — the gate measures the committed diff"
