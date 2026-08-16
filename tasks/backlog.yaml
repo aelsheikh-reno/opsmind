@@ -1825,6 +1825,65 @@
     whether it is also flagged here or deliberately left alone is undecided.
     Declared only — do not build with this node's parent.
 
+- id: gate-size-impl-exclude-comments
+  title: A comment is not implementation, and charging it makes deletion the cheapest green
+  phase: 0
+  depends_on: [gate-stale-input-refusal]
+  spec: PIPELINE.md#the-gates
+  produces:
+    - scripts/gate.sh
+    - scripts/size-impl.mjs
+    - tests/kernel/kernel-source.ts
+    - tests/gates/size-impl-comments.test.ts
+    - docs/architecture/decisions.md
+    - PIPELINE.md
+    - tasks/backlog.yaml
+    - tests/baseline.json
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "A comment-only line in a .ts or .tsx file does not count toward size-impl"
+      - "A blank line does not count toward size-impl"
+      - "A line carrying code and a trailing comment counts as code, in full"
+      - "// inside a string literal, a template literal or a JSX expression counts as CODE, never as a comment"
+      - "The classification comes from the TypeScript compiler API through the kernel-source reader, never a regex"
+      - "size-impl stays 400 and never-waivable; size-total counts every line as before"
+      - "A 450-line diff with no comments is still refused"
+  risk: low
+  blocks_product: true
+  status: todo
+  note: >
+    BLOCKS PRODUCT. It is blocking module-deadlines-sweep right now, and every
+    way past it games the gate (Ahmed, 2026-08-16).
+
+    THE EVIDENCE THE 400 RESTS ON ARGUES AGAINST CHARGING COMMENTS. The figure
+    comes from the SmartBear/Cisco study of reviewer cognitive load — how much
+    diff a human can review before defect detection collapses. That same study
+    found that authors who ANNOTATE their changes ship materially fewer defects,
+    because annotating forces self-review. Charging annotations to the code
+    budget makes deleting them the cheapest path to green, which inverts the
+    finding the threshold rests on. ADR-026 and ADR-028 already reached this
+    conclusion for documentation and generated DDL; this is the same argument
+    about the third artifact a reviewer reads.
+
+    The case that forced it: module-deadlines-sweep measured EXACTLY 400 and
+    went 3 over solely by correcting a comment that had become false — the
+    MissingBusinessCalendarError doc said a missing calendar aborts the run,
+    which that node makes untrue. The correction IS the work, and the gate
+    charged it as if it were new implementation.
+
+    COMPILER API, NEVER A REGEX. This repository has already been bitten by a
+    line scanner reading declarations inside string literals as real exports,
+    which is why tests/kernel/kernel-source.ts exists. A `//` inside a string, a
+    template literal or a JSX expression is code and must count as code; only
+    the compiler can tell the difference. The reader already collects comments
+    as CommentRanges with line positions, so this extends it rather than
+    inventing a second parser.
+
+    A line carrying code and a trailing comment counts as CODE, in full. No
+    partial credit: the alternative is a gate that rewards moving explanation
+    onto the same line as the code it explains.
+
 - id: kernel-repository-integration-tests
   title: Integration tests over the six kernel repositories, against CI Postgres
   phase: 1
