@@ -1,6 +1,6 @@
 {
   "tests": 756,
-  "coverage_bp": 8165,
+  "coverage_bp": 8226,
   "why": [
     "The number of tests the suite must not drop below.",
     "",
@@ -34,7 +34,7 @@
     "task green on its own lines, so this ratchets the whole repository: it fails",
     "on a DECREASE only and never on standing still.",
     "",
-    "Set to 7920 by gate-coverage-strict-path, then raised by module-deadlines-civil-date and module-deadlines-thresholds in turn. 7920 was what the repository",
+    "Set to 7920 by gate-coverage-strict-path, then raised by module-deadlines-civil-date and module-deadlines-thresholds in turn, and to 8226 by timezone-reject-utc (283 of 344 lines) — the zone predicates and the advice sentence are pure, so the tests reach them without a database. 7920 was what the repository",
     "measured at the time (240 of 303 lines). The number is low because six",
     "lib/kernel/*/repository.ts files are Prisma plumbing no unit test can reach.",
     "They are deliberately NOT excluded from coverage — raising them is",
