@@ -4,9 +4,10 @@
 //   2. "A threshold is inclusive at its bound — exactly seven business days
 //       remaining breaches a seven-day window"
 //   3. "An overdue deadline, with negative days remaining, reports the highest
-//       severity band the severity scale defines — not the highest band
-//       configured for its type" (amended by node `overdue-severity`, Ahmed's
-//       decision of 2026-08-16, reversing the earlier per-type reading)
+//       severity configured for its type — not the top band of the severity
+//       scale" (node `overdue-severity`, Ahmed's decision of 2026-08-16,
+//       withdrawing the reversal made the same day and restoring the per-type
+//       ceiling)
 //   4. "A deadline type with no ThresholdTable row is reported as unconfigured,
 //       never scored as safe"
 //   5. "A fingerprint is deterministic and carries no severity, so an escalation
@@ -17,20 +18,28 @@
 // code describes what the code does, bugs included, and then guards them with a
 // green check. Every expected value below comes from
 // docs/architecture/components-core-deadline-monitor.md (the settled threshold
-// semantics: Ahmed's decisions of 2026-08-14 at :42-48, and the overdue
-// reversal of 2026-08-16 at :50-52) or from docs/architecture/flows-alerting.md:34
+// semantics: Ahmed's decisions of 2026-08-14 at :42-48, and the per-type ceiling
+// on an overdue deadline at :50-54) or from docs/architecture/flows-alerting.md:34
 // (the fingerprint's segments). The only thing taken from the module is the
 // shape of the call — names, parameters and types, handed over in the task,
 // which is its public surface.
 //
-// Node `overdue-severity` amended one of those rules after this file was first
-// written. It was re-derived from the amended spec, again without reading
-// `thresholds.ts` — including the two blocks that had picked the old rule up
-// incidentally through negative-day inputs. That coupling is the reason the
-// reversal was awkward: a rule restated in three places is three places to
-// forget. Overdue is now pinned in exactly one describe, and the other blocks
-// that happen to pass a negative distance defer to it by reference
-// (`highestSeverity()`) rather than restating what it answers.
+// There is NO oracle for the overdue rule and none is cited. Legacy is silent
+// on it rather than agreeing with either reading: its digest never collects an
+// already-expired document, invoice or schedule, so on an expired visa it has
+// no opinion at all. An overdue expectation below that cited legacy would be
+// citing a query that never runs.
+//
+// The overdue rule moved twice while this file existed — to the top of the
+// severity scale on 2026-08-16 and back to the per-type ceiling the same day,
+// the second change being a withdrawal of the first. The shape that made the
+// second change cheap is kept deliberately: the rule is pinned in exactly ONE
+// describe, and every other block that happens to pass a negative distance
+// defers to it by reference (`highestConfiguredFor`) rather than restating what
+// it answers. Both property tests hold non-negative domains for the same
+// reason — a generated negative day would make their expectations a tacit
+// second copy of the overdue rule, which is how the first change came to break
+// two describes that are not about overdue at all.
 //
 // Why these four functions are worth this much test: the failure they exist to
 // prevent is silence. An under-warned deadline produces no output at all, so
@@ -68,6 +77,24 @@ const rule = (deadlineType: string, businessDaysBefore: number, severity: Severi
  */
 const RANK: Record<Severity, number> = { minor: 1, major: 2 };
 const ALL_SEVERITIES: readonly Severity[] = ["minor", "major"];
+
+/**
+ * The highest severity CONFIGURED for a type — the ceiling an overdue deadline
+ * reports from (spec:48,50). Stated once so that blocks which are not about the
+ * overdue rule can name its answer by reference instead of writing out a band
+ * and quietly becoming a second statement of the rule. `null` where the type has
+ * no row at all, which is the unconfigured hole and not a severity (spec:54).
+ *
+ * Used only on the small fixed tables below, where the ceiling is obvious by
+ * inspection. The overdue property test deliberately does NOT use it: an
+ * expectation recomputed from the rules is a copy of the rule under test, so
+ * that test picks its ceiling first and builds a table around it instead.
+ */
+function highestConfiguredFor(rules: readonly ThresholdRule[], deadlineType: string): Severity | null {
+  const own = rules.filter((r) => r.deadlineType === deadlineType);
+  if (own.length === 0) return null;
+  return own.reduce<Severity>((top, r) => (RANK[r.severity] > RANK[top] ? r.severity : top), own[0].severity);
+}
 
 /** Every ordering of a rule set. Used to prove the answer is order-free. */
 function permutations<T>(items: readonly T[]): T[][] {
@@ -204,7 +231,9 @@ describe("severity is the maximum across breached windows, never the tightest on
     }
     // Where the walk ends is the overdue rule's answer, not this block's, so it
     // is named by reference rather than as a literal severity.
-    expect(previous, "the walk never reached a breach at all").toBe(RANK[highestSeverity()]);
+    expect(previous, "the walk never reached a breach at all").toBe(
+      RANK[highestConfiguredFor(rules, "filing") as Severity],
+    );
   });
 
   it("reads only the rows for the type it was asked about", () => {
@@ -247,11 +276,12 @@ describe("a threshold is inclusive at its bound", () => {
   it("is still breached one day overdue, at whatever severity the overdue rule gives", () => {
     // Past the bound is still inside the window: the inclusive comparison does
     // not stop applying once the distance goes negative, and a lapsed visa must
-    // not fall out of the breach set. WHICH severity comes back is the overdue
-    // rule's business (spec:50) and not this block's, so it is asserted by
-    // reference to the scale rather than written out as a severity here.
+    // not fall out of the breach set. That non-null is what belongs to THIS
+    // block. WHICH severity comes back is the overdue rule's business (spec:50)
+    // and not this block's, so it is asserted by reference to that type's
+    // configured ceiling rather than written out as a band here.
     expect(severityFor(SEVEN, "visa", -1)).not.toBeNull();
-    expect(severityFor(SEVEN, "visa", -1)).toBe(highestSeverity());
+    expect(severityFor(SEVEN, "visa", -1)).toBe(highestConfiguredFor(SEVEN, "visa"));
   });
 
   it("is inclusive at the bound for a major window too", () => {
@@ -278,7 +308,7 @@ describe("a threshold is inclusive at its bound", () => {
     expect(severityFor(rules, "heartbeat", 1)).toBeNull();
     expect(severityFor(rules, "heartbeat", 0)).toBe("major");
     // One day later it is overdue, and the overdue rule answers — by reference.
-    expect(severityFor(rules, "heartbeat", -1)).toBe(highestSeverity());
+    expect(severityFor(rules, "heartbeat", -1)).toBe(highestConfiguredFor(rules, "heartbeat"));
   });
 
   it("holds at the bound of every window in a multi-row table", () => {
@@ -296,163 +326,202 @@ describe("a threshold is inclusive at its bound", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Assertion 3 — an overdue deadline takes the top of the SEVERITY SCALE.
+// Assertion 3 — an overdue deadline takes the highest severity configured FOR
+// ITS TYPE.
 // ---------------------------------------------------------------------------
 //
 // This is the one place the overdue rule is stated. Every other block that
-// passes a negative distance defers to `highestSeverity()` rather than naming a
-// band, so this rule can be changed again in one file and one describe.
+// passes a negative distance defers to `highestConfiguredFor` rather than
+// naming a band, so this rule can be changed again in one file and one describe.
 
-describe("an overdue deadline reports the highest severity band the scale defines", () => {
-  // spec:48,50 — "an **overdue** deadline, with negative days remaining, reports
-  // the **highest severity band the severity scale defines**, not the highest
-  // band configured for its type... A type whose Settings rows are all `minor`
-  // still reports the **highest** band once it is past due; the ceiling comes
-  // from the severity scale, not from which windows an admin happened to write
-  // for that type."
+describe("an overdue deadline reports the highest severity configured for its type", () => {
+  // spec:48,50 — "an **overdue** deadline, with negative days remaining,
+  // breaches every window its type has and reports the **highest severity
+  // configured for that type**... A type whose Settings rows are all `minor`
+  // reports `minor` however far past due it runs. The ceiling is the type's own
+  // rows, because the severity column in Settings is how an administrator says
+  // *'this type is never urgent'* — and an overdue stationery order at the same
+  // band as a lapsed visa empties the top band of meaning."
   //
-  // Ahmed's decision of 2026-08-16, REVERSING the earlier per-type reading that
-  // this file previously pinned. The oracle is legacy, which has no per-type
-  // severity at all: reference/legacy/lib/email.ts:174 buckets every item with
-  // `daysLeft < 0` together, :238-239 renders that bucket as the red "🔴 Overdue
-  // — action needed now" section ahead of critical, and :260 counts all of it
-  // into the "⚠️ N urgent" subject line — for every item, regardless of type.
-  // Read as a per-type ceiling, a minor-only type could never reach the top
-  // band however far past due it ran. The oracle settles the semantics, not a
-  // volume comparison: legacy collects nothing already past due except payroll
-  // runs, so on an expired visa it is silent.
-  //
-  // The band is written as `highestSeverity()` throughout and never as the
-  // string "major": the claim is "the top of the scale", so a level added above
-  // major must move these tests with it rather than leave them passing against
-  // the old ceiling.
+  // Ahmed's decision of 2026-08-16, WITHDRAWING the same day's reversal that had
+  // put every overdue item at the top band of the scale. That reversal is not
+  // pinned anywhere in this file any more, and neither is a legacy citation for
+  // it: legacy is silent on this case rather than agreeing with either reading
+  // (spec:52), so there is no oracle here and nothing in this block is derived
+  // from one. The expectations below are read off the tables by inspection.
 
-  /** All-minor rows: the case where the two readings disagree. */
+  /** All-minor rows: the case where the withdrawn reading and this one differ. */
   const MINOR_ONLY: readonly ThresholdRule[] = [
     rule("stationery-order", 14, "minor"),
     rule("stationery-order", 3, "minor"),
   ];
 
   it("has a scale whose top outranks minor, so the cases below can discriminate", () => {
-    // A guard, not a rule. If `Severity` ever collapsed to a single band, every
-    // "top of the scale" assertion below would pass without proving anything —
-    // the old per-type reading would satisfy them too. This fails loudly in that
-    // case instead of letting the block go quietly vacuous.
+    // A guard, not a rule. If `Severity` ever collapsed to a single band, the
+    // minor-only case below would pass without proving anything — the withdrawn
+    // top-of-the-scale reading would satisfy it too, because minor would BE the
+    // top. This fails loudly in that case instead of going quietly vacuous.
     expect(RANK[highestSeverity()], "the scale has no band above minor").toBeGreaterThan(RANK.minor);
   });
 
-  it("reports the top of the scale for a type whose only configured windows are minor", () => {
-    // THE discriminating case, and the one this node flips. Nothing here is
-    // configured major. The old reading answered `minor` — a lapsed item sitting
-    // below the urgent band forever because of which rows an admin wrote — and
-    // legacy would have had it in the red section. Under-warning is the silence
-    // this module exists to prevent (spec:42).
-    expect(severityFor(MINOR_ONLY, "stationery-order", -5)).toBe(highestSeverity());
-    expect(RANK[severityFor(MINOR_ONLY, "stationery-order", -5) as Severity]).toBeGreaterThan(RANK.minor);
+  it("reports minor for a type whose only configured windows are minor, and still reports it", () => {
+    // THE discriminating case. Both rows are minor, so the type's ceiling is
+    // minor, and it stays minor five days past due.
+    //
+    // A MINOR-ONLY TYPE REPORTING MINOR IS NOT SILENCE. The alert fires, appears
+    // in the run and is reported — hence the `not.toBeNull()` beside the band.
+    // Severity governs URGENCY, not VISIBILITY; a low band is not the absence of
+    // an alert. Reading it as one is the misreading that produced the withdrawn
+    // 2026-08-16 reversal, so the two halves are pinned together here: the thing
+    // is reported, AND it is reported at the band its administrator chose. The
+    // severity column in Settings is how that administrator says "this type is
+    // never urgent" (spec:50), and an overdue stationery order sitting at the
+    // same band as a lapsed visa empties the top band of meaning.
+    expect(severityFor(MINOR_ONLY, "stationery-order", -5)).not.toBeNull();
+    expect(severityFor(MINOR_ONLY, "stationery-order", -5)).toBe("minor");
+    expect(severityFor(MINOR_ONLY, "stationery-order", -5)).not.toBe(highestSeverity());
   });
 
-  it("reports the top of the scale for a type that does configure a major window", () => {
-    // The other polarity: where the two readings agree, the answer is unchanged.
-    // A reversal that only moved the disagreeing case and broke this one would
-    // be a different rule again.
-    expect(severityFor(MISORDERED, "visa", -1)).toBe(highestSeverity());
-    expect(severityFor(MISORDERED, "visa", -40)).toBe(highestSeverity());
+  it("reports major for a type that does configure a major window", () => {
+    // The other polarity. MISORDERED carries a major row, so its ceiling is
+    // major and an overdue visa reaches it — a per-type ceiling is a ceiling,
+    // not a demotion. A rule that answered the TIGHTEST configured band would
+    // give minor here: the nearest window of {30 → major, 7 → minor} is the
+    // minor one, and that is the downgrade spec:42 forbids.
+    expect(severityFor(MISORDERED, "visa", -1)).toBe("major");
+    expect(severityFor(MISORDERED, "visa", -40)).toBe("major");
+    expect(severityFor(MISORDERED, "visa", -1)).not.toBe("minor");
   });
 
-  it.each([-1, -2, -7, -30, -365, -3650])("is at the top of the scale %i days overdue, whatever the rows say", (days) => {
-    // Long overdue is not less serious than newly overdue. An expired visa stops
-    // an engineer working (spec:7) for as long as it stays expired, and legacy
-    // counts it as urgent on day 3650 exactly as on day 1.
-    expect(severityFor(MINOR_ONLY, "stationery-order", days)).toBe(highestSeverity());
-    expect(severityFor(MISORDERED, "visa", days)).toBe(highestSeverity());
+  it.each([-1, -2, -7, -30, -365, -3650])("reports its type's own ceiling %i days overdue", (days) => {
+    // Distance past due does not change the answer in either direction. Long
+    // overdue is not less serious than newly overdue for the visa, and it is not
+    // MORE serious than its rows for the stationery order: there is no distance
+    // at which a minor-only type drifts up into the urgent band.
+    expect(severityFor(MINOR_ONLY, "stationery-order", days)).toBe("minor");
+    expect(severityFor(MISORDERED, "visa", days)).toBe("major");
   });
 
-  it("answers the same band for two types configured completely differently", () => {
-    // Legacy's actual behaviour, stated as an equality rather than as a value:
-    // one overdue bucket for every item regardless of type (email.ts:174). If a
-    // type's own rows still capped it, these two would differ.
+  it("answers different bands for two types configured differently", () => {
+    // The per-type rule stated as a difference rather than as two values. If the
+    // ceiling came from the scale instead of from the rows, these two would be
+    // equal — one bucket for every overdue item regardless of type. They are not
+    // equal, and which one is higher is decided by the Settings rows alone.
     const minorOverdue = severityFor(MINOR_ONLY, "stationery-order", -9);
     const majorOverdue = severityFor(MISORDERED, "visa", -9);
-    expect(minorOverdue).toBe(majorOverdue);
-    expect(minorOverdue).toBe(highestSeverity());
+    expect(minorOverdue).not.toBe(majorOverdue);
+    expect(minorOverdue).toBe("minor");
+    expect(majorOverdue).toBe("major");
+    expect(RANK[majorOverdue as Severity]).toBeGreaterThan(RANK[minorOverdue as Severity]);
   });
 
-  it("does not vary with which windows the type happens to have", () => {
+  it("varies with which windows the type happens to have", () => {
     // Four tables for one type — minor-only, major-only, mixed, and a single
-    // zero-day row — all overdue by the same distance. The rows decide WHETHER a
-    // non-overdue deadline is breached; once it is past due they no longer
-    // decide how serious it is.
-    const tables: readonly (readonly ThresholdRule[])[] = [
-      [rule("filing", 1, "minor")],
-      [rule("filing", 90, "major")],
-      [rule("filing", 30, "major"), rule("filing", 7, "minor"), rule("filing", 2, "minor")],
-      [rule("filing", 0, "minor")],
+    // zero-day minor row — all overdue by the same distance, all answering their
+    // own ceiling. Each is paired with OTHER_TYPE's two major rows, which must
+    // not lift the minor tables: a cross-type leak would make all four major and
+    // is indistinguishable from the withdrawn rule on this table.
+    const cases: readonly { table: readonly ThresholdRule[]; ceiling: Severity }[] = [
+      { table: [rule("filing", 1, "minor")], ceiling: "minor" },
+      { table: [rule("filing", 90, "major")], ceiling: "major" },
+      {
+        table: [rule("filing", 30, "major"), rule("filing", 7, "minor"), rule("filing", 2, "minor")],
+        ceiling: "major",
+      },
+      { table: [rule("filing", 0, "minor")], ceiling: "minor" },
     ];
-    const answers = tables.map((table) => severityFor([...table, ...OTHER_TYPE], "filing", -3));
+    const answers = cases.map(({ table }) => severityFor([...table, ...OTHER_TYPE], "filing", -3));
     for (const [index, answer] of answers.entries()) {
-      expect(answer, `table ${index} answered differently: ${JSON.stringify(tables[index])}`).toBe(highestSeverity());
+      expect(answer, `table ${index}: ${JSON.stringify(cases[index].table)}`).toBe(cases[index].ceiling);
     }
-    expect([...new Set(answers.map(String))], "the answer depended on the type's rows").toHaveLength(1);
+    expect([...new Set(answers.map(String))], "the answer did not depend on the type's rows").toHaveLength(2);
   });
 
   it("treats zero days remaining as not overdue, and minus one as overdue", () => {
-    // The boundary of the rule, on the table where the two rules disagree: due
-    // TODAY is not late, so the window rule still answers and the answer is the
-    // row's own minor. One day later it is late, and the scale answers. Reading
-    // 0 as overdue would report every deadline due today at the top band —
-    // over-warning on the one day the thing can still be done on time.
+    // The boundary, pinned in BOTH directions.
+    //
+    // Note what the per-type ceiling makes of it: on a configured type the two
+    // sides agree by construction. Every window of a type has a non-negative
+    // bound, so at 0 every window is already breached and the window rule's
+    // maximum IS the type's ceiling — the same value the overdue rule gives at
+    // -1. So the boundary cannot be pinned by the two sides differing in band;
+    // it is pinned by what must NOT happen on either side.
+    //
+    // 0 is not overdue: due TODAY is not late, and nothing may be scored above
+    // this type's rows on the one day the thing can still be done on time.
     expect(severityFor(MINOR_ONLY, "stationery-order", 1)).toBe("minor");
     expect(severityFor(MINOR_ONLY, "stationery-order", 0)).toBe("minor");
     expect(severityFor(MINOR_ONLY, "stationery-order", 0)).not.toBe(highestSeverity());
-    expect(severityFor(MINOR_ONLY, "stationery-order", -1)).toBe(highestSeverity());
+    // -1 IS overdue: it has not fallen out of the breach set, and it is still
+    // capped by the same rows.
+    expect(severityFor(MINOR_ONLY, "stationery-order", -1)).not.toBeNull();
+    expect(severityFor(MINOR_ONLY, "stationery-order", -1)).toBe("minor");
+    expect(severityFor(MINOR_ONLY, "stationery-order", -1)).not.toBe(highestSeverity());
+    // The one table where 0 and -1 are observably a different STATE: a single
+    // zero-day window. One day out, nothing is breached at all; on the day, and
+    // every day after it, the window is breached. An implementation reading the
+    // distance one day late breaches at 1, and one reading it a day early stops
+    // breaching at -1.
+    const dueToday = [rule("heartbeat", 0, "minor")];
+    expect(severityFor(dueToday, "heartbeat", 1), "a day early is not due").toBeNull();
+    expect(severityFor(dueToday, "heartbeat", 0), "due today breaches").toBe("minor");
+    expect(severityFor(dueToday, "heartbeat", -1), "past due did not fall out").toBe("minor");
   });
 
   it("does not escalate a type whose windows are not yet breached", () => {
     // Overdue is about the DISTANCE, not about the type. A minor-only type well
-    // outside every window stays silent; the top band is not a default.
+    // outside every window stays silent; no band is a default.
     expect(severityFor(MINOR_ONLY, "stationery-order", 40)).toBeNull();
     expect(severityFor(MINOR_ONLY, "stationery-order", 15)).toBeNull();
     expect(severityFor(MINOR_ONLY, "stationery-order", 14)).toBe("minor");
   });
 
-  it("is the top of the scale for every overdue distance, whatever the table", () => {
-    // The property, with the expectation held CONSTANT. The old version of this
-    // test computed its expectation as the maximum over the configured rows,
-    // which made it a second copy of the business rule — and a copy that agreed
-    // with the implementation by construction, so the reversal had to be made in
-    // two places. There is nothing to re-derive now: overdue is the top band.
+  it("reports its type's configured ceiling at every overdue distance, whatever the table", () => {
+    // The property. Its expectation is NOT recomputed from the generated rules:
+    // a maximum taken over the rows here would be a second copy of the rule
+    // under test, agreeing with the implementation by construction. The ceiling
+    // is drawn FIRST, and the table is then built to have exactly that ceiling —
+    // one row carries it and no row may exceed it — so the expected value is
+    // known before any rule is applied to it.
     const next = random(20260816);
+    let minorCeilings = 0;
     for (let trial = 0; trial < 200; trial += 1) {
+      const ceiling = ALL_SEVERITIES[Math.floor(next() * ALL_SEVERITIES.length)];
+      const atOrBelow = ALL_SEVERITIES.filter((s) => RANK[s] <= RANK[ceiling]);
+      if (ceiling === "minor") minorCeilings += 1;
+      // OTHER_TYPE's rows are major throughout: on a minor-ceiling trial they
+      // are the leak that would show up as an answer above the ceiling.
       const rules: ThresholdRule[] = [...OTHER_TYPE];
       const windows = 1 + Math.floor(next() * 4);
-      // Half the trials are deliberately minor-only — the discriminating shape,
-      // which a uniform draw would produce in barely a tenth of them.
-      const minorOnly = next() < 0.5;
+      const carriesCeiling = Math.floor(next() * windows);
       for (let i = 0; i < windows; i += 1) {
-        const severity = minorOnly ? "minor" : ALL_SEVERITIES[Math.floor(next() * 2)];
+        const severity = i === carriesCeiling ? ceiling : atOrBelow[Math.floor(next() * atOrBelow.length)];
         rules.push(rule("visa", Math.floor(next() * 41), severity));
       }
       const days = -1 - Math.floor(next() * 90);
-      const shown = JSON.stringify({ rules, days });
-      expect(severityFor(rules, "visa", days), shown).toBe(highestSeverity());
+      const shown = JSON.stringify({ rules, days, ceiling });
+      expect(severityFor(rules, "visa", days), shown).toBe(ceiling);
       expect(severityFor(rules, "visa", days), `overdue answered nothing: ${shown}`).not.toBeNull();
     }
+    // The minor-ceiling trials are the discriminating ones; a generator drift
+    // that stopped producing them would leave this test passing vacuously
+    // against the withdrawn rule.
+    expect(minorCeilings, "no minor-ceiling table was generated").toBeGreaterThan(50);
   });
 
   it("does not invent a severity for an overdue deadline of an unconfigured type", () => {
-    // The two decisions meet here, and the reversal did NOT touch this one
-    // (spec:52): "Absence of a row is a hole, not a severity, and overdue is not
-    // a licence to score a type nobody configured." It raises as a
-    // misconfiguration (spec:46) instead of being silently scored — and a type
-    // scored at the top band would never raise at all.
+    // Unconfigured is untouched by any of this (spec:54): "Absence of a row is a
+    // hole, not a severity, and overdue is not a licence to score a type nobody
+    // configured." It raises as a misconfiguration (spec:46) instead of being
+    // silently scored — and a type given a band would never raise at all.
     expect(severityFor(OTHER_TYPE, "visa", -30)).toBeNull();
     expect(isConfigured(OTHER_TYPE, "visa")).toBe(false);
   });
 
   it.each([-1, -2, -7, -30, -365, -3650])("leaves an unconfigured type unscored %i days overdue", (days) => {
     // At EVERY negative distance, not just the one a table happened to pick: an
-    // implementation that short-circuits to the top band on `days < 0` before it
-    // looks for a row passes the single case and fails here.
+    // implementation that short-circuits to a band on `days < 0` before it looks
+    // for a row passes the single case and fails here.
     expect(severityFor(OTHER_TYPE, "visa", days), "a type with no row was scored").toBeNull();
     expect(severityFor([], "visa", days), "an empty table scored a type").toBeNull();
     expect(isConfigured(OTHER_TYPE, "visa")).toBe(false);
@@ -460,12 +529,14 @@ describe("an overdue deadline reports the highest severity band the scale define
 
   it("scores an overdue type as soon as one row exists, and not before", () => {
     // The two sides of the same boundary, one row apart. This is what makes the
-    // unconfigured hole a hole rather than a quiet band: adding any row at all —
-    // even a minor one-day window — turns silence into the top band.
+    // unconfigured hole a hole rather than a quiet band: adding any row at all
+    // turns silence into that row's band — into MINOR here, not into the top of
+    // the scale and not into the major band the other type carries.
     const withoutRow: readonly ThresholdRule[] = [...OTHER_TYPE];
     const withOneRow = [...OTHER_TYPE, rule("visa", 1, "minor")];
     expect(severityFor(withoutRow, "visa", -2)).toBeNull();
-    expect(severityFor(withOneRow, "visa", -2)).toBe(highestSeverity());
+    expect(severityFor(withOneRow, "visa", -2)).not.toBeNull();
+    expect(severityFor(withOneRow, "visa", -2)).toBe("minor");
   });
 });
 
