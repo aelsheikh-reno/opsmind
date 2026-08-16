@@ -1065,17 +1065,25 @@
 - id: module-deadlines-sweep
   title: Deadline monitor — registration, the nightly sweep and the alert contract
   phase: 1
-  depends_on: [module-deadlines]
+  depends_on: [module-deadlines-civil-date, module-deadlines-thresholds, deadlines-fingerprint-and-severity-result]
   spec: docs/architecture/components-core-deadline-monitor.md
+  size_total: 2500
+  size_waiver_reason: >
+    All four sweep-level test files — civil-date, severity, monitor and scope —
+    drive a sweep and cannot land anywhere else; the two sibling nodes were
+    tested directly against exported functions for exactly that reason.
+    Implementation measured 375 against the unchanged 400. Same shape as every
+    waiver ADR-029 catalogued: tests, never implementation. Ahmed, 2026-08-16.
   also_read:
     - docs/architecture/flows-alerting.md          # scoped completeness, resolve-by-absence
     - docs/architecture/operations-scheduling.md   # the 02:00 sweep
   legacy_reference: reference/legacy/app/api/cron/expiry-reminders/route.ts
   produces:
-    - prisma/schema.prisma
-    - prisma/migrations/
-    - lib/modules/deadlines/{index,repository,thresholds}.ts
+    - lib/modules/deadlines/{index,calendar}.ts
     - tests/modules/deadlines/
+    - docs/architecture/flows-alerting.md
+    - tasks/backlog.yaml
+    - tests/baseline.json
   done_when:
     gates: [lint, types, boundaries, tests, coverage, differential]
     assertions:
@@ -1089,7 +1097,7 @@
       - "A run is stateless: two runs on the same day report identically, and a missed night self-heals"
       - "Severity is the maximum across breached windows, never the tightest"
       - "A deadline type with no threshold row raises one misconfiguration alert per run, not silence"
-      - "repository.ts imports db from lib/db.ts and declares both tables with // owns:"
+      - "Business-day distance is (from, to]: due today is 0, due on the next working day is 1"
   risk: compliance
   status: todo
   note: >
@@ -1122,6 +1130,22 @@
     Threshold semantics are settled and written into
     components-core-deadline-monitor.md; thresholds.ts moves here with the
     tests that pin them.
+
+    repository.ts AND ITS ASSERTION LEFT THIS NODE (Ahmed, 2026-08-17). Its four
+    Prisma calls are not unit-coverable — no PostgreSQL is reachable outside CI —
+    so they held diff-cov at 89.09% against the 90 floor, six lines short. They
+    land with kernel-repository-integration-tests, where the only tests that can
+    exercise them live. The sweep neither caused that nor could fix it, and every
+    other module's repository hits it identically.
+
+    TWO THINGS WERE REFUSED HERE, and are recorded so they are not re-proposed.
+    A diff-cov waiver: that gate deliberately has no waiver mechanism, because it
+    measures what a task is answerable for, and opening a waiver surface on it to
+    pass the node that needed one is how a gate stops meaning anything. And a
+    CI-only integration test: green in CI and red locally is worse than either
+    verdict alone, because a developer learns to ignore the local run — the
+    stale-baseline failure again.
+
 
 - id: spec-coverage-audit
   title: Which owned tables have no field-level shape
@@ -1962,6 +1986,48 @@
     tests/gates/size-impl-comments.test.ts already builds its gate fixtures
     exactly this way and its end-to-end cases pass, so the shape was proven; the
     fix is the same three lines applied to fixture_repo().
+
+- id: module-deadlines-repository
+  title: The deadline monitor's Prisma store, landing with the tests that can reach it
+  phase: 1
+  depends_on: [module-deadlines-sweep, kernel-repository-integration-tests]
+  spec: docs/architecture/data-ownership.md
+  produces:
+    - lib/modules/deadlines/{repository,index}.ts
+    - tests/integration/modules/deadlines/
+    - tests/modules/deadlines/repository.test.ts
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "repository.ts imports db from lib/db.ts and declares both tables with // owns:"
+      - "Every exported member of prismaDeadlineStore is exercised against a real PostgreSQL"
+      - "upsertRegistration is idempotent by (entityType, entityId, deadlineType) — a moved due date updates the row rather than creating a second identity"
+      - "deregistering something already gone is not an error"
+      - "listRegistrations returns the whole set, because absence from a complete report is what resolves an alert"
+  risk: low
+  status: todo
+  note: >
+    Carried out of module-deadlines-sweep on 2026-08-17, not written fresh. The
+    code is already reviewed and its source-level assertion already passes; what
+    it lacks is a test that executes it.
+
+    WHY IT MOVED. Its four Prisma calls are not unit-coverable — no PostgreSQL is
+    reachable outside CI — so inside the sweep they held diff-cov at 89.09%
+    against the 90 floor, six lines short of a 55-line diff. The sweep neither
+    caused that nor could fix it. Every other module's repository will hit this
+    identically, so ADR-037 settles the pattern once: a module repository lands
+    with its integration tests rather than with the module logic it serves.
+
+    It depends on kernel-repository-integration-tests because that node builds
+    the harness — a real database in CI, skipped loudly and never silently
+    where none is reachable — and this node is its first module-side consumer.
+
+    Two alternatives were refused when the sweep hit this, and are recorded here
+    so they are not re-proposed. A diff-cov waiver: that gate deliberately has no
+    waiver mechanism, and opening one to pass the node that needed it is how a
+    gate stops meaning anything. And a CI-only integration test inside the sweep:
+    green in CI and red locally is worse than either verdict alone, because a
+    developer learns to ignore the local run.
 
 - id: kernel-repository-integration-tests
   title: Integration tests over the six kernel repositories, against CI Postgres

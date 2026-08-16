@@ -1,6 +1,6 @@
 {
-  "tests": 800,
-  "coverage_bp": 8187,
+  "tests": 828,
+  "coverage_bp": 8290,
   "why": [
     "The number of tests the suite must not drop below.",
     "",
@@ -33,6 +33,8 @@
     "diff coverage alone lets the total rot one uncovered file at a time, every",
     "task green on its own lines, so this ratchets the whole repository: it fails",
     "on a DECREASE only and never on standing still.",
+    "",
+    "Raised to 8290 by module-deadlines-sweep, which brought index.ts to 100% line coverage — the sweep, registration and the alert contract were the module's whole untested half, and the four sweep-level test files drive them through ports rather than a database. The test floor moved to 828 in the same PR, the third and last of that split.",
     "",
     "Set to 7920 by gate-coverage-strict-path, then raised by module-deadlines-civil-date and module-deadlines-thresholds in turn. 7920 was what the repository",
     "measured at the time (240 of 303 lines). The number is low because six",
