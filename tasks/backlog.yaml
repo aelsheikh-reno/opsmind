@@ -1576,7 +1576,7 @@
       - "Adding a test file does not change whether an unrelated file passes"
   risk: low
   blocks_product: true
-  status: todo
+  status: done
   note: >
     BLOCKS PRODUCT. A false red is the same class of defect as a false green:
     both mean the verdict does not describe the subject (Ahmed, 2026-08-16).
