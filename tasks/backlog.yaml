@@ -1032,7 +1032,7 @@
       - "severityFor distinguishes not-breached from not-configured in its type, so a caller cannot conflate them"
       - "Nothing that thresholds.test.ts pinned before is loosened by the new shape"
   risk: compliance
-  status: todo
+  status: done
   note: >
     Both findings came out of review on module-deadlines-thresholds and were
     carried rather than fixed. They land here, ahead of module-deadlines-sweep,
