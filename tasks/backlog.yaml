@@ -483,7 +483,7 @@
       - "Person carries managerId and supports per-jurisdiction enrolments"
       - "Every kernel repository declares its tables with // owns:"
   risk: low
-  status: todo
+  status: done
   note: >
     The second half, and it must land second: person/index.ts type-imports
     ObligationType from the regime component, because the law's closed
