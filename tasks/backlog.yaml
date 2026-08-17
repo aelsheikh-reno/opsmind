@@ -1887,7 +1887,7 @@
       - "A 450-line diff with no comments is still refused"
   risk: low
   blocks_product: true
-  status: todo
+  status: done
   note: >
     BLOCKS PRODUCT. It is blocking module-deadlines-sweep right now, and every
     way past it games the gate (Ahmed, 2026-08-16).
