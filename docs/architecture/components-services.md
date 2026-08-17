@@ -1,6 +1,6 @@
 # Capability services
 
-> Seven independently deployable services. Each passes both tests: a second product would use it unchanged, and it owns its own store — it never reads or writes the application database.
+> Seven reusable capability services. Each passes both tests: a second product would use it unchanged, and it **owns its tables exclusively** — nothing outside it reads or writes them. Five of the seven reach that second product as an **importable package** rather than as a deployment, and so share their host's storage; the parser and the AI platform are separate runtimes and stay deployed ([ADR-039](decisions.md#adr-039)).
 
 ### Context
 

@@ -20,6 +20,8 @@
 
 **Consequences.** Independent deploys become real; queries that used to be joins become calls; the ownership map (data/ownership) becomes a maintained artifact.
 
+> **Amended 2026-08-17 by [ADR-039](#adr-039).** "Satellites are physically unable to reach PostgreSQL" holds for the satellites that are still **deployed**. Five capability services now target an importable package, which shares its host's connection by construction. What survives for them is the half of this record that was always the point — **a component owns its tables exclusively, and access goes through its interface** — enforced by the boundary lint rule instead of by the network.
+
 ### ADR-003 · Framework-free domain layer, MCP as a second transport
 
 **Context.** Domain logic in Next.js route handlers cannot be called by anything except HTTP; the product roadmap needs agents to invoke the same operations.
@@ -75,6 +77,8 @@
 **Decision.** The core mints a short-lived HMAC JWT carrying userId, role, entities and resolved permissions; every satellite verifies locally.
 
 **Consequences.** No auth-service availability dependency on the hot path; revocation is bounded by TTL; the shared secret is a deployment secret to rotate.
+
+> **Scoped 2026-08-17 by [ADR-039](#adr-039).** This applies to the **deployed** satellites — the parser, the AI platform and the Asana adapter. A capability service that ships as an importable package has no caller to authenticate: it runs in its host's process and receives the caller's identity as an argument.
 
 ### ADR-010 · BFF — the browser reaches only the core
 
@@ -457,3 +461,29 @@ The other costs are plainly real. About 8.5 s per test file goes on booting an e
 It is not fixed by forcing a collation on the test database: that would make CI diverge from production, which is the thing this record exists to prevent. It is fixed in the test, because a query whose result depends on collation is not portable and should not be asserted as though it were. **An ordering case seeds keys whose relative order is identical under both collations** — differing at the first character, or matching in case. The three sibling files already did this by luck (`A`/`M`/`Z`, `AE`/`BH`/`EG`); `regime` did not, and now says so in a comment where a copier will meet it.
 
 This is the strongest evidence for keeping real PostgreSQL in CI. No amount of local running would have surfaced it.
+
+
+### ADR-039 · A capability service's reuse target is an importable package, not a deployment
+
+**Context.** Every capability service was specified with the same target — its own deploy, reached over the internal network ([containers](architecture-containers.md)). That assumed reuse means another *system calling* it. The reuse actually wanted is another *codebase importing* it: an alert engine, a work-items engine, a docgen engine dropped into a different application rather than rebuilt there. A deployed service does not give that. It gives the second product a network dependency it must operate, monitor and authenticate to — which is more work than rewriting the thing, so it never gets reused, which was the whole point.
+
+**Decision.** For **docgen, the Alert Manager, Work Items, Notifications and Authorization**, the target is an **importable package**: a component another application adds to its own codebase, whose public surface is a function call in that application's process. It brings its own table definitions and owns those tables exclusively, and it uses the **host application's storage** rather than a store of its own. The **document parser and the AI platform stay deployed**, for a reason that is not packaging — they are separate runtimes with their own dependencies, and importing them into a Next.js codebase is not available. Ahmed's decision, 2026-08-17.
+
+**Consequences.** The membership test for a capability service loses "**owns its own store**" and keeps **exclusive table ownership**: nothing outside the component reads or writes its tables. CLAUDE.md rule 1 is unchanged by this and now carries the whole of the boundary, so the boundary lint rule — not the network — is what enforces it. [ADR-002](#adr-002)'s "satellites are physically unable to reach PostgreSQL" holds only for the satellites still deployed; a package shares the host's connection by construction. [ADR-009](#adr-009)'s internal token likewise applies only to those — a package has no caller to authenticate, and its caller's identity arrives as an argument. [ADR-021](#adr-021) is untouched: day one is still four deployables; this changes the **Target** column for five rows, never the **Day one** column.
+
+**Not settled here.** What a package may assume about its host — how its migrations run, how it is handed a connection, which framework it may expect — is the next question this raises and is deliberately left open. The five integration adapters are also not settled here: an adapter persists nothing, so the reasoning above does not transfer to it unexamined.
+
+
+### ADR-040 · An alert names the area it was raised in, and a failed alert never ends the run
+
+**Context.** Resolution by absence closes an alert that does not reappear in a report ([flows-alerting](flows-alerting.md)). That is only sound inside an area the run actually checked. The deadline sweep already carries this for its own findings — `ReportedAlert.jurisdictionId` is the scope and `RunScope.complete` says whether it was finished — but the out-of-band path, `raiseAlert`, carries no area at all: the jurisdiction or deadline type sits inside a free-form `context` bag. Separately, no call in `runDeadlineSweep` is guarded, so an Alert Manager that fails on one misconfiguration alert ends the run before it reports anything at all.
+
+**Decision.** Three things, all Ahmed's decision, 2026-08-17.
+
+1. **An alert closes only within an area the run declared checked.** Alerts in areas that were not checked stay open.
+2. **The area is a named argument on `raiseAlert`**, not something read back out of `context`. The Alert Manager must never parse a caller's context bag: that bakes one caller's vocabulary into a component built to serve several ([ADR-039](#adr-039)), and a caller that spells the key differently silently loses its scoping.
+3. **A failed alert call does not abort the run.** The sweep carries on and still reports — a partial run reported honestly beats every jurisdiction going dark for one failure, which is the same reasoning that made completeness scoped rather than global (2026-08-14).
+
+**Consequences.** `AlertManager.raiseAlert` gains an area parameter, and the merged deadline monitor changes with it rather than around it. **An area whose alert could not be raised was not fully checked, so the run reports that area incomplete** — otherwise (3) silently undoes (1), by letting absence close an alert the run failed to raise. That is a derived constraint, not a separate decision: it is what (1) means once (3) exists.
+
+**Not settled here.** Whether a run in which every alert call failed should still count as a run — reported, with every area incomplete — or as no run at all.

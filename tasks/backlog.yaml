@@ -2421,7 +2421,7 @@
 - id: service-alerts-surface-and-lifecycle
   title: Alert Manager — the interface the deadline monitor already calls, and the four-state lifecycle
   phase: 1
-  depends_on: [module-deadlines-sweep, shapes-alert-manager]
+  depends_on: [module-deadlines-sweep, shapes-alert-manager, deadlines-alert-contract-scope-and-failure]
   spec: docs/architecture/flows-alerting.md
   also_read:
     - docs/architecture/components-services.md     # what it must never know
@@ -2449,9 +2449,12 @@
     The seam, and the pure half behind it. Same shape as the module it serves:
     domain in lifecycle.ts taking values rather than clients, index.ts the only
     public surface, the store arriving as a port so the tests need no database.
-    In-process behind the target interface (ADR-021) — when the seam moves,
-    index.ts becomes an HTTP client with the same signatures and ADR-009's local
-    token verification lands there, with no caller change.
+    In-process, and it STAYS a function call: the reuse target is an importable
+    package, not a deployment (ADR-039, Ahmed 2026-08-17). index.ts never becomes
+    an HTTP client and ADR-009's internal token never lands here — a package runs
+    in its host's process and has no caller to authenticate. What that buys is
+    the thing the seam existed for: a second codebase imports this and calls
+    reportRun directly, with no network to operate and no secret to rotate.
 
     IT IS WRITTEN TO A PORT THAT IS ALREADY IN PRODUCTION, which is the unusual
     thing about it. module-deadlines is merged and calls reportRun and raiseAlert
@@ -2510,26 +2513,18 @@
     database. The engine harness is ADR-038's: DATABASE_URL when present, PGlite
     over a socket otherwise, never a skip.
 
-    OPEN, AND AHMED MUST RULE BEFORE THIS NODE IS PICKED UP — WHERE AN
-    IN-PROCESS CAPABILITY SERVICE'S STORE PHYSICALLY LIVES. ADR-002 says a
-    service owns its store exclusively and satellites are physically unable to
-    reach PostgreSQL; architecture-containers.md says PostgreSQL is one schema
-    written only by the core; ADR-021 says this thing is in-process today. All
-    three are true at once and they do not compose. The two candidate shapes,
-    neither chosen here.
+    WHERE THE STORE LIVES IS RULED — ADR-039, Ahmed 2026-08-17. Its tables go in
+    prisma/schema.prisma, owned exclusively through '// owns:' and reached only
+    through index.ts, on the host application's storage. There is no second
+    datasource and no second connection pool. The reuse target is an IMPORTABLE
+    PACKAGE, not a deployment: a second product adds this component to its own
+    codebase and calls it in its own process, so it brings its table definitions
+    and uses whatever storage its host already has. Extraction to a separate
+    store is therefore not a thing that is planned for and then deferred — it is
+    not the goal.
 
-    Shape one, its tables in prisma/schema.prisma, owned exclusively through
-    '// owns:' and reached only through index.ts. Cheapest now; extraction later
-    is a data migration on a live alert table, and the ADR-002 sentence is
-    untrue for the whole in-process period.
-
-    Shape two, a second datasource from day one, so extraction is a deploy
-    change and never a data move, and ADR-002 is literally true from the first
-    row. Costs a second migration path, a second connection pool and a second
-    test harness before there is a second consumer.
-
-    It is decided ONCE, for all seven capability services, not per service —
-    service-work-items-store depends on this node purely to inherit the answer.
+    That ruling is for all five packaged capability services, not this one:
+    service-work-items-store depends on this node purely to inherit it.
 
     ALSO OPEN: whether this store may reuse the AlertSeverity enum, which today
     sits in the deadline monitor's section of the schema. Sharing it couples
@@ -2878,3 +2873,103 @@
     Roughly 100-150 implementation lines. It also carries
     lib/modules/deadlines/repository.ts, which left module-deadlines-sweep under
     ADR-037 and needs the same integration harness this node uses.
+
+- id: deadlines-alert-contract-scope-and-failure
+  title: An alert names the area it was raised in, and a failed alert never ends the sweep
+  phase: 1
+  depends_on: [module-deadlines-sweep]
+  spec: docs/architecture/decisions.md
+  also_read:
+    - docs/architecture/flows-alerting.md          # scoped completeness, resolve by absence
+    - docs/architecture/components-core-deadline-monitor.md
+    - lib/modules/deadlines/index.ts               # AlertManager, ReportedAlert, RunScope
+  produces:
+    - lib/modules/deadlines/index.ts
+    - tests/modules/deadlines/
+    - docs/architecture/components-core-deadline-monitor.md
+    - tests/baseline.json
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "raiseAlert takes the area it applies to as a named argument, and no scope is ever read back out of context"
+      - "A sweep whose alert call fails still reaches reportRun, and still reports every other area"
+      - "An area whose alert call failed is reported incomplete, so absence never resolves an alert the run failed to raise"
+      - "An area that was checked and had nothing to report stays complete, and absence there does resolve"
+  risk: compliance
+  status: todo
+  note: >
+    ADR-040. Two corrections to a merged compliance module, landing together
+    because they are one sentence read from both ends: an alert closes only
+    inside an area the run checked, and a run that could not raise an alert did
+    not check that area.
+
+    THE SECOND ASSERTION IS WHY THIS IS NOT A ONE-LINE FIX. runDeadlineSweep has
+    no try/catch anywhere and both raiseMisconfiguration calls precede
+    reportRun, so today one failing alert call takes EVERY jurisdiction dark —
+    the exact outcome scoped completeness was introduced on 2026-08-14 to
+    prevent, arriving through a different door. The reportRun path is already
+    scoped correctly (ReportedAlert.jurisdictionId, RunScope.complete); it is
+    the raiseAlert path that carries no area at all.
+
+    THE CONTEXT BAG IS NOT THE ANSWER and must not become it. An engine that
+    digs a jurisdiction out of a caller's free-form context bakes OpsMind's
+    vocabulary into a component built to be imported by other applications
+    (ADR-039), and a caller that spells the key differently loses its scoping
+    silently rather than loudly.
+
+    Roughly 40-60 implementation lines. It changes the AlertManager port, so it
+    lands BEFORE service-alerts-surface-and-lifecycle writes a client against
+    that port — a signature disagreement found later is a second change to a
+    merged compliance module.
+
+- id: ops-job-runs-claim
+  title: A scheduled job claims its run, so firing it twice is harmless
+  phase: 1
+  depends_on: [kernel-repository-integration-tests]
+  spec: docs/architecture/operations-scheduling.md
+  also_read:
+    - docs/architecture/decisions.md               # ADR-011, each owner runs its own timers
+    - docs/architecture/defects.md                 # the legacy double-fire
+  produces:
+    - prisma/schema.prisma
+    - prisma/migrations/
+    - lib/kernel/jobs/index.ts
+    - lib/kernel/jobs/repository.ts
+    - tests/integration/kernel/job-runs.test.ts
+    - docs/architecture/operations-scheduling.md
+    - docs/architecture/data-ownership.md
+    - tests/baseline.json
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "Two runners claiming one job for one scheduled time: exactly one proceeds and the other does no work"
+      - "Losing a claim is not an error — it returns normally, because a duplicate trigger is expected rather than exceptional"
+      - "A claim records when the run started, when it ended and how it ended; a claim that never ended is visible as unfinished"
+      - "The claim's identity is the SCHEDULED time, never the firing instant — one scheduled time fired twice collides, two scheduled times do not"
+      - "Two concurrent claimants are proved against a real PostgreSQL, and the suite never skips"
+  risk: compliance
+  status: todo
+  note: >
+    ADR-011 requires this of EVERY background job and nothing in the graph built
+    it: job_runs has no table, no owner and no node. operations-scheduling.md
+    names it as one of the two invariants that make a decentralised scheduler
+    safe, and names the defect it prevents — the legacy build fires FX and
+    expiry reminders from both Vercel cron and GitHub Actions today, and that is
+    live.
+
+    IT DOES NOT SCHEDULE ANYTHING, deliberately. Each owner still runs its own
+    timer (ADR-011) and the deadline sweep's own entry point belongs to
+    deadlines-alert-manager-wiring. This is the claim every owner takes before
+    doing work, and it is what makes "what fires it" a question different
+    deployments may answer differently without any of them being dangerous.
+
+    THE UNIQUENESS IS A DATABASE CONSTRAINT ON (job, scheduled_for), never a
+    read-then-insert: two runners that both read "unclaimed" and both insert is
+    the identical race arriving one layer up, and it is the one that survives
+    code review.
+
+    Ahmed, 2026-08-17, asked why the sweep had no trigger and answered that the
+    detection engine owns it. It does — the job table assigns the 02:00 run to
+    the deadline monitor. What was missing was never the owner; it was this.
+
+    Roughly 90-130 implementation lines, of which about 25 are schema.
