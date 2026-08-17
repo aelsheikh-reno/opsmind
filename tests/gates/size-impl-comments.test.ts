@@ -1,15 +1,22 @@
 // Assertions for the `gate-size-impl-exclude-comments` backlog task:
 //
-//   1. "A comment-only line in a .ts or .tsx file does not count toward size-impl"
+//   1. "A comment-only line does not count toward size-impl, in .ts, .tsx, .mjs,
+//       .cjs, .js or .sh"
 //   2. "A blank line does not count toward size-impl"
 //   3. "A line carrying code and a trailing comment counts as code, in full"
 //   4. "// inside a string literal, a template literal or a JSX expression counts
 //       as CODE, never as a comment"
 //   5. "The classification comes from the TypeScript compiler API through the
-//       kernel-source reader, never a regex"
-//   6. "size-impl stays 400 and never-waivable; size-total counts every line as
+//       kernel-source reader, never a regex — .mjs, .cjs and .js through the same
+//       reader under ts.ScriptKind.JS"
+//   6. "In shell a # inside a single- or double-quoted string, inside a heredoc,
+//       on the shebang line, or not at a word boundary counts as CODE; a shell
+//       file the reader cannot follow is refused, never counted"
+//   7. "tasks/backlog.yaml contributes nothing to size-impl and every line to
+//       size-total"
+//   8. "size-impl stays 400 and never-waivable; size-total counts every line as
 //       before"
-//   7. "A 450-line diff with no comments is still refused"
+//   9. "A 450-line diff with no comments is still refused"
 //
 // HOW THESE ARE DRIVEN. `scripts/size-impl.mjs` and `scripts/gate.sh` are run for
 // real against fixture repositories in temp directories, exactly as
@@ -90,6 +97,7 @@ const IMPL_PATHS = [
   ":(top,exclude)prisma/migrations/**/*.sql",
   ":(top,exclude)tests/",
   ":(top,exclude)scripts/test-guards.sh",
+  ":(top,exclude)tasks/backlog.yaml",
 ];
 
 /**
@@ -155,8 +163,8 @@ function rawAdded(dir: string, paths: string[] = IMPL_PATHS): number {
     .reduce((sum, line) => sum + Number(line.split("\t")[0]), 0);
 }
 
-/** The kind `classifyLines` gave each line of one file, via the script's own reading. */
-function classify(source: string, extension: ".ts" | ".tsx" = ".ts"): string[] {
+/** The kind the script gave each line of one file, under the reading its extension implies. */
+function classify(source: string, extension = ".ts"): string[] {
   const dir = mkdtempSync(path.join(tmpdir(), "opsmind-classify-"));
   temps.push(dir);
   const file = path.join(dir, `sample${extension}`);
@@ -174,11 +182,36 @@ const codeLines = (count: number, from = 0): string =>
 const commentLines = (count: number): string =>
   Array.from({ length: count }, (_, index) => `// explanation line ${index}\n`).join("");
 
+/** `count` lines of shell that carry code and nothing else. */
+const codeShell = (count: number): string =>
+  Array.from({ length: count }, (_, index) => `echo ${index}\n`).join("");
+
+/**
+ * A backlog of exactly `count` lines, carrying the `demo` node the fixture's
+ * branch is named after. Used with a base backlog that shares none of its lines,
+ * so `git diff` reports every one of them as added and the expected totals are
+ * the file's own length.
+ */
+const backlogOf = (count: number): string => {
+  const head = ["- id: demo", "  risk: low", "  status: todo", "  note: >"];
+  const rest = Array.from({ length: count - head.length }, (_, i) => `    reasoning line ${i}`);
+  return `${[...head, ...rest].join("\n")}\n`;
+};
+
+/** A file in a temp directory of its own, for the `--classify` cases. */
+function written(name: string, content: string): string {
+  const dir = mkdtempSync(path.join(tmpdir(), "opsmind-written-"));
+  temps.push(dir);
+  const file = path.join(dir, name);
+  writeFileSync(file, content);
+  return file;
+}
+
 // ---------------------------------------------------------------------------//
-// Assertions 1, 2 and 7 — the headline case, at the gate's own scale
+// Assertions 1, 2 and 9 — the headline case, at the gate's own scale
 // ---------------------------------------------------------------------------//
 
-describe("assertions 1, 2 and 7 · a 450-line diff, with and without comments", () => {
+describe("assertions 1, 2 and 9 · a 450-line diff, with and without comments", () => {
   it("counts 350 of a 450-line diff whose other 100 lines are comments", () => {
     const dir = fixture({ "lib/modules/deadlines/sweep.ts": commentLines(100) + codeLines(350) });
     expect(rawAdded(dir), "the fixture is not 450 added lines").toBe(450);
@@ -358,10 +391,230 @@ describe("assertion 5 · one implementation, and it is the compiler's", () => {
 });
 
 // ---------------------------------------------------------------------------//
-// Assertion 6 — the other measurements are untouched
+// Every source language — .mjs, .cjs and .js through the same reader
+//
+// Ahmed's ruling of 2026-08-17: the discount applies to every language this
+// repository writes, not to TypeScript alone. JavaScript is read by the
+// TypeScript compiler under ts.ScriptKind.JS — the same reader, one
+// implementation — so the polarity that matters is the same one: a real comment
+// is discounted, and a `//` the parser does not read as a comment is not.
 // ---------------------------------------------------------------------------//
 
-describe("assertion 6 · nothing else about the size gates moved", () => {
+describe("JavaScript · .mjs, .cjs and .js get the same reading as .ts", () => {
+  for (const extension of [".mjs", ".cjs", ".js"]) {
+    it(`discounts a comment-only line and a blank line in a ${extension} file`, () => {
+      expect(classify("// why\n\nexport const x = 1;\n", extension)).toEqual([
+        "comment",
+        "blank",
+        "code",
+        "blank",
+      ]);
+    });
+  }
+
+  it("counts a // inside a JavaScript string or template literal as code", () => {
+    expect(classify('const url = "https://x.test//path";\n', ".mjs")[0]).toBe("code");
+    expect(classify('const s = "// not a comment";\n', ".js")[0]).toBe("code");
+    expect(classify("const t = `\n// inside a template literal\n`;\n", ".mjs")).toEqual([
+      "code",
+      "code",
+      "code",
+      "blank",
+    ]);
+  });
+
+  it("counts a line carrying code and a trailing comment in full", () => {
+    expect(classify("const days = 28; // the statutory day\n", ".mjs")[0]).toBe("code");
+  });
+
+  it("reads a #! line as code — it is a directive, not an annotation", () => {
+    expect(classify("#!/usr/bin/env node\n// why\nconst x = 1;\n", ".mjs")).toEqual([
+      "code",
+      "comment",
+      "code",
+      "blank",
+    ]);
+  });
+
+  it("charges a .mjs file's code and discounts its comments, end to end", () => {
+    const dir = fixture({ "scripts/thing.mjs": commentLines(60) + codeLines(40) });
+    expect(rawAdded(dir), "the fixture is not 100 added lines").toBe(100);
+    expect(measure(dir), "a .mjs file was counted line for line").toBe(40);
+  });
+
+  it("still charges a .mjs file that is all code", () => {
+    const dir = fixture({ "eslint.config.mjs": codeLines(100) });
+    expect(measure(dir), "JavaScript was discounted for being JavaScript").toBe(100);
+  });
+});
+
+// ---------------------------------------------------------------------------//
+// Shell — the language with no compiler to ask
+//
+// The four cases Ahmed named, each of which a `^\s*#` scanner gets wrong:
+// a `#` in a single-quoted string, a `#` in a heredoc, the shebang, and a
+// trailing `#`. Every one of them is CODE. The polarity half is the line above
+// or below it in the same fixture: a real shell comment is still discounted.
+// ---------------------------------------------------------------------------//
+
+describe("shell · a # that is not a comment is code", () => {
+  it("counts # inside a single-quoted string as code", () => {
+    const source = ["#!/usr/bin/env bash", "# a real comment", "grep '#define' \"$1\"", ""];
+    expect(classify(source.join("\n"), ".sh")).toEqual(["code", "comment", "code", "blank"]);
+  });
+
+  it("counts # inside a double-quoted string as code, and keeps quotes across lines", () => {
+    expect(classify('echo "a # b"\n', ".sh")[0]).toBe("code");
+    // A shell string may span newlines, so the second line is inside the quote
+    // and its leading # is a character of the string.
+    expect(classify("echo 'one\n# two'\n", ".sh")).toEqual(["code", "code", "blank"]);
+  });
+
+  it("counts # inside a heredoc as code, quoted delimiter or not", () => {
+    const source = [
+      "cat <<'EOF'",
+      "# this is payload, not an annotation",
+      "EOF",
+      "cat <<EOF",
+      "# so is this",
+      "EOF",
+      "# but this is a comment",
+      "",
+    ];
+    expect(classify(source.join("\n"), ".sh")).toEqual([
+      "code",
+      "code",
+      "code",
+      "code",
+      "code",
+      "code",
+      "comment",
+      "blank",
+    ]);
+  });
+
+  it("follows a <<- heredoc, whose terminator may be indented with tabs", () => {
+    const source = ["cat <<-EOF", "\t# payload", "\tEOF", "# comment", ""];
+    expect(classify(source.join("\n"), ".sh")).toEqual([
+      "code",
+      "code",
+      "code",
+      "comment",
+      "blank",
+    ]);
+  });
+
+  it("queues two heredocs opened by one line", () => {
+    const source = ["cat <<A <<B", "# payload of A", "A", "# payload of B", "B", "# comment", ""];
+    expect(classify(source.join("\n"), ".sh")).toEqual([
+      "code",
+      "code",
+      "code",
+      "code",
+      "code",
+      "comment",
+      "blank",
+    ]);
+  });
+
+  it("does not read <<< as a heredoc", () => {
+    const source = ["grep x <<<\"$y\"", "# comment", "echo done", ""];
+    expect(classify(source.join("\n"), ".sh")).toEqual(["code", "comment", "code", "blank"]);
+  });
+
+  it("counts the shebang as code", () => {
+    expect(classify("#!/usr/bin/env bash\n# why\nset -eu\n", ".sh")).toEqual([
+      "code",
+      "comment",
+      "code",
+      "blank",
+    ]);
+    // Only on line 1. The same characters lower down are a comment.
+    expect(classify("set -eu\n#!/usr/bin/env bash\n", ".sh")[1]).toBe("comment");
+  });
+
+  it("counts a trailing # in full, and gives no partial credit", () => {
+    expect(classify("set -eu  # fail fast\n", ".sh")[0]).toBe("code");
+    const dir = fixture({
+      "scripts/thing.sh": Array.from({ length: 40 }, (_, i) => `echo ${i}  # note\n`).join(""),
+    });
+    expect(measure(dir), "a trailing comment discounted the code it sits beside").toBe(40);
+  });
+
+  it("counts a # that is not at a word boundary as code", () => {
+    const source = ["echo ${x#prefix}", "echo foo#bar", 'echo "${#list[@]}"', "echo a\\#b", ""];
+    expect(classify(source.join("\n"), ".sh")).toEqual(["code", "code", "code", "code", "blank"]);
+  });
+
+  it("discounts a real shell comment and a blank line, end to end", () => {
+    const script = `#!/usr/bin/env bash\n${Array.from({ length: 60 }, (_, i) => `# explanation ${i}\n`).join("")}\n${codeShell(39)}`;
+    const dir = fixture({ "scripts/thing.sh": script });
+    expect(rawAdded(dir), "the fixture is not 101 added lines").toBe(101);
+    expect(measure(dir), "shell comments were charged to the code budget").toBe(40);
+  });
+
+  it("refuses a file it has lost the thread of rather than counting it", () => {
+    const unterminated = run("node", [SIZE_IMPL, "--classify", written("x.sh", "echo 'open\n")], repoRoot);
+    expect(unterminated.code, unterminated.out).not.toBe(0);
+    expect(unterminated.out).toMatch(/never closed/);
+
+    const heredoc = run("node", [SIZE_IMPL, "--classify", written("y.sh", "cat <<EOF\nbody\n")], repoRoot);
+    expect(heredoc.code, heredoc.out).not.toBe(0);
+    expect(heredoc.out).toMatch(/never terminated/);
+  });
+
+  it("needs no compiler for a diff of nothing but shell", () => {
+    // Shell is classified without the TypeScript package, so a shell-only diff
+    // must not acquire it. The orphan fixture has no node_modules at all.
+    const dir = fixture({ "scripts/thing.sh": "#!/bin/sh\n# why\necho one\n" });
+    execFileSync("cp", ["-r", path.join(repoRoot, "scripts"), path.join(dir, "scripts-copy")]);
+    const result = run(
+      "node",
+      [path.join(dir, "scripts-copy", "size-impl.mjs"), "--base", "main", "--", ":(top)"],
+      dir,
+    );
+    expect(result.code, result.out).toBe(0);
+    expect(Number(result.out.trim())).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------//
+// tasks/backlog.yaml is task metadata, not authored source
+// ---------------------------------------------------------------------------//
+
+describe("the backlog is out of size-impl and still inside size-total", () => {
+  // The base carries a backlog that shares no line with the one the branch
+  // commits, so every line of the node is an ADDED line and the totals below are
+  // the file's own length rather than whatever git chose to call common.
+  const PLACEHOLDER = "# the task graph starts empty for this fixture\n";
+
+  it("contributes nothing to size-impl", () => {
+    const dir = fixture(
+      { "tasks/backlog.yaml": backlogOf(300), "lib/a.ts": codeLines(10) },
+      PLACEHOLDER,
+    );
+    expect(rawAdded(dir, [":(top)"]), "the fixture is not 310 added lines").toBe(310);
+    expect(measure(dir), "a backlog node was charged to the code budget").toBe(10);
+  });
+
+  it("is still counted, in full, by size-total", () => {
+    const gated = gateRun({ "tasks/backlog.yaml": backlogOf(1600) }, PLACEHOLDER);
+    expect(line(gated, "size-impl"), gated.out).toContain("pass");
+    expect(line(gated, "size-total"), "size-total stopped counting the backlog").toContain("FAIL");
+    expect(gated.out).toMatch(/1600/);
+  });
+
+  it("does not exempt every YAML file — a workflow is authored behaviour", () => {
+    const dir = fixture({ ".github/workflows/gates.yml": codeLines(40) });
+    expect(measure(dir), "the exclusion widened past the one file it names").toBe(40);
+  });
+});
+
+// ---------------------------------------------------------------------------//
+// Assertion 8 — the other measurements are untouched
+// ---------------------------------------------------------------------------//
+
+describe("assertion 8 · nothing else about the size gates moved", () => {
   const gate = readFileSync(GATE, "utf8");
 
   it("counts a non-TypeScript file exactly as --numstat does", () => {
@@ -436,8 +689,8 @@ describe("assertion 6 · nothing else about the size gates moved", () => {
  * a fixture missing them is not a smaller version of a real run, it is a run
  * that cannot measure.
  */
-function gateFixture(files: Record<string, string>): string {
-  return fixture(files, undefined, (dir) => {
+function gateFixture(files: Record<string, string>, backlog?: string): string {
+  return fixture(files, backlog, (dir) => {
     execFileSync("cp", ["-r", path.join(repoRoot, "scripts"), path.join(dir, "scripts")]);
     write(dir, "scripts/test-guards.sh", "#!/bin/sh\nexit 0\n");
     execFileSync("chmod", ["+x", path.join(dir, "scripts", "test-guards.sh")]);
@@ -453,8 +706,8 @@ function gateFixture(files: Record<string, string>): string {
   });
 }
 
-function gateRun(files: Record<string, string>): Run {
-  const dir = gateFixture(files);
+function gateRun(files: Record<string, string>, backlog?: string): Run {
+  const dir = gateFixture(files, backlog);
   return run(path.join(dir, "scripts", "gate.sh"), [], dir, {
     GATE_BASE: "main",
     PATH: `${path.join(dir, "stub-bin")}${path.delimiter}${process.env.PATH ?? ""}`,
@@ -575,9 +828,29 @@ describe("the decision is recorded", () => {
     }
   });
 
+  it("records the whole ruling, not the TypeScript half of it", () => {
+    for (const [what, re] of [
+      ["the shell extension", /\.sh/],
+      ["the JavaScript extension", /\.mjs/],
+      ["the backlog exclusion", /tasks\/backlog\.yaml/],
+      ["what the shell reader cannot do", /heredoc/i],
+    ] as const) {
+      expect(re.test(record), `ADR-035 does not carry ${what}`).toBe(true);
+    }
+    // One record of one ruling: the exclusions are stated in the decision
+    // itself, not bolted on as a later amendment to a narrower rule.
+    const decision = record.slice(record.indexOf("**Decision.**"));
+    expect(decision.slice(0, 900), "the decision paragraph is still TypeScript-only").toMatch(
+      /tasks\/backlog\.yaml/,
+    );
+  });
+
   it("says what it costs rather than only what it buys", () => {
     expect(record, "the cost — a comment-heavy diff is still a large diff — is not stated").toMatch(
       /size-total/,
+    );
+    expect(record, "that size-total is now the only budget holding that line is not stated").toMatch(
+      /only budget|only thing/i,
     );
   });
 
@@ -586,5 +859,7 @@ describe("the decision is recorded", () => {
     const row = pipeline.split("\n").find((l) => l.startsWith("| `size-impl`")) ?? "";
     expect(row, "the size-impl row does not mention comments").toMatch(/comment/i);
     expect(row).toMatch(/400/);
+    expect(row, "the row still describes a TypeScript-only discount").toMatch(/\.sh/);
+    expect(row, "the row does not say the backlog is out").toMatch(/backlog/i);
   });
 });

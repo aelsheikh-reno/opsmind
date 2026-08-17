@@ -5,13 +5,22 @@
 //   node scripts/size-impl.mjs --classify <file>
 //
 // The first form prints one integer: the added lines of `<base>...<head>` under
-// the given pathspecs, counting a `.ts` or `.tsx` line only when it carries
-// code. Comment-only lines and blank lines are not implementation (ADR-035) —
-// the 400 comes from a study of reviewer cognitive load whose other finding was
-// that authors who annotate ship fewer defects, so charging annotations to the
-// code budget makes deleting them the cheapest path to green. A trailing
-// comment discounts nothing: a line carrying code counts in full. Every other
-// file is counted exactly as `git diff --numstat` counts it, unchanged.
+// the given pathspecs, counting a line of SOURCE only when it carries code.
+// Comment-only lines and blank lines are not implementation (ADR-035) — the 400
+// comes from a study of reviewer cognitive load whose other finding was that
+// authors who annotate ship fewer defects, so charging annotations to the code
+// budget makes deleting them the cheapest path to green. A trailing comment
+// discounts nothing: a line carrying code counts in full.
+//
+// SOURCE MEANS EVERY LANGUAGE THIS REPOSITORY WRITES: `.ts`, `.tsx`, `.mjs`,
+// `.cjs`, `.js` and `.sh` (Ahmed, 2026-08-17). The argument for the discount is
+// about what a reviewer has to hold in their head, and it is no more true of a
+// `.ts` file than of a build script — the first version of this measurement was
+// TypeScript-only for no reason other than that TypeScript was where the case
+// arose, which left gate.sh and the eslint configs still paying for their own
+// explanation. Every other file is counted exactly as `git diff --numstat`
+// counts it, unchanged: with no reader for a format there is nothing to read it
+// with, and a gate must not guess at a comment syntax it does not know.
 //
 // The second form prints `<line>\t<kind>\t<text>` for one file, so that what
 // the gate believes about a file can be read directly rather than inferred from
@@ -25,7 +34,15 @@
 // lesson — it parses with `ts.createSourceFile` and collects comments as
 // `ts.CommentRange[]` — so the classification is ITS `classifyLines`, called
 // here rather than reimplemented. Two implementations would drift, and the
-// suite would only ever grade one of them.
+// suite would only ever grade one of them. JavaScript goes through the SAME
+// reader under `ts.ScriptKind.JS` rather than through a second scanner, for
+// exactly that reason.
+//
+// SHELL IS THE EXCEPTION, because there is no shell compiler here to ask. Its
+// classification is `shellKinds` below, and the comment above it lists what it
+// handles and what it deliberately does not: an honest limit beats a silent
+// wrong answer, and where it has lost the thread it refuses (ADR-031) rather
+// than reporting a count it cannot stand behind.
 //
 // HOW A .ts FILE IS REACHED FROM PLAIN NODE. There is no `tsx` or `ts-node` in
 // this repository and node 20 cannot import TypeScript, so the reader is
@@ -39,9 +56,9 @@
 // says why, and it is the reason only its pure functions are used.
 //
 // `typescript` is imported dynamically, inside the classifier and nowhere else,
-// so that a diff carrying no .ts or .tsx file needs no compiler at all: there
-// is nothing to classify, --numstat has already answered, and a measurement
-// should not acquire a dependency it does not use.
+// so that a diff the compiler is not needed for does not acquire it: a diff of
+// nothing but shell, or of no source at all, is answered by `shellKinds` and by
+// --numstat, and a measurement should not depend on what it never asks.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -145,7 +162,171 @@ async function classifier() {
   return loaded.classifyLines;
 }
 
-const isTypeScript = (file) => /\.tsx?$/.test(file);
+// ---------------------------------------------------------------- shell ----
+//
+// SHELL HAS NO COMPILER HERE, so this is the one classification the repository
+// writes itself, and it is written to be wrong only in the safe direction: when
+// it cannot tell, the line is CODE (over-counting a budget never lets an
+// oversized task through), and when it has lost the thread entirely it refuses
+// (ADR-031). Every rule below is a rule of the POSIX shell grammar, not a guess
+// about what a line looks like.
+//
+// WHAT IT HANDLES.
+//   * `#` opens a comment only at a word boundary — start of line, or after a
+//     blank or one of `; & | ( )`. `foo#bar` is one word and `${x#prefix}` is a
+//     parameter expansion; neither is a comment, and both count as code.
+//   * `#` inside '…' and "…" is a literal `#`. Quotes span newlines, so the
+//     state is carried from line to line, and $'…' is read as a single-quoted
+//     string that honours backslash escapes.
+//   * A backslash escapes the next character outside quotes and inside "…", so
+//     `\#` is a literal and `\'` does not open a string.
+//   * The shebang. `#!` on the first line is an interpreter directive the kernel
+//     reads, not an annotation a reviewer can delete, so line 1 is code.
+//   * Heredocs: `<<WORD`, `<<-WORD` (leading tabs stripped from the terminator),
+//     `<<'WORD'`, `<<"WORD"` and `<<\WORD`. The body is DATA the script carries
+//     — a `#` in it is a character of the payload, never a comment — so every
+//     body line counts as code, as does the terminator. Several heredocs may be
+//     opened by one line; they queue and start one after another. `<<<` is a
+//     here-string and opens nothing.
+//   * A trailing `#` counts the whole line as code, exactly as in TypeScript: a
+//     line is a comment only when nothing but whitespace precedes the `#`.
+//
+// WHAT IT DELIBERATELY DOES NOT HANDLE, and what happens instead.
+//   * Arithmetic left shift. `$(( 1 << 2 ))` is read as opening a heredoc whose
+//     terminator is `2`; if nothing closes it, the run REFUSES rather than
+//     miscounting. There is no shell in this repository that shifts, and a loud
+//     refusal is the outcome ADR-031 asks for over a quiet wrong answer.
+//   * A heredoc delimiter produced by expansion (`<<$WORD`) is taken literally,
+//     so it will not match and the file refuses at EOF.
+//   * Comments inside `$( … )` and backticks are read exactly as they are
+//     outside, which is what bash does; nested quoting inside a substitution is
+//     tracked as ordinary quoting rather than per-nesting-level.
+//   * A whitespace-only line is `blank` wherever it appears, heredoc body
+//     included. A blank line of payload is a line of payload, and this
+//     under-counts it by one; the alternative is a reader that has to know what
+//     language the heredoc carries, which it cannot.
+//   * A file with no `.sh` extension is not classified as shell at all, however
+//     it starts. The extension is what the pathspecs and the gate agree on.
+function shellKinds(source, file) {
+  const lines = source.split("\n");
+  const kinds = [];
+  const boundary = new Set([" ", "\t", ";", "&", "|", "(", ")"]);
+  const pending = [];
+  let heredoc = null;
+  let quote = null;
+  let quoteOpened = 0;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const blank = line.trim() === "";
+    if (heredoc === null && pending.length > 0) heredoc = pending.shift();
+    if (heredoc !== null) {
+      const candidate = heredoc.strip ? line.replace(/^\t+/, "") : line;
+      if (candidate === heredoc.delimiter) heredoc = null;
+      kinds.push(blank ? "blank" : "code");
+      continue;
+    }
+    if (index === 0 && line.startsWith("#!")) {
+      kinds.push("code");
+      continue;
+    }
+
+    let comment = -1;
+    for (let at = 0; at < line.length; at += 1) {
+      const character = line[at];
+      if (quote === "'") {
+        if (character === "'") quote = null;
+        continue;
+      }
+      if (quote !== null) {
+        if (character === "\\") at += 1;
+        else if (character === quote.slice(-1)) quote = null;
+        continue;
+      }
+      if (character === "\\") at += 1;
+      else if (character === "'" || character === '"') {
+        quote = character;
+        quoteOpened = index + 1;
+      } else if (character === "$" && line[at + 1] === "'") {
+        quote = "$'";
+        quoteOpened = index + 1;
+        at += 1;
+      } else if (character === "#" && (at === 0 || boundary.has(line[at - 1]))) {
+        comment = at;
+        break;
+      } else if (character === "<" && line[at + 1] === "<") {
+        at = line[at + 2] === "<" ? at + 2 : readHeredoc(line, at, index, pending);
+      }
+    }
+    if (blank) kinds.push("blank");
+    else kinds.push(comment >= 0 && line.slice(0, comment).trim() === "" ? "comment" : "code");
+  }
+
+  if (quote !== null) {
+    refuse(
+      `${file}: a quote opened on line ${quoteOpened} is never closed, so this reader has lost ` +
+        "track of what is quoted and cannot say which lines are comments",
+    );
+  }
+  const open = heredoc ?? pending[0];
+  if (open !== undefined) {
+    refuse(
+      `${file}: the heredoc <<${open.delimiter} opened on line ${open.line} is never terminated, ` +
+        "so this reader cannot say where its payload ends",
+    );
+  }
+  return kinds;
+}
+
+/**
+ * The delimiter word of a heredoc opened at `at`, queued to begin on the next
+ * line. Returns the index of its last character, since the caller's loop steps
+ * past it. Quoting only decides whether the shell expands the body — which the
+ * classification does not care about — so the quotes are stripped and the word
+ * inside them is the terminator to look for.
+ */
+function readHeredoc(line, at, index, pending) {
+  let cursor = at + 2;
+  const strip = line[cursor] === "-";
+  if (strip) cursor += 1;
+  while (line[cursor] === " " || line[cursor] === "\t") cursor += 1;
+  let delimiter = "";
+  while (cursor < line.length) {
+    const character = line[cursor];
+    if (character === "'" || character === '"') {
+      const close = line.indexOf(character, cursor + 1);
+      delimiter += line.slice(cursor + 1, close === -1 ? line.length : close);
+      cursor = close === -1 ? line.length : close + 1;
+      continue;
+    }
+    if (character === "\\") {
+      delimiter += line[cursor + 1] ?? "";
+      cursor += 2;
+      continue;
+    }
+    if (" \t;&|()<>".includes(character)) break;
+    delimiter += character;
+    cursor += 1;
+  }
+  if (delimiter !== "") pending.push({ delimiter, strip, line: index + 1 });
+  return cursor - 1;
+}
+
+// --------------------------------------------------------- what is read ----
+//
+// The languages this repository is written in, and the reading each one gets.
+// A file with any other extension is counted line for line by --numstat, as it
+// always was: the discount is for source a person authors and annotates, and
+// the gate must not start guessing at the comment syntax of a format it has no
+// reader for.
+const KINDS = [
+  [/\.tsx$/, "tsx"],
+  [/\.ts$/, "ts"],
+  [/\.(?:mjs|cjs|js)$/, "js"],
+  [/\.sh$/, "sh"],
+];
+
+const kindOf = (file) => KINDS.find(([pattern]) => pattern.test(file))?.[1] ?? null;
 
 /**
  * Added and deleted counts per file, keyed by the path as it exists at `head`.
@@ -173,11 +354,13 @@ function changedFiles(base, head, pathspecs, cwd) {
     }
     // A binary file reports "-" for both counts, and `git diff --numstat | awk
     // '{a+=$1}'` — which this replaces — adds zero for it; so does this, unless
-    // it is a .ts or .tsx, which git calls binary when the source holds a NUL.
-    // Its lines cannot be classified, and zero is precisely the under-count.
-    // Not hypothetical: during this task a NUL landed in a template literal in
-    // kernel-source.ts and git stopped diffing the file at all.
-    if (added === "-" && isTypeScript(file)) refuse(`${file} is binary to git; no line is readable`);
+    // it is a file this script classifies, which git calls binary when the
+    // source holds a NUL. Its lines cannot be classified, and zero is precisely
+    // the under-count. Not hypothetical: during this task a NUL landed in a
+    // template literal in kernel-source.ts and git stopped diffing the file.
+    if (added === "-" && kindOf(file) !== null) {
+      refuse(`${file} is binary to git; no line is readable`);
+    }
     const count = added === "-" ? 0 : Number(added);
     if (!Number.isInteger(count)) refuse(`--numstat reported ${added} added lines for ${file}`);
     files.push({ file, added: count });
@@ -231,15 +414,19 @@ function addedLines(base, head, pathspecs, cwd, known) {
 
 async function measure(base, head, pathspecs, cwd) {
   const files = changedFiles(base, head, pathspecs, cwd);
-  const typescriptFiles = files.filter((f) => f.added > 0 && isTypeScript(f.file));
+  const read = files.filter((f) => f.added > 0 && kindOf(f.file) !== null);
   let total = 0;
-  for (const f of files) if (!isTypeScript(f.file)) total += f.added;
-  if (typescriptFiles.length === 0) return total;
+  for (const f of files) if (kindOf(f.file) === null) total += f.added;
+  if (read.length === 0) return total;
 
-  const classifyLines = await classifier();
+  // The compiler is loaded only if something needs it. A diff of nothing but
+  // shell is classified without it — shell has its own reader above — and a
+  // diff of nothing at all was already answered by --numstat.
+  const needsCompiler = read.some((f) => kindOf(f.file) !== "sh");
+  const classifyLines = needsCompiler ? await classifier() : null;
   const known = new Set(files.map((f) => f.file));
   const added = addedLines(base, head, pathspecs, cwd, known);
-  for (const f of typescriptFiles) {
+  for (const f of read) {
     const numbers = added.get(f.file) ?? [];
     // The two readings of the same diff must agree before either is trusted.
     if (numbers.length !== f.added) {
@@ -252,7 +439,7 @@ async function measure(base, head, pathspecs, cwd) {
     // the added line numbers refer to the committed side of the diff, which is
     // the subject gate.sh names and refuses to disagree with (ADR-031).
     const at = git(["show", `${head}:${f.file}`], cwd);
-    const kinds = classifyLines(at, { tsx: f.file.endsWith(".tsx") });
+    const kinds = kindsOf(at, f.file, classifyLines);
     for (const n of numbers) {
       const kind = kinds[n - 1];
       if (kind === undefined) {
@@ -266,8 +453,22 @@ async function measure(base, head, pathspecs, cwd) {
   return total;
 }
 
+/**
+ * One file's lines, classified under the reading its extension implies: the
+ * compiler's for TypeScript and JavaScript, `shellKinds` for shell. The caller
+ * supplies the compiler's classifier — or `null` where nothing in the diff
+ * needed one loaded — so that this stays the single place the two readers are
+ * chosen between.
+ */
+function kindsOf(source, file, classifyLines) {
+  const kind = kindOf(file);
+  if (kind === "sh") return shellKinds(source, file);
+  if (classifyLines === null) refuse(`${file} needs the compiler and none was loaded`);
+  return classifyLines(source, { tsx: kind === "tsx", js: kind === "js" });
+}
+
 async function classifyFile(file) {
-  const classifyLines = await classifier();
+  const classifyLines = kindOf(file) === "sh" ? null : await classifier();
   // Read through a catch rather than an existsSync test: a directory, a broken
   // symlink and a file the runner cannot read are all "cannot classify this",
   // and only the error says which. A refusal that names the wrong cause sends
@@ -278,7 +479,8 @@ async function classifyFile(file) {
   } catch (error) {
     refuse(`could not read ${file} — ${error.message ?? error}`);
   }
-  const kinds = classifyLines(source, { tsx: file.endsWith(".tsx") });
+  if (kindOf(file) === null) refuse(`${file} is not a language this script classifies`);
+  const kinds = kindsOf(source, file, classifyLines);
   const text = source.split("\n");
   const out = kinds.map((kind, index) => `${index + 1}\t${kind}\t${text[index]}`);
   process.stdout.write(`${out.join("\n")}\n`);

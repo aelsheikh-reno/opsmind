@@ -163,7 +163,8 @@ function parse(source: string, kind: ts.ScriptKind = ts.ScriptKind.TS): Parsed {
   const cached = parses.get(key);
   if (cached !== undefined) return cached;
 
-  const name = kind === ts.ScriptKind.TSX ? "kernel.tsx" : "kernel.ts";
+  const name =
+    kind === ts.ScriptKind.TSX ? "kernel.tsx" : kind === ts.ScriptKind.JS ? "kernel.js" : "kernel.ts";
   const file = ts.createSourceFile(name, source, ts.ScriptTarget.Latest, true, kind);
   const tokens: ts.Node[] = [];
   const collect = (node: ts.Node): void => {
@@ -237,6 +238,17 @@ export interface BlankOptions {
    * other's files.
    */
   tsx?: boolean;
+  /**
+   * Parse as JavaScript rather than TypeScript. Default false. Set it for a
+   * `.mjs`, `.cjs` or `.js` file, so that the compiler reads it under the
+   * grammar it was written in rather than under one that happens to accept most
+   * of it. `scripts/size-impl.mjs` passes it (ADR-035): this repository's build
+   * scripts and its two eslint configs are JavaScript, and a comment in one of
+   * them is no more implementation than a comment in a `.ts` file.
+   *
+   * `tsx` wins if both are set, which no caller should do.
+   */
+  js?: boolean;
 }
 
 /**
@@ -253,6 +265,14 @@ const LITERAL_TOKENS = new Set<ts.SyntaxKind>([
   ts.SyntaxKind.TemplateMiddle,
   ts.SyntaxKind.TemplateTail,
 ]);
+
+/** The script kind a caller's options ask for; TS unless one is named. */
+const scriptKind = (options: BlankOptions): ts.ScriptKind =>
+  options.tsx === true
+    ? ts.ScriptKind.TSX
+    : options.js === true
+      ? ts.ScriptKind.JS
+      : ts.ScriptKind.TS;
 
 /**
  * Replaces comments — and, by default, the contents of string, template and
@@ -272,10 +292,7 @@ const LITERAL_TOKENS = new Set<ts.SyntaxKind>([
  */
 export function blankNonCode(source: string, options: BlankOptions = {}): string {
   const blankStrings = options.strings !== false;
-  const { file, tokens, comments } = parse(
-    source,
-    options.tsx === true ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
-  );
+  const { file, tokens, comments } = parse(source, scriptKind(options));
   const out = source.split("");
   const blank = (from: number, to: number): void => {
     for (let index = from; index < to; index += 1) {
@@ -326,10 +343,15 @@ export type LineKind = "blank" | "comment" | "code";
  *
  * Pass `tsx: true` for a `.tsx` file. Under the default TS kind
  * `<div>{x}</div>` parses as a type assertion rather than as JSX, and the
- * comment ranges that come back describe a file nobody wrote.
+ * comment ranges that come back describe a file nobody wrote. Pass `js: true`
+ * for a `.mjs`, `.cjs` or `.js` file: the discount applies to every source
+ * language this repository writes (ADR-035), and JavaScript is read by the same
+ * compiler through `ts.ScriptKind.JS` rather than by a second scanner. Shell is
+ * the one language with no compiler here, and its classification lives in
+ * `scripts/size-impl.mjs` with its limits written down.
  */
 export function classifyLines(source: string, options: BlankOptions = {}): LineKind[] {
-  const code = blankNonCode(source, { tsx: options.tsx, strings: false }).split("\n");
+  const code = blankNonCode(source, { tsx: options.tsx, js: options.js, strings: false }).split("\n");
   return source.split("\n").map((line, index) => {
     if (line.trim() === "") return "blank";
     return (code[index] ?? "").trim() === "" ? "comment" : "code";

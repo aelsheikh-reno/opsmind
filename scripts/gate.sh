@@ -499,32 +499,54 @@ if git rev-parse --verify -q "$base" >/dev/null; then
   # docs/ covers the specification tree; *.md catches prose that lives beside
   # the code it describes — a module README is documentation wherever it sits.
   # Both are size-impl only: size-total below still counts every line.
+  #
+  # tasks/backlog.yaml is excluded for the same reason and by the same argument
+  # (ADR-035, Ahmed 2026-08-17): it is task metadata, not authored source. A node
+  # is a title, a dependency edge, a produces list, a set of assertions and the
+  # reasoning behind them — the pipeline's own planning record, which every task
+  # is required to keep current. Charged to a budget for reviewer cognitive load
+  # ON CODE, it makes recording WHY a task exists compete with the code that task
+  # writes, and the cheapest way to pass becomes a thinner node. That is the
+  # ADR-026 argument about specification prose, pointed at the one document this
+  # pipeline reads before every task it runs. size-total still counts every line
+  # of it: a backlog rewrite is still a large diff to review.
   impl_paths=(':(top,exclude)docs/' ':(top,exclude)*.md'
               ':(top,exclude)prisma/migrations/**/*.sql'
-              ':(top,exclude)tests/' ':(top,exclude)scripts/test-guards.sh')
+              ':(top,exclude)tests/' ':(top,exclude)scripts/test-guards.sh'
+              ':(top,exclude)tasks/backlog.yaml')
   total=$(added)
 
   # A COMMENT IS NOT IMPLEMENTATION (ADR-035). size-impl is the one measurement
-  # that reads the added lines rather than counting them, because in a .ts or
-  # .tsx file a comment-only line and a blank line are not implementation and
-  # must not be charged to a budget whose whole job is to force an oversized
-  # task to split. The 400 comes from the SmartBear/Cisco study of reviewer
-  # cognitive load, and the same study found that authors who ANNOTATE ship
-  # materially fewer defects — so charging annotations to the code budget makes
-  # deleting them the cheapest path to green, inverting the finding the number
-  # rests on. This is ADR-026 and ADR-028's argument about the third artifact a
-  # reviewer reads.
+  # that reads the added lines rather than counting them, because a comment-only
+  # line and a blank line are not implementation and must not be charged to a
+  # budget whose whole job is to force an oversized task to split. The 400 comes
+  # from the SmartBear/Cisco study of reviewer cognitive load, and the same study
+  # found that authors who ANNOTATE ship materially fewer defects — so charging
+  # annotations to the code budget makes deleting them the cheapest path to
+  # green, inverting the finding the number rests on. This is ADR-026 and
+  # ADR-028's argument about the third artifact a reviewer reads.
+  #
+  # IT APPLIES TO EVERY SOURCE LANGUAGE THIS REPOSITORY WRITES: .ts, .tsx, .mjs,
+  # .cjs, .js and .sh (Ahmed, 2026-08-17). The argument was never about
+  # TypeScript — this file is shell, it carries more explanation than code, and
+  # under a TypeScript-only rule the gate paid an agent to delete exactly that.
   #
   # The reading is the TypeScript compiler's, in scripts/size-impl.mjs, via the
   # reader in tests/kernel/kernel-source.ts — never a pattern match. A `//`
   # inside a string literal, a template literal or a JSX expression is code, and
   # only the parser knows the difference; a line scanner reading declarations
   # out of string literals is a mistake this repository has already made once.
-  # A line carrying code AND a trailing comment counts as code, in full.
+  # JavaScript goes through that same reader under ts.ScriptKind.JS. Shell is the
+  # one language with no compiler to ask, so size-impl.mjs classifies it itself,
+  # against the shell grammar and not against a pattern: a `#` inside '…' or
+  # "…", inside a heredoc body, in `${x#prefix}` or on a shebang line is code,
+  # and the limits of that reader are listed above it rather than left to be
+  # discovered. A line carrying code AND a trailing comment counts as code, in
+  # full, in every one of these languages.
   #
-  # Everything that is not .ts or .tsx is counted exactly as before, by
-  # --numstat, and size-total is untouched — it still counts every line of
-  # every file, comments and blanks included.
+  # Everything else is counted exactly as before, by --numstat, and size-total is
+  # untouched — it still counts every line of every file, comments and blanks
+  # included.
   #
   # It fails closed. If the script cannot run, cannot reach the reader, or
   # cannot classify a file, size-impl FAILS and prints why: a budget that
