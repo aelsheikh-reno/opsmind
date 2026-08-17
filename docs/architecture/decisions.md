@@ -364,6 +364,36 @@ This repository has now reached that conclusion three times about three artifact
 **The measurement is no longer a one-liner.** `size-impl` was `git diff --numstat | awk`. It now needs node, the `typescript` package, the reader and — for shell — a scanner this repository maintains itself, so there are several more ways for it to fail for infrastructure reasons, deliberately, since every one of them FAILs rather than passes. The shell reader is the part with no compiler behind it and therefore the part most likely to be wrong; the four cases it exists for (`#` in a single-quoted string, `#` in a heredoc, the shebang, a trailing `#`) are each demonstrated failing under a broken classifier and passing under this one, and its limits are listed in the file rather than left to be found.
 
 **The fixtures that probe the size gate need what a real run needs.** `scripts/test-guards.sh` built its budget probes as a copy of `scripts/` in a temp directory with no `node_modules` and no `tests/`, so the six probes whose fixture carries a `.ts` file could not classify and refused — correctly, and the `guards` line was red until it was fixed. The fix is the one [ADR-031](#adr-031) already recorded for the same file: make the fixture the state a real run requires, by symlinking `node_modules` and copying the reader in, rather than softening the script for an environment missing its toolchain. `tests/gates/size-impl-comments.test.ts` builds its gate fixtures the same way. Anything that later builds a fixture to measure a diff inherits that requirement.
+### ADR-036 · Four disciplines for the build loop: plan, verify, annotate briefly, and stop at three
+
+Numbered 036: 032 is still reserved for the unmerged reviewer-context work, 034 belonged to a node that was abandoned, and 035 is taken by `gate-size-impl-exclude-comments`, also unmerged.
+
+**Context.** Four failures inside one week, none caused by a missing gate. Every one was a loop the agents ran badly, and a gate cannot catch any of them.
+
+`module-deadlines-sweep` was re-split three times — 532 lines, then 457, then 403 — because its shape was discovered while building rather than decided before. Each discovery cost a rebuild, a rebase and a re-measure.
+
+`ALL GATES PASS` was reported from a run made before the commit it described. The gate measures the committed diff; the tree moved under it. Separately, `23 mutations, zero survivors` was scored against a red baseline, counted a mutation as killed for turning an already-failing test green, and did not reproduce — an independent re-run found 13 survivors in 30. Both claims were relayed rather than re-run.
+
+Comment blocks reached fifteen and twenty lines, several restating what the code plainly does, several carrying decision history and dated attributions that belong in an ADR. That prose is also what `size-impl` charged against the code budget until ADR-035.
+
+And `module-deadlines-sweep` took six passes across four gates without ever tripping the three-strike rule, because the rule counted per gate and each gate counted separately.
+
+**Decision.** Four changes to the agent instructions. No new gate and no new script — every one of these is a judgement, and a script that could check it would be a script that could be argued with.
+
+**Plan before build.** `/build-task` gains a planning step before any implementation, for every node: the files to be touched with an estimated implementation line count each, which assertions land where, whether the total clears `size-impl` and the node's `size-total`, and what it depends on that is not yet merged. An estimate over budget proposes the split in the plan and stops. A built result diverging from the plan by more than 25% on implementation lines is reported as such, with what was missed — an estimate nobody checks against the outcome never improves.
+
+**Verify before claiming.** No claim of passing, complete, verified, all gates pass or mutations killed, without the exact command, the commit it ran against, and its output in the same message. A claim relayed from a subagent is not a claim: re-run it or attribute it as unverified. A mutation claim carries its reproducing command and literal mutation list, states its baseline first, and counts a kill only as failures strictly above that baseline.
+
+**Comment limits, checkable rather than advisory**, in identical words in `implementer.md` and `reviewer.md`: three lines above a function, eight for a file header, one inline, and never a block longer than the code it annotates. Anything longer goes in the ADR or the commit message and is cited, never copied. A comment says why this is not the obvious thing — never what the code does, never decision history, never dated attributions. New and modified code only.
+
+**One iteration limit for the task, not per gate.** Three attempts total across every gate; a restructure, a split, a waiver request and a fix each count as one. On the third failure the run stops and asks Ahmed what failed each time, what changed between attempts, and two or three options with the trade-off of each in plain business terms — no function names, no types — and then waits.
+
+**Consequences.** The planning step costs a message on every node, including the small ones that never needed it, and an estimate is a guess that will sometimes be wrong; the 25% reconciliation is what stops it becoming ceremony. Verification costs a re-run of work a subagent already did, which is the price of a claim that is checkable rather than merely confident.
+
+The comment limits are the sharpest edge here, and they cut both ways: a limit on explanation, written in a repository whose gates and scripts are deliberately heavily commented and where ADR-035 has just established that annotation is worth protecting. The reconciliation is that annotation belongs somewhere, and a 3-line pointer to an ADR is better than a 20-line copy of it that drifts. The risk is real — the next author with something genuinely subtle to say may cite an ADR nobody writes.
+
+The iteration limit will sometimes stop a task that a fourth attempt would have finished. That is the point. Six passes across four gates is not persistence, it is an agent optimising against a number, and the cost of asking one message earlier is far below the cost of the fourth restructure.
+
 
 ### ADR-037 · A module repository lands with its integration tests, not with the module logic it serves
 

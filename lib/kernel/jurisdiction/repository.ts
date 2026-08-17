@@ -6,7 +6,7 @@
 import type { Jurisdiction as JurisdictionRow } from "@prisma/client";
 import { db } from "@/lib/db";
 import type { BusinessCalendar, BusinessHoliday, Jurisdiction } from "./index";
-import { isTimeZone, isWeekendMask } from "./index";
+import { civilZoneAdvice, isFixedOffsetZone, isTimeZone, isWeekendMask } from "./index";
 
 const toJurisdiction = ({ id, code, name }: JurisdictionRow): Jurisdiction => ({ id, code, name });
 
@@ -63,11 +63,35 @@ export async function businessCalendarFor(jurisdictionId: string): Promise<Busin
 }
 
 /**
+ * The jurisdiction's ISO code, or null when this cannot name it — no row for
+ * that id, or a database that did not answer.
+ *
+ * Best-effort by design, and the only database work any of the refusals below
+ * do. The refusal has already been decided from the value alone, before any
+ * query; this exists solely to make it actionable, so a database that is
+ * unreachable must not turn "UTC is not a civil zone" into a connection error
+ * naming neither. `civilZoneAdvice` says the register out loud when the code is
+ * null, which is why losing it costs help rather than correctness.
+ */
+async function jurisdictionCode(jurisdictionId: string): Promise<string | null> {
+  return db.jurisdiction.findUnique({ where: { id: jurisdictionId }, select: { code: true } }).then(
+    (row) => row?.code ?? null,
+    () => null,
+  );
+}
+
+/**
  * Sets the working week and the zone its civil date is read in. Rejects a mask
- * that is not a set of day numbers, and a zone `Intl` cannot resolve.
- * `timeZone` is a required argument with no default, for the reason the column
- * has none: a default zone is a UTC-shaped "today" written down once and then
- * trusted.
+ * that is not a set of day numbers, a zone `Intl` cannot resolve, and UTC or
+ * another fixed offset, which resolve perfectly well and are the civil time of
+ * nowhere. `timeZone` is a required argument with no default, for the reason
+ * the column has none: a default zone is a UTC-shaped "today" written down once
+ * and then trusted.
+ *
+ * Both zone refusals happen here, where the value enters, rather than in
+ * `civilDateIn` where it is read. An unreadable zone throws in the 02:00 sweep
+ * against a row accepted weeks earlier; UTC never throws anywhere, and reports
+ * a day late for four hours of every day instead.
  */
 export async function setBusinessCalendar(
   jurisdictionId: string,
@@ -78,6 +102,16 @@ export async function setBusinessCalendar(
     throw new Error(
       `weekendMask ${JSON.stringify(weekendMask)} is not a set of distinct day numbers 0-6 ` +
         "(0 = Sunday). The Gulf working week is Sunday-Thursday, so its mask is [5, 6].",
+    );
+  }
+  if (isFixedOffsetZone(timeZone)) {
+    throw new Error(
+      `timeZone ${JSON.stringify(timeZone)} names an offset, not a civil zone, and the business ` +
+        `calendar for jurisdiction ${jurisdictionId} may not be configured in one ("UTC", ` +
+        '"Etc/GMT", "Etc/GMT+4" and the other spellings of the same thing). "Today" on this ' +
+        "calendar is the civil date in that country: the deadline sweep fires at 02:00, which in " +
+        "the Gulf is 22:00 the previous UTC day, so a calendar read in UTC warns a day late for " +
+        `four hours of every day. ${civilZoneAdvice(await jurisdictionCode(jurisdictionId))}`,
     );
   }
   if (!isTimeZone(timeZone)) {

@@ -1885,6 +1885,29 @@
       - "tasks/backlog.yaml contributes nothing to size-impl and every line to size-total"
       - "size-impl stays 400 and never-waivable; size-total counts every line as before"
       - "A 450-line diff with no comments is still refused"
+- id: agent-loop-discipline
+  title: Plan before build, verify before claiming, annotate briefly, stop at three
+  phase: 0
+  depends_on: []
+  spec: PIPELINE.md#the-agents
+  produces:
+    - .claude/commands/build-task.md
+    - .claude/agents/implementer.md
+    - .claude/agents/reviewer.md
+    - .claude/agents/test-author.md
+    - docs/architecture/decisions.md
+    - tasks/backlog.yaml
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "build-task plans before implementing: files, estimated impl lines each, assertions to files, both budgets, unmerged dependencies"
+      - "An estimate over either budget proposes the split in the plan and stops for Ahmed"
+      - "A built result diverging from the plan by more than 25% on impl lines is reported with what was missed"
+      - "No claim of passing, verified or mutations killed without the command, the commit and the output in the same message"
+      - "A claim relayed from a subagent is re-run or attributed as unverified"
+      - "The comment limits appear in implementer.md and reviewer.md in identical words"
+      - "The reviewer still fails a comment contradicting its code or recording a superseded decision, in one review"
+      - "Three attempts per task counted across every gate, not three per gate, and the third stops for Ahmed"
   risk: low
   blocks_product: true
   status: todo
@@ -1986,6 +2009,123 @@
     tests/gates/size-impl-comments.test.ts already builds its gate fixtures
     exactly this way and its end-to-end cases pass, so the shape was proven; the
     fix is the same three lines applied to fixture_repo().
+    No new gate and no new script (Ahmed, 2026-08-16). Every one of these is a
+    judgement, and a script that could check it would be a script that could be
+    argued with. Recorded as ADR-036 with the week's evidence.
+
+    Four failures in one week, none of them a missing gate. module-deadlines-sweep
+    was re-split three times because its shape was discovered while building.
+    ALL GATES PASS was reported from a run made before the commit it described.
+    A mutation result of 23 killed with zero survivors was scored against a red
+    baseline and did not reproduce — an independent re-run found 13 survivors in
+    30. And that same node took six passes across four gates without tripping the
+    old three-strike rule, because the rule counted per gate.
+
+    The comment limits carry the sharpest tension and it is recorded rather than
+    smoothed over: they restrict explanation in a repository that has just spent
+    ADR-035 establishing annotation is worth protecting. The reconciliation is
+    that a 3-line pointer to an ADR beats a 20-line copy that drifts out of date.
+
+    Note the reviewer's duty to fail a comment contradicting its code was NOT
+    already on main when this landed — it lives on the unmerged
+    gate-reviewer-context-authority branch. The minimal form is added here so the
+    comment limits are enforceable; the fuller authority order is still unmerged.
+
+- id: timezone-reject-utc
+  title: A business calendar may not be configured in UTC
+  phase: 1
+  depends_on: [module-deadlines-civil-date]
+  spec: docs/architecture/components-core-deadline-monitor.md
+  also_read:
+    - docs/architecture/data-model.md              # BusinessCalendar.timeZone
+  produces:
+    - lib/kernel/jurisdiction/{index,repository}.ts
+    - tests/kernel/kernel-entities.test.ts
+    - docs/architecture/components-core-deadline-monitor.md
+    - docs/architecture/data-model.md
+    - tasks/backlog.yaml
+    - tests/baseline.json
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "isTimeZone rejects UTC for a business calendar, and the error names the jurisdiction's civil zone instead"
+      - "The equivalent spellings of UTC are rejected too, not only the three letters"
+      - "Every real civil zone the five jurisdictions use is still accepted"
+      - "A zone Intl cannot resolve is still rejected, as before"
+      - "Rejection happens on write, where the value enters, not later from Intl inside civilDateIn"
+  risk: low
+  status: todo
+  note: >
+    Ahmed, 2026-08-16. module-deadlines-civil-date made the timezone required
+    with no default so that nobody could inherit UTC by accident. But isTimeZone
+    accepts "UTC" because it IS a real IANA zone, so a calendar could still be
+    configured in the exact value the column exists to stop being assumed —
+    deliberately, and invisibly thereafter.
+
+    The column's whole purpose is that a jurisdiction's CIVIL date decides what
+    "today" means: the sweep fires at 02:00, which in the Gulf is 22:00 the
+    previous UTC day, so a calendar reading UTC warns a day late for four hours
+    of every day. That is the defect the field was added to prevent, and no
+    jurisdiction OpsMind operates in keeps civil time in UTC.
+
+    So the rejection is not "UTC is not a zone" — it is "UTC is not a CIVIL zone
+    for a jurisdiction", and the error must say so by naming the zone that
+    jurisdiction actually uses rather than only refusing. A refusal that does not
+    tell the administrator what to type instead gets worked around.
+
+    Reject the equivalent spellings too, or the rule is decoration: Etc/UTC,
+    Etc/GMT, Etc/Zulu, GMT, Zulu and UCT all resolve to the same offset with no
+    civil rules attached. Etc/GMT+N is a fixed offset rather than a civil zone
+    and belongs in the same refusal.
+
+- id: timezone-reject-offset-abbreviations
+  title: Whether a business calendar may carry EET, CET or EST is unsettled
+  phase: 1
+  depends_on: [timezone-reject-utc]
+  spec: docs/architecture/components-core-deadline-monitor.md
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "A jurisdiction's calendar carries that jurisdiction's own civil zone, so EET for Egypt is refused as the wrong country"
+      - "The accepted zone is resolved from data, never from a hardcoded list of five"
+      - "The rule the code enforces matches the rule the spec states"
+  risk: low
+  status: todo
+  note: >
+    SETTLED 2026-08-17, NOT BUILT — do not build it yet.
+
+    THE RULE: a jurisdiction's calendar must carry THAT JURISDICTION'S OWN
+    civil zone, resolved from DATA rather than from a hardcoded list. EET for
+    Egypt is then refused as the wrong COUNTRY, not as the wrong kind of name.
+
+    That is stronger than the problem which prompted it. Refusing on wrong
+    country also catches Asia/Dubai on an Egyptian calendar — a real zone, a
+    real place, and wrong by two hours — which no offset-name predicate would
+    ever have found. Resolving from data rather than a literal set of five is
+    what stops the sixth jurisdiction being a code change.
+
+    timezone-reject-utc refuses UTC, its spellings and the Etc/GMT±N fixed
+    offsets. It does NOT refuse EET, CET, MET, WET, EST, MST, HST or the
+    EST5EDT family: those are bare offset-denoting names that link into
+    GEOGRAPHIC zones rather than into Etc/, so they pass a predicate keyed on
+    the Etc/ area. An earlier version of that node claimed IANA collects every
+    placeless name under Etc/; it does not, and the claim has been corrected in
+    the code comment and the spec rather than left standing.
+
+    The hazard is demonstrated, not theoretical. Intl folds EET onto
+    Europe/Athens, whose DST does not coincide with Egypt's, so an Egypt
+    calendar typed EET reports a different civil date for the weeks the two
+    disagree — 2026-04-10T21:30Z is the 10th in Africa/Cairo and the 11th in
+    EET. Narrower than UTC's four hours a day, the same class of wrongness, and
+    the same invisibility. EET is also the plausible mistake: it is what a
+    European-trained administrator reaches for when asked for Egypt's zone.
+
+    Three readings are open and only Ahmed can choose. Refuse every
+    offset-denoting name, so the stated rule "the name denotes a place" holds
+    literally. Or accept them as valid IANA input, and narrow the spec to say
+    only UTC is refused. Or go narrower still and require a jurisdiction's
+    calendar to carry that jurisdiction's own zone, so EET for Egypt is refused
+    as the wrong country rather than the wrong kind of name.
 
 - id: module-deadlines-repository
   title: The deadline monitor's Prisma store, landing with the tests that can reach it
