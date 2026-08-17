@@ -3074,7 +3074,19 @@
     WITH coverage instrumentation, and reported 616s of import time against the
     ~5s a bare run takes — tests/integration/kernel/person.test.ts failed with
     P1001, unable to reach its own PGlite socket at 127.0.0.1:34835. Three bare
-    suite runs immediately afterwards were clean at 989. It is not engine
+    suite runs immediately afterwards were clean at 989, and a bare `vitest
+    run --coverage` was clean too.
+
+    THE SHARPEST EVIDENCE IS AT GATE LEVEL. On ONE commit, c0a7e80,
+    ./scripts/gate.sh returned FAIL and then PASS with nothing changed
+    between the runs, and the failing run took two cases in a different file
+    than the run before it. That is a second gate whose verdict is not a
+    function of its subject (ADR-031), and it is the reason this is recorded
+    at gate level rather than as a slow test.
+
+    IT IS LOCAL ONLY. CI sets DATABASE_URL to a postgres:16 service
+    (.github/workflows/gates.yml), so no PGlite socket is ever booted there
+    and no CI verdict can be affected by this. It is not engine
     divergence (ADR-038) and must not be filed as one: the same engine failed to
     accept a connection under load, which is ADR-033's territory rather than a
     behavioural difference between PGlite and PostgreSQL. Related to
