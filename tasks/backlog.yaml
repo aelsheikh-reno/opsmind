@@ -2193,7 +2193,7 @@
       - "A test passing locally and failing in CI, or the reverse, is reported as an engine-divergence finding — never retried, never called flakiness"
       - "Total repository coverage rises, and the new floor is recorded in tests/baseline.json"
   risk: low
-  status: done
+  status: todo
   note: >
     RECORDED, NOT BUILT. Ahmed 2026-08-15: it merges before money-spine.
 
