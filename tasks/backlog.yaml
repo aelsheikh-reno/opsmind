@@ -2220,8 +2220,10 @@
     with its integration tests rather than with the module logic it serves.
 
     It depends on kernel-repository-integration-tests because that node builds
-    the harness — a real database in CI, skipped loudly and never silently
-    where none is reachable — and this node is its first module-side consumer.
+    the harness — an engine the suite OBTAINS rather than skips for,
+    DATABASE_URL when present and an in-process PGlite when not (ADR-038,
+    which settled that after this node was written) — and this node is its
+    first module-side consumer.
 
     Two alternatives were refused when the sweep hit this, and are recorded here
     so they are not re-proposed. A diff-cov waiver: that gate deliberately has no
@@ -3034,3 +3036,22 @@
     the deadline monitor. What was missing was never the owner; it was this.
 
     Roughly 90-130 implementation lines, of which about 25 are schema.
+
+- id: test-timezone-migration-skips-without-a-database
+  title: deadline-calendar-timezone.test.ts skips five cases when no engine is reachable
+  phase: 0
+  depends_on: [kernel-repository-integration-tests]
+  spec: docs/architecture/decisions.md
+  done_when:
+    gates: [tests]
+    assertions:
+      - "The five migration cases obtain an engine and run, or fail naming why; they never skip"
+  risk: low
+  status: todo
+  note: >
+    RECORDED, NOT INVESTIGATED. Observed 2026-08-18 while verifying
+    module-deadlines-repository: the full suite reports "984 passed | 5
+    skipped". The five are the timezone migration cases from #50, which predate
+    ADR-038 and use describe.skip when no database is reachable — the exact
+    shape ADR-038 forbids, and the reason the test-count ratchet counts five
+    cases that nothing runs.

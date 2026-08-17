@@ -117,6 +117,12 @@ export interface AlertManager {
   ): Promise<void>;
 }
 
+/** The Prisma implementation of DeadlineStore, for a composition root to bind
+ *  to DeadlineDeps.store. Every kernel module re-exports its store the same
+ *  way; a caller outside this module never reaches repository.ts directly
+ *  (CLAUDE.md rule 4). */
+export { prismaDeadlineStore } from "./repository";
+
 export interface DeadlineDeps {
   /** The fingerprint's tenant segment. Configuration, not a guessed constant. */
   tenant: string;
