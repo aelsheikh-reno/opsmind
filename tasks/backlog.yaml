@@ -1825,6 +1825,144 @@
     whether it is also flagged here or deliberately left alone is undecided.
     Declared only — do not build with this node's parent.
 
+- id: gate-size-impl-exclude-comments
+  title: A comment is not implementation, and charging it makes deletion the cheapest green
+  phase: 0
+  depends_on: [gate-stale-input-refusal]
+  spec: PIPELINE.md#the-gates
+  size_total: 1800
+  size_waiver_reason: >
+    1048 of 1750 added lines are tests, task prose and documentation, against
+    317 of implementation. Identical shape to every waiver ADR-029 catalogued,
+    and identical to the argument accepted for the three sweep nodes. Cutting
+    the test file to fit would remove the four shell demonstrations and the
+    polarity cases — which is the behaviour this node exists to eliminate.
+    Ahmed, 2026-08-17.
+  produces:
+    - scripts/gate.sh
+    - scripts/size-impl.mjs
+    - scripts/test-guards.sh
+    - tests/kernel/kernel-source.ts
+    - tests/gates/size-impl-comments.test.ts
+    - docs/architecture/decisions.md
+    - PIPELINE.md
+    - tasks/backlog.yaml
+    - tests/baseline.json
+  done_when:
+    gates: [lint, types, tests, guards]
+    assertions:
+      - "A comment-only line does not count toward size-impl in any source language this repository writes: .ts, .tsx, .mjs, .cjs, .js, .sh"
+      - "A blank line does not count toward size-impl"
+      - "A line carrying code and a trailing comment counts as code, in full"
+      - "// inside a string literal, a template literal or a JSX expression counts as CODE, never as a comment"
+      - "The classification comes from the TypeScript compiler API through the kernel-source reader, never a regex; .mjs, .cjs and .js go through that same reader under ts.ScriptKind.JS"
+      - "In shell a # inside a single-quoted string, inside a double-quoted string, inside a heredoc, on the shebang line, or not at a word boundary counts as CODE, and a trailing # counts the line in full"
+      - "A shell file the reader cannot follow to the end is refused, never counted"
+      - "tasks/backlog.yaml contributes nothing to size-impl and every line to size-total"
+      - "size-impl stays 400 and never-waivable; size-total counts every line as before"
+      - "A 450-line diff with no comments is still refused"
+  risk: low
+  blocks_product: true
+  status: todo
+  note: >
+    BLOCKS PRODUCT. It is blocking module-deadlines-sweep right now, and every
+    way past it games the gate (Ahmed, 2026-08-16).
+
+    THE EVIDENCE THE 400 RESTS ON ARGUES AGAINST CHARGING COMMENTS. The figure
+    comes from the SmartBear/Cisco study of reviewer cognitive load — how much
+    diff a human can review before defect detection collapses. That same study
+    found that authors who ANNOTATE their changes ship materially fewer defects,
+    because annotating forces self-review. Charging annotations to the code
+    budget makes deleting them the cheapest path to green, which inverts the
+    finding the threshold rests on. ADR-026 and ADR-028 already reached this
+    conclusion for documentation and generated DDL; this is the same argument
+    about the third artifact a reviewer reads.
+
+    The case that forced it: module-deadlines-sweep measured EXACTLY 400 and
+    went 3 over solely by correcting a comment that had become false — the
+    MissingBusinessCalendarError doc said a missing calendar aborts the run,
+    which that node makes untrue. The correction IS the work, and the gate
+    charged it as if it were new implementation.
+
+    EVERY SOURCE LANGUAGE, AND THE BACKLOG IS OUT (Ahmed, 2026-08-17 — ONE
+    ruling, both halves). The discount applies to .ts, .tsx, .mjs, .cjs, .js and
+    .sh, because nothing in the SmartBear/Cisco finding is about a file
+    extension. The first pass discounted TypeScript alone for no better reason
+    than that the case which forced it arose there, which left scripts/gate.sh —
+    560 lines of shell carrying more reasoning than code, and the file that RUNS
+    this budget — still paying for its own explanation, along with the two
+    eslint configs. And tasks/backlog.yaml is excluded from size-impl entirely:
+    a node is a title, a dependency edge, a produces list and the reasoning
+    behind them, which is planning rather than authored source, and a budget for
+    reviewer cognitive load ON CODE must not make a thinner node the cheapest
+    way to pass. size-total still counts every line of all of it.
+
+    COMPILER API, NEVER A REGEX. This repository has already been bitten by a
+    line scanner reading declarations inside string literals as real exports,
+    which is why tests/kernel/kernel-source.ts exists. A `//` inside a string, a
+    template literal or a JSX expression is code and must count as code; only
+    the compiler can tell the difference. The reader already collects comments
+    as CommentRanges with line positions, so this extends it rather than
+    inventing a second parser. JavaScript goes through the SAME reader under
+    ts.ScriptKind.JS — one implementation, or the suite grades only one of two.
+
+    SHELL IS THE PART WITH NO COMPILER, so it is the part to get right. A `#`
+    inside a single-quoted string, inside a heredoc (<<, <<-, <<'EOF' and
+    <<"EOF" alike), on the shebang line, or anywhere that is not a word boundary
+    — foo#bar, ${x#prefix} — is CODE, and a trailing # counts its line in full.
+    The reader states what it does not handle rather than pretending otherwise,
+    every ambiguity resolves towards code because over-counting a budget can
+    never let an oversized task through, and where it has lost the thread it
+    refuses (ADR-031).
+
+    A line carrying code and a trailing comment counts as CODE, in full. No
+    partial credit: the alternative is a gate that rewards moving explanation
+    onto the same line as the code it explains.
+
+    THE COST, RECORDED: size-total is now the only budget holding the line on a
+    comment-heavy diff, and it is the waivable one.
+
+- id: gate-size-impl-guard-fixtures
+  title: The size probes need what a real gate run needs — a compiler and the reader
+  phase: 0
+  depends_on: [gate-size-impl-exclude-comments]
+  spec: docs/architecture/decisions.md#adr-035
+  produces:
+    - scripts/test-guards.sh
+  done_when:
+    gates: [lint, types, tests, guards]
+    assertions:
+      - "Every size probe in scripts/test-guards.sh passes again, including the six whose fixture carries a .ts file"
+      - "A probe fixture reaches a resolvable typescript and tests/kernel/kernel-source.ts, rather than the script being softened for a toolchain-less directory"
+      - "The measurement probes still fail an oversized implementation and still exempt docs, tests, generated DDL and the guard harness"
+  risk: low
+  status: todo
+  note: >
+    ABSORBED BY gate-size-impl-exclude-comments, which now lists
+    scripts/test-guards.sh in its produces and carries the fix. The history is
+    kept here because the reasoning is the record: size-impl now classifies a
+    .ts or .tsx line with the TypeScript compiler through
+    tests/kernel/kernel-source.ts (ADR-035), so taking the measurement needs the
+    typescript package and that reader. The budget probes in
+    scripts/test-guards.sh built their fixtures as a copy of scripts/ in a temp
+    directory with neither, so the six whose fixture carries a .ts file — the
+    docs-heavy pair, the README case, the tests/ case, the test-guards.sh case
+    and "the failure names the real implementation count" — refused, correctly,
+    and the `guards` gate was red until the fix landed.
+
+    The fix is the one ADR-031 already recorded for this same file: make the
+    fixture the state a real run requires. Symlink the repository's
+    node_modules into the fixture (and add it to the fixture .gitignore, so
+    `git add -A` does not commit a symlink to an absolute path) and copy
+    tests/kernel/kernel-source.ts in before the base commit. Do NOT relax the
+    script for a directory missing its toolchain: under-counting is the
+    direction size-impl exists to close, and a fixture that cannot measure is
+    not a smaller version of a real run.
+
+    tests/gates/size-impl-comments.test.ts already builds its gate fixtures
+    exactly this way and its end-to-end cases pass, so the shape was proven; the
+    fix is the same three lines applied to fixture_repo().
+
 - id: kernel-repository-integration-tests
   title: Integration tests over the six kernel repositories, against CI Postgres
   phase: 1
