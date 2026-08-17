@@ -2115,7 +2115,7 @@
       - "A zone Intl cannot resolve is still rejected, as before"
       - "Rejection happens on write, where the value enters, not later from Intl inside civilDateIn"
   risk: low
-  status: todo
+  status: done
   note: >
     Ahmed, 2026-08-16. module-deadlines-civil-date made the timezone required
     with no default so that nobody could inherit UTC by accident. But isTimeZone
