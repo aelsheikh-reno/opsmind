@@ -2324,3 +2324,557 @@
     over-reporting today. Every FUTURE test built on publicDeclarations inherits
     the blind spot silently, which is why this is written down rather than left
     in a review thread.
+- id: gate-service-boundary-rules
+  title: A capability service's repository is a repository, and its index is its surface
+  phase: 0
+  depends_on: [gate-eslint-ignores-generated-output]
+  spec: PIPELINE.md#the-gates
+  also_read:
+    - docs/architecture/data-ownership.md          # one writing owner per table
+    - docs/architecture/architecture-containers.md # ADR-021's in-process shape
+  produces:
+    - eslint.config.mjs
+    - templates/eslint.config.mjs
+    - scripts/check-boundaries.sh
+    - tests/scaffold/eslint-boundaries.test.ts
+    - tasks/backlog.yaml
+    - tests/baseline.json
+  done_when:
+    gates: [lint, types, boundaries, tests]
+    assertions:
+      - "lib/services/<service>/repository.ts is the one file in that service permitted to reach the database, and every other file in it is refused"
+      - "A service repository with no '// owns:' declaration fails the boundary check, in the same words a module repository does"
+      - "A service repository touching a table it does not declare is reported by name"
+      - "An import of lib/services/<service>/ past its index.ts fails, as it already does for a module"
+      - "eslint.config.mjs and templates/eslint.config.mjs still carry identical boundary blocks"
+      - "No module or kernel repository changes verdict"
+  risk: low
+  status: todo
+  note: >
+    Nothing under lib/services/ has ever existed, so the enforcement layer has
+    never been asked about it, and it currently answers wrongly in two
+    directions at once.
+
+    eslint block 2 names lib/db.ts, lib/modules/*/repository.ts,
+    lib/kernel/*/repository.ts and prisma/** — so the FIRST service repository
+    fails lint for importing the database it is the designated importer of. And
+    check-boundaries.sh reads the '// owns:' declaration only for modules and
+    kernel, while its "nothing outside a repository may reach the database"
+    grep excludes every path ending repository.ts by name. So the obvious fix —
+    widening the eslint block alone — produces a file that may import the
+    client and is checked by nothing. That is worse than the red lint it
+    replaces, because it is silent.
+
+    CLAUDE.md rule 4 is unenforced for services too: the deep-import pattern
+    names @/lib/modules only, and ADR-021's whole claim is that the seam is the
+    same call whether a capability is a folder or a container. A seam anyone can
+    reach around is not a seam, and the risk ADR-021 names to police is exactly
+    interface bypass inside the monolith.
+
+    Done before there is a service to argue about, so the rule is not written to
+    suit the first file that needs it. Roughly 50 implementation lines, nearly
+    all of it two glob lists and one loop bound.
+- id: shapes-alert-manager
+  title: Field-level shapes for the alert, its event log and its sources
+  phase: 1
+  depends_on: [spec-coverage-audit]
+  spec: docs/architecture/flows-alerting.md
+  also_read:
+    - docs/architecture/data-ownership.md          # the satellite store row
+    - lib/modules/deadlines/index.ts               # the port already in production
+  produces:
+    - docs/architecture/data-model.md
+    - docs/architecture/flows-alerting.md
+    - docs/architecture/open-items.md
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "Every column the Alert Manager stores is specified before any of it is built: the alert, its state, its severity, its scope, its event log and its sources"
+      - "The four states are the four ADR-020 names, and STALE is specified as a flag on an open alert rather than a fifth state"
+      - "The documented reportRun contract carries the scopes argument the merged port already takes"
+      - "Nothing in the shape names a jurisdiction, a deadline or a document — the scope key is opaque and is documented as opaque"
+      - "The questions this shape cannot answer are listed in open-items.md and none of them is answered here"
+  risk: low
+  status: todo
+  note: >
+    Written before the store, for the reason spec-coverage-audit exists:
+    inventing a data model inside an implementation PR under a size budget is
+    how DeadlineRegistration and ThresholdTable ended up specified by one cell
+    of data-ownership.md. flows-alerting.md is rich on behaviour and silent on
+    columns; data-model.md has no alert card at all.
+
+    THE DOCUMENTED CONTRACT IS ALREADY STALE. flows-alerting.md and
+    components-services.md both print reportRun(sourceId, runId, alerts[]). The
+    merged port takes a fourth argument, scopes, and scoped completeness is
+    stated in that same page's prose three sections down. The doc is corrected
+    to the shipped shape rather than the shipped shape to the doc: the argument
+    is what carries the rule the page calls load-bearing.
+
+    THE SCOPE KEY IS A DOMAIN LEAK, and it is recorded rather than fixed here.
+    ReportedAlert.jurisdictionId names an OpsMind concept in the one contract
+    the extraction criterion says a second product must use unchanged. The
+    engine can satisfy it structurally and treat it as opaque, which is what the
+    nodes below do. Whether the port is renamed — an edit to a merged compliance
+    module — is Ahmed's, not this node's.
+
+    Documentation only, so size-impl is zero (ADR-026). Report and stop.
+- id: service-alerts-surface-and-lifecycle
+  title: Alert Manager — the interface the deadline monitor already calls, and the four-state lifecycle
+  phase: 1
+  depends_on: [module-deadlines-sweep, shapes-alert-manager]
+  spec: docs/architecture/flows-alerting.md
+  also_read:
+    - docs/architecture/components-services.md     # what it must never know
+    - docs/architecture/architecture-containers.md # ADR-021, in-process behind the target interface
+    - lib/modules/deadlines/index.ts               # AlertManager, ReportedAlert, RunScope
+  produces:
+    - lib/services/alerts/{index,lifecycle}.ts
+    - tests/services/alerts/
+    - docs/architecture/flows-alerting.md
+    - docs/architecture/components-services.md
+    - tests/baseline.json
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "The service's client satisfies the deadline monitor's AlertManager port exactly, and the compiler is what proves it"
+      - "A fingerprint is an opaque identity: the engine never splits it on the separator, and two alerts differing anywhere in the string are two alerts"
+      - "Severity rises in place while an alert is open and never falls; a downgrade is a resolve followed by a new alert"
+      - "STALE is a flag on an open alert, not a fifth state — an alert is firing and STALE at once"
+      - "Acknowledged and suppressed are open: neither closes an alert and neither resolves it"
+      - "A policyId the engine holds no configuration for is accepted and recorded, never refused"
+      - "No file in the service names a jurisdiction, a deadline, a document or a correlation rule"
+  risk: compliance
+  status: todo
+  note: >
+    The seam, and the pure half behind it. Same shape as the module it serves:
+    domain in lifecycle.ts taking values rather than clients, index.ts the only
+    public surface, the store arriving as a port so the tests need no database.
+    In-process behind the target interface (ADR-021) — when the seam moves,
+    index.ts becomes an HTTP client with the same signatures and ADR-009's local
+    token verification lands there, with no caller change.
+
+    IT IS WRITTEN TO A PORT THAT IS ALREADY IN PRODUCTION, which is the unusual
+    thing about it. module-deadlines is merged and calls reportRun and raiseAlert
+    against nothing. The port is therefore not negotiable and not a draft: the
+    compiler check that the client is assignable to the module's AlertManager
+    type is the node's first assertion, because a signature disagreement
+    discovered later is a change to a merged compliance module.
+
+    THE FINGERPRINT MUST STAY OPAQUE. flows-alerting.md documents the pattern
+    {tenant}:{app}:{source}:{entity}:{policy} — five segments, of which the
+    entity is itself compound — while fingerprintFor emits six colon-joined
+    parts and escapes both ':' and the backslash inside a segment
+    (deadlines-fingerprint-and-severity-result). An engine that splits on the
+    separator to group or route will mis-split every deadline alert and silently
+    merge two identities, which is the exact failure the escaping was added to
+    prevent.
+
+    STALE AS A FLAG IS NOT INVENTED HERE: ADR-020 fixes the lifecycle at four
+    states, and flows-alerting.md says a frozen alert stays open. A fifth state
+    would make "open and unconfirmed" unrepresentable.
+
+    Roughly 150-200 implementation lines: the state predicates, the severity
+    ordering, the types, and index.ts. No persistence, no verbs with side
+    effects.
+- id: service-alerts-store
+  title: Alert Manager — its own tables, and the integration tests that exercise them
+  phase: 1
+  depends_on: [service-alerts-surface-and-lifecycle, gate-service-boundary-rules, kernel-repository-integration-tests]
+  spec: docs/architecture/data-model.md
+  also_read:
+    - docs/architecture/data-ownership.md          # ADR-002, one writing owner
+    - docs/architecture/decisions.md               # ADR-037, ADR-038
+  produces:
+    - prisma/schema.prisma
+    - prisma/migrations/
+    - lib/services/alerts/repository.ts
+    - tests/integration/services/alerts/
+    - docs/architecture/data-ownership.md
+    - tests/baseline.json
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "An alert is stored once per source and fingerprint; the same fingerprint reported twice updates one row and never creates a second"
+      - "Every state change is recorded as an event carrying what changed it, who and when, and no event is ever updated or deleted"
+      - "The scope an alert was last reported in is stored, and an alert never reported in a scope has none"
+      - "A resolved alert's row survives its resolution — nothing is deleted to close an alert"
+      - "The repository declares '// owns:' and touches no table outside that declaration"
+      - "Every exported repository function is exercised against a real PostgreSQL, and the suite never skips"
+  risk: compliance
+  status: todo
+  note: >
+    Lands separately from the logic it serves, and with its integration tests,
+    because a Prisma call cannot be executed without PostgreSQL and diff-cov
+    grades a node on the lines it changed (ADR-037). The engine above it keeps
+    the store behind a port, which is what already lets its tests run without a
+    database. The engine harness is ADR-038's: DATABASE_URL when present, PGlite
+    over a socket otherwise, never a skip.
+
+    OPEN, AND AHMED MUST RULE BEFORE THIS NODE IS PICKED UP — WHERE AN
+    IN-PROCESS CAPABILITY SERVICE'S STORE PHYSICALLY LIVES. ADR-002 says a
+    service owns its store exclusively and satellites are physically unable to
+    reach PostgreSQL; architecture-containers.md says PostgreSQL is one schema
+    written only by the core; ADR-021 says this thing is in-process today. All
+    three are true at once and they do not compose. The two candidate shapes,
+    neither chosen here.
+
+    Shape one, its tables in prisma/schema.prisma, owned exclusively through
+    '// owns:' and reached only through index.ts. Cheapest now; extraction later
+    is a data migration on a live alert table, and the ADR-002 sentence is
+    untrue for the whole in-process period.
+
+    Shape two, a second datasource from day one, so extraction is a deploy
+    change and never a data move, and ADR-002 is literally true from the first
+    row. Costs a second migration path, a second connection pool and a second
+    test harness before there is a second consumer.
+
+    It is decided ONCE, for all seven capability services, not per service —
+    service-work-items-store depends on this node purely to inherit the answer.
+
+    ALSO OPEN: whether this store may reuse the AlertSeverity enum, which today
+    sits in the deadline monitor's section of the schema. Sharing it couples
+    detection to the engine across the exact seam ADR-020 exists to create. And
+    retention: data-retention.md governs documents, and says nothing about how
+    long a resolved alert is kept.
+
+    Roughly 220-280 implementation lines, of which about 120 are schema and 110
+    repository; generated DDL is outside size-impl (ADR-028) and inside
+    size-total.
+- id: service-alerts-raise
+  title: Alert Manager — raiseAlert and resolveAlert, deduplicated by fingerprint
+  phase: 1
+  depends_on: [service-alerts-store]
+  spec: docs/architecture/flows-alerting.md
+  also_read:
+    - lib/modules/deadlines/index.ts               # the two misconfiguration alerts, evaluate-on-register
+  produces:
+    - lib/services/alerts/{index,lifecycle}.ts
+    - tests/services/alerts/
+    - tests/baseline.json
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "Two raises of the same fingerprint produce one open alert, not two"
+      - "A second raise at a higher severity raises the open alert in place; at a lower severity it leaves the severity where it was"
+      - "resolveAlert is idempotent: resolving a resolved or unknown fingerprint succeeds and changes nothing"
+      - "A raise for a fingerprint that is currently resolved opens it again as firing, and the earlier resolution stays in the record"
+      - "The deadline monitor's misconfiguration alerts are accepted verbatim — an unconfigured policyId, raised again on every run — and produce one open alert per subject rather than one per run"
+      - "An alert raised on registration and the same fingerprint later reported by a run are one alert throughout"
+      - "The context a source supplies is stored whole and nothing in it is interpreted"
+  risk: compliance
+  status: todo
+  note: >
+    THIS IS THE NODE THAT MAKES A MERGED MODULE DELIVER. module-deadlines calls
+    raiseAlert from registerDeadline and twice from the sweep, and until this
+    exists every one of those calls goes to nothing: an unwatched deadline type
+    and a jurisdiction with no calendar are detected, correctly, and then
+    discarded. That is the exact failure the module was built to prevent,
+    relocated one layer down.
+
+    Dedupe spans the two verbs, deliberately. registerDeadline raises through
+    raiseAlert while the sweep reports the identical fingerprint through
+    reportRun, and the module's own comment says tonight's sweep either confirms
+    this alert or resolves it. If the verbs held separate identities the user
+    would see the same breach twice.
+
+    OPEN, AND IT DECIDES WHETHER A BAD NIGHT COSTS ONE ALERT OR A WHOLE RUN.
+    runDeadlineSweep awaits raiseMisconfiguration inside its jurisdiction loop
+    with no guard — verified: there is no try or catch anywhere in that
+    function, and both awaits precede reportRun. A throw from this verb rejects
+    the sweep BEFORE reportRun fires, so nothing is resolved, the complete
+    report never arrives, and the source goes dark — a larger failure than the
+    one being reported. Either the engine never throws for a data reason, or the
+    sweep grows a guard, which is an edit to a merged compliance file. Not
+    decided here.
+
+    Roughly 140-180 implementation lines: two verbs over lifecycle.ts and the
+    store.
+- id: service-alerts-report-run
+  title: Alert Manager — reportRun, scoped completeness, and resolution by absence
+  phase: 1
+  depends_on: [service-alerts-raise]
+  spec: docs/architecture/flows-alerting.md
+  also_read:
+    - docs/architecture/components-core-deadline-monitor.md
+    - lib/modules/deadlines/index.ts               # RunScope, and what the sweep sends
+  produces:
+    - lib/services/alerts/{index,lifecycle}.ts
+    - tests/services/alerts/
+    - docs/architecture/flows-alerting.md
+    - docs/architecture/components-services.md
+    - tests/baseline.json
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "A fingerprint absent from a completed report is resolved, and the resolution names the run that closed it"
+      - "Absence resolves only inside a scope the run declared complete"
+      - "An incomplete scope's alerts stay open, are marked STALE, and are never resolved by absence"
+      - "An empty report is a real report: it resolves everything absent in its complete scopes and records that the source ran"
+      - "A report resolves nothing belonging to another source"
+      - "A fingerprint present in a report opens or raises exactly as raiseAlert would, and the two verbs share one identity"
+      - "The reason a scope gave for being incomplete is stored and readable on the alerts it froze"
+      - "An alert stops being STALE when a later run declares its scope complete, whether that run resolves it or reports it again"
+      - "The same run reported twice leaves the same state as reporting it once"
+  risk: compliance
+  status: todo
+  note: >
+    The load-bearing half of the whole engine, and the node the sweep's fourth
+    argument is currently talking to nobody about. module-deadlines-sweep sends
+    scopes today and its assertions already claim the behaviour — an incomplete
+    jurisdiction's alerts stay open, are marked STALE and are never resolved by
+    absence. Nothing implements that claim. Until this node, scopes is an
+    argument the receiver discards, which is silence wearing the shape of a
+    contract.
+
+    A partial run is never presented as whole, and the healthy scopes still
+    resolve normally: aborting on one bad calendar takes every jurisdiction dark
+    (Ahmed, 2026-08-14, flows-alerting.md).
+
+    AHMED MUST SETTLE ONE RULE BEFORE THIS IS PICKED UP, and both readings are
+    wrong in a way a user sees. An alert raised through raiseAlert carries no
+    scope. Does a completed report resolve it by absence?
+
+    Yes, and the missing-calendar alert the same sweep raised seconds earlier is
+    closed by that sweep's own report, every night, forever flapping.
+
+    No, and an alert raised by evaluate-on-register can never close, which
+    contradicts the merged module's own stated intent.
+
+    Or a third shape: bind the scope on first report, or add a scope argument to
+    raiseAlert (an edit to a merged port), or read a scope key out of context (a
+    convention nobody has specified, and one that teaches the engine what a
+    jurisdiction is).
+
+    This node does not choose. It is the reason the node is written down before
+    it is available.
+
+    THE DOCUMENTED CONTRACT IS AMENDED HERE, not the code: both
+    flows-alerting.md and components-services.md print a three-argument
+    reportRun while the merged port takes four.
+
+    Roughly 200-260 implementation lines. compliance, and never auto-merged:
+    this is the code that decides when a compliance alert is allowed to close.
+- id: service-alerts-source-registry
+  title: Alert Manager — sources, their expected cadence, and when each last spoke
+  phase: 1
+  depends_on: [service-alerts-report-run]
+  spec: docs/architecture/flows-alerting.md
+  also_read:
+    - docs/architecture/operations-scheduling.md   # liveness for jobs that report
+  produces:
+    - prisma/schema.prisma
+    - prisma/migrations/
+    - lib/services/alerts/{index,repository}.ts
+    - tests/integration/services/alerts/
+    - tests/services/alerts/
+    - docs/architecture/data-ownership.md
+    - tests/baseline.json
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "A source's expected cadence and grace are configuration rows, tunable without a deployment"
+      - "No cadence, grace or escalation interval appears as a constant anywhere in the service"
+      - "Every completed report records that source's liveness, so when a source last spoke is readable"
+      - "A report from a source with no configuration row is accepted and recorded, and the missing row is visible rather than inferred"
+      - "A source declared fire_only is marked as such, because it cannot report clean and must never be judged by absence"
+  risk: compliance
+  status: todo
+  note: >
+    Liveness is the half of ADR-020 that catches the failure nobody notices: a
+    detection engine that stops running produces no alerts, which looks exactly
+    like a healthy system. operations-scheduling.md already routes job failure
+    detection here — jobs that report to the Alert Manager are covered by source
+    liveness, and the rest register heartbeat deadlines.
+
+    NOTHING HERE IS A CONSTANT. ADR-020 says tuning values wait for real
+    traffic, so a cadence is a row and not a number in code, the same shape as
+    ThresholdTable. A default cadence invented now is a compliance value nobody
+    specified.
+
+    OPEN: what a source with no configured cadence means. Never dark, so a
+    misconfiguration buys silence; or immediately suspect, so every new source
+    alarms before anyone configures it. The spec does not say and this node does
+    not choose — it makes the absence visible and stops there.
+
+    Roughly 150-200 implementation lines, of which about 60 are schema.
+- id: service-alerts-source-dark-sweep
+  title: Alert Manager — a silent source raises one alarm, and its alerts freeze
+  phase: 1
+  depends_on: [service-alerts-source-registry]
+  spec: docs/architecture/flows-alerting.md
+  also_read:
+    - docs/architecture/operations-scheduling.md   # ADR-011, each owner runs its own timers
+  produces:
+    - lib/services/alerts/{index,liveness}.ts
+    - tests/services/alerts/
+    - docs/architecture/operations-scheduling.md
+    - tests/baseline.json
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "A source that misses its expected report raises exactly one source-dark alert, never one per frozen alert"
+      - "Every open alert of a dark source is marked STALE, and none of them is resolved"
+      - "A source already dark does not raise a second alert on the next sweep"
+      - "The source-dark alert resolves when that source reports a completed run again, and its frozen alerts stop being STALE"
+      - "The sweep is idempotent: running it twice inside one window changes nothing the first run did not"
+      - "The engine does not claim to watch itself: the external dead-man's check is stated where an operator reads it"
+  risk: compliance
+  status: todo
+  note: >
+    A dead watcher may flag alerts unconfirmed and may never close one. This is
+    where that rule is executed rather than asserted — the engine acting as a
+    source about its own inputs.
+
+    Its own timer, with a sweep behind it, because time-based work belongs to
+    the component whose domain it is and a level-based recheck is what makes a
+    missed tick self-heal (ADR-011). The sweep is stateless in the same sense
+    the deadline sweep is: it recomputes which sources are overdue from their
+    configured cadence and remembers nothing.
+
+    OPEN: at what severity a source-dark alert is raised, and what "escalated to
+    engineering" means to an engine with no routing vocabulary and no permission
+    to acquire one. The severity enum has two values and adding a third is a
+    migration, deliberately; picking one of the two here is a judgement about
+    urgency the spec never makes.
+
+    The dead-man's note is carried, not solved: the engine cannot alert on its
+    own death, and one external check on it is the only external monitoring
+    dependency in the design.
+
+    Roughly 180-240 implementation lines.
+- id: service-alerts-acknowledge-suppress
+  title: Alert Manager — acknowledgement pauses paging, suppression is bounded, both name an actor
+  phase: 1
+  depends_on: [service-alerts-raise]
+  spec: docs/architecture/flows-alerting.md
+  also_read:
+    - docs/architecture/security-authorization.md  # what the engine must not decide
+    - docs/architecture/decisions.md               # ADR-009
+  produces:
+    - lib/services/alerts/{index,lifecycle,repository}.ts
+    - prisma/schema.prisma
+    - prisma/migrations/
+    - tests/services/alerts/
+    - tests/integration/services/alerts/
+    - tests/baseline.json
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "Acknowledgement pauses paging and never closes: the alert is still open and still counted"
+      - "An acknowledged alert still open when its resolve window lapses re-escalates"
+      - "Suppression is bounded by an instant the caller supplies; there is no unbounded suppress"
+      - "An expired suppression returns the alert to firing with no new raise"
+      - "Every acknowledgement records its actor, and every suppression records its actor and its reason"
+      - "Suppression acts on a fingerprint, so an alert raised again while suppressed is recorded and stays quiet"
+      - "The engine records who acted and never decides whether they were allowed to"
+  risk: compliance
+  status: todo
+  note: >
+    The two human verbs, and the one place the lifecycle can be moved by
+    somebody rather than by a source. Acknowledgement that closes is the failure
+    mode this shape exists to prevent: a human silencing a compliance alert and
+    the deadline arriving anyway. So the resolve window keeps running, and a
+    lapsed window re-escalates.
+
+    OPEN, AND IT IS THE SAME QUESTION service-work-items-routing-assignment
+    asks, so it should be answered once for both. ADR-009 has satellites verify
+    a 5-minute core-minted token locally. In-process there is no token and the
+    actor is a string the caller supplies. Either the engine records an
+    unverified actor — an audit trail only as honest as its callers — or the
+    internal-auth seam lands earlier than ADR-021 planned. The engine must not
+    become an authorisation point either way: Authorization owns that, and a
+    service that judged permissions would stop being reusable.
+
+    Roughly 160-210 implementation lines, of which about 40 are schema for the
+    suppression row.
+- id: service-alerts-notification-grouping
+  title: Alert Manager — forty expiries are one digest and forty alerts
+  phase: 1
+  depends_on: [service-alerts-report-run, service-alerts-acknowledge-suppress]
+  spec: docs/architecture/flows-alerting.md
+  legacy_reference: reference/legacy/lib/email.ts
+  also_read:
+    - reference/legacy/app/api/cron/expiry-reminders/route.ts
+  produces:
+    - lib/services/alerts/{index,grouping}.ts
+    - prisma/schema.prisma
+    - prisma/migrations/
+    - tests/services/alerts/
+    - tests/differential/alerts-grouping.test.ts
+    - tests/baseline.json
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage, differential]
+    assertions:
+      - "Grouping changes what is delivered and never what state an alert is in"
+      - "Forty alerts sharing a group key inside one window produce one notification and forty individually addressable alerts"
+      - "group_by, group_wait, group_interval and repeat_interval are configuration rows, never constants"
+      - "An inhibiting alert silences its dependents' notifications while both are open, and neither alert's state moves"
+      - "A source-dark alert inhibits its own source's alerts, which is the general rule doing the specific job"
+      - "The legacy digest's grouping is reproduced: one message per recipient per run, sectioned, rather than one message per item"
+  risk: compliance
+  status: todo
+  note: >
+    Noise control, and the one place in the engine where the legacy build is a
+    real oracle: buildExpiryReminderHtml already collapses a run's expiries into
+    one sectioned digest, which is the behaviour this generalises. Hence a
+    differential test rather than an assertion written from prose alone.
+
+    LIFECYCLE IS UNTOUCHED BY ANY OF IT. Grouping and inhibition act on
+    notifications; an inhibited alert is still open, still counted, still
+    resolvable, still addressable. An engine that silenced state instead of
+    delivery would close alerts nobody looked at.
+
+    IT HAS NOWHERE TO DELIVER, and that is a gap in the graph rather than in
+    this node: the Notifications service has no backlog node at all. This node
+    produces grouped notification intents behind a Notifications port — the same
+    port shape every other boundary in this build uses — and delivery lands with
+    that service.
+
+    SPLIT SEAM, NAMED IN ADVANCE. Roughly 250-330 implementation lines is the
+    estimate and it is the least certain one here. If it measures over 400 the
+    cut is grouping first, inhibition second: inhibition needs a rule table
+    grouping does not, and grouping is what the legacy oracle covers.
+- id: deadlines-alert-manager-wiring
+  title: The deadline monitor's alert port is bound to the Alert Manager
+  phase: 1
+  depends_on: [service-alerts-report-run, service-alerts-source-registry]
+  spec: docs/architecture/components-core-deadline-monitor.md
+  also_read:
+    - docs/architecture/operations-scheduling.md   # the 02:00 sweep, and job_runs
+    - docs/architecture/architecture-containers.md # ADR-021, the seam is a function call today
+  produces:
+    - lib/services/alerts/index.ts
+    - lib/modules/deadlines/repository.ts
+    - app/api/internal/deadlines/sweep/route.ts
+    - tests/integration/deadlines-alerts.test.ts
+    - docs/architecture/operations-scheduling.md
+    - tests/baseline.json
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "DeadlineDeps.alerts is the Alert Manager's client in production, constructed in exactly one place"
+      - "A sweep run end to end leaves alerts readable from the Alert Manager's store, with the scopes the run declared"
+      - "The tenant on DeadlineDeps is configuration and is refused when unset, never defaulted"
+      - "A registration inside a threshold raises one alert, and that night's sweep either keeps it or resolves it — one fingerprint throughout"
+      - "Nothing outside the composition root reaches the service other than through lib/services/alerts/index.ts"
+      - "A jurisdiction with no calendar leaves its alerts open and STALE while every other jurisdiction resolves normally, proved against a real database"
+  risk: compliance
+  status: todo
+  note: >
+    The proof that the two halves meet. Everything above is tested against
+    ports; this is the first run where a real sweep writes real alerts to a real
+    store, and it is where a signature or semantic disagreement between a merged
+    module and a new service actually surfaces.
+
+    THE SWEEP STILL HAS NOTHING TO FIRE IT, and that is not this node's to fix.
+    No node in the graph schedules anything: operations-scheduling.md's 02:00
+    Asia/Dubai run has no caller, and job_runs — the unique (job, scheduled_for)
+    claim that makes duplicate runners collide harmlessly, and the defect the
+    legacy build already has from firing crons twice — has no table, no owner
+    and no node. This node gives the sweep an entry point a scheduler can call.
+    The scheduler itself needs a node of its own; recorded here rather than
+    invented inside a compliance PR.
+
+    Roughly 100-150 implementation lines. It also carries
+    lib/modules/deadlines/repository.ts, which left module-deadlines-sweep under
+    ADR-037 and needs the same integration harness this node uses.
