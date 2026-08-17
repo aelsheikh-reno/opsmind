@@ -3055,3 +3055,27 @@
     ADR-038 and use describe.skip when no database is reachable — the exact
     shape ADR-038 forbids, and the reason the test-count ratchet counts five
     cases that nothing runs.
+
+- id: harness-pglite-socket-unreachable-under-load
+  title: A PGlite socket refuses connections when seven engines boot under coverage
+  phase: 0
+  depends_on: [kernel-repository-integration-tests]
+  spec: docs/architecture/decisions.md
+  done_when:
+    gates: [tests]
+    assertions:
+      - "A full gate run with every integration file present reaches the same verdict every time"
+  risk: low
+  status: todo
+  note: >
+    RECORDED, NOT INVESTIGATED. Observed 2026-08-18 on
+    module-deadlines-repository, which adds a seventh integration file and so a
+    seventh in-process engine. Under ./scripts/gate.sh — which runs the suite
+    WITH coverage instrumentation, and reported 616s of import time against the
+    ~5s a bare run takes — tests/integration/kernel/person.test.ts failed with
+    P1001, unable to reach its own PGlite socket at 127.0.0.1:34835. Three bare
+    suite runs immediately afterwards were clean at 989. It is not engine
+    divergence (ADR-038) and must not be filed as one: the same engine failed to
+    accept a connection under load, which is ADR-033's territory rather than a
+    behavioural difference between PGlite and PostgreSQL. Related to
+    gate-total-cov-nondeterministic, which suspects the same instrumented run.
