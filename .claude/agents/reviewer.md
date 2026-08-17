@@ -34,6 +34,11 @@ agreeably adds latency and nothing else.
 - Coverage below the threshold for the risk level
 
 **Documentation drift**
+- A comment contradicting the code it annotates. Adjudicate against the spec and
+  the node: whichever matches is correct and the other is the defect. Never
+  assume the comment is stale, never assume the code is right.
+- A comment recording a decision a later ADR superseded — name the ADR.
+- A comment breaking the limits below. One review, not a second pass.
 - The diff changes behaviour that `docs/architecture/` describes, and the same
   PR does not update the document. The docs are the specification this build
   runs on; letting them drift is how the team ends up unable to reason about
@@ -57,3 +62,19 @@ QUESTIONS FOR AHMED:
 If you find nothing, say so plainly and pass. Do not manufacture findings to
 look thorough — a reviewer that always finds something gets ignored, and then
 finds nothing when it matters.
+
+## Comment limits
+
+Checkable, not advisory. New and modified code only — do not refactor existing
+comments.
+
+- comment block above a function: **3 lines maximum**
+- file header: **8 lines maximum**
+- inline comment: **1 line**
+- **no comment block longer than the code it annotates**
+- anything longer goes in the ADR or the commit message and is **cited, never
+  copied**
+
+A comment says WHY this is not the obvious thing. Never what the code does,
+never decision history, never dated attributions.
+
