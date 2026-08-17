@@ -90,7 +90,7 @@ describe("listRegimes", () => {
       ...UAE_VAT,
       jurisdictionId: uaeId,
       obligationType: "corporate_tax",
-      name: "UAE corporate tax",
+      name: "UAE Corporate Tax",
       rate: "0.09",
       deadlineDays: 270,
     });
@@ -103,18 +103,22 @@ describe("listRegimes", () => {
     });
   });
 
+  // Names that tie on a prefix must not break the tie by CASE. PGlite runs the
+  // C collation and a server usually runs a linguistic one, which disagree:
+  // byte order puts "UAE VAT" before "UAE corporate tax", en_US puts it after
+  // (ADR-038, the fourth measured divergence).
   it("orders by name ascending", async () => {
     expect((await listRegimes()).map((regime) => regime.name)).toEqual([
       "Egyptian VAT",
+      "UAE Corporate Tax",
       "UAE VAT",
-      "UAE corporate tax",
     ]);
   });
 
   it("narrows by jurisdiction and by obligation, together", async () => {
     expect((await listRegimes({ jurisdictionId: uaeId })).map((regime) => regime.name)).toEqual([
+      "UAE Corporate Tax",
       "UAE VAT",
-      "UAE corporate tax",
     ]);
     expect((await listRegimes({ obligationType: "vat" })).map((regime) => regime.name)).toEqual([
       "Egyptian VAT",
