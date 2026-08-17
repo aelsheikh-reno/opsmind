@@ -47,9 +47,10 @@ export interface CalendarSource {
  * Thrown when a jurisdiction has no BusinessCalendar. Failing loudly is the
  * point: a silent Saturday-Sunday fallback would measure a Gulf deadline
  * against the wrong week and report the wrong number of days remaining, which
- * is the exact defect CLAUDE.md rule 9 exists to prevent. During a sweep this
- * aborts the run before anything is reported — see runDeadlineSweep for why a
- * partial report would be worse than no report.
+ * is the exact defect CLAUDE.md rule 9 exists to prevent. A sweep never reaches
+ * this: a missing calendar makes that jurisdiction's scope incomplete and the
+ * run continues (flows-alerting.md, completeness is scoped). It is thrown by
+ * registerDeadline, refusing a registration nothing could ever score.
  */
 export class MissingBusinessCalendarError extends Error {
   readonly jurisdictionId: string;

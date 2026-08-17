@@ -393,3 +393,26 @@ And `module-deadlines-sweep` took six passes across four gates without ever trip
 The comment limits are the sharpest edge here, and they cut both ways: a limit on explanation, written in a repository whose gates and scripts are deliberately heavily commented and where ADR-035 has just established that annotation is worth protecting. The reconciliation is that annotation belongs somewhere, and a 3-line pointer to an ADR is better than a 20-line copy of it that drifts. The risk is real — the next author with something genuinely subtle to say may cite an ADR nobody writes.
 
 The iteration limit will sometimes stop a task that a fourth attempt would have finished. That is the point. Six passes across four gates is not persistence, it is an agent optimising against a number, and the cost of asking one message earlier is far below the cost of the fourth restructure.
+
+
+### ADR-037 · A module repository lands with its integration tests, not with the module logic it serves
+
+**Context.** `repository.ts` is the one file in a module allowed to reach the database (CLAUDE.md rules 1 and 3). Its body is Prisma calls, and Prisma calls cannot be executed without PostgreSQL — which is reachable in CI and nowhere else. So a module repository is, by construction, not unit-coverable.
+
+That collides with `diff-cov`, which grades a task on the lines it changed ([ADR-030](#adr-030)). `module-deadlines-sweep` measured **89.09% of 55 changed executable lines against a 90 floor** — six lines short, and all six were `repository.ts`'s four Prisma calls. The sweep neither caused that nor could fix it: the file has been uncoverable since it was written, and its own test is deliberately a source reader, pinning that the file declares `// owns:` and imports the shared client rather than executing a query.
+
+It is not one module's problem. The six kernel repositories sit between 0% and 15% for exactly this reason, and every one of the remaining modules — payroll, projects, expenses, billing, finance, ingestion — will reach the same wall the first time it writes one.
+
+**Decision.** **A module's `repository.ts` lands in the node that carries its integration tests, not in the node that carries the module logic it serves.** The domain node keeps the store behind its port — `DeadlineStore` on `DeadlineDeps` — which is what already lets its tests run without a database. The Prisma implementation follows separately, with tests that exercise it against a real PostgreSQL.
+
+Two alternatives were refused, and the refusals are the load-bearing half of this record.
+
+**No waiver on `diff-cov`.** That gate has no waiver mechanism by design. It measures what a task is answerable for, and the honest answer for uncoverable plumbing is not "waive the measurement" but "measure it somewhere it can be covered". Creating a waiver surface on `diff-cov` to pass the node that needed one is how a gate stops meaning anything — the same reasoning that keeps `size-impl` unwaivable under [ADR-029](#adr-029).
+
+**No CI-only integration test inside the domain node.** A test that runs in CI and skips locally makes the gate green in one place and red in the other. A verdict that disagrees with itself by environment teaches a developer to ignore the local run, and an ignored local run is the stale-baseline failure that [ADR-031](#adr-031) exists to prevent, arriving through a different door.
+
+**Consequences.** A module's domain logic and its persistence land in two pull requests rather than one, and for a period the module has a port with no production implementation behind it. That is less costly than it sounds — the port is what the domain tests already use, and a module that cannot be exercised without its repository was too coupled to it anyway.
+
+The cost that is real: this pattern only pays off once `kernel-repository-integration-tests` exists. Until then a repository node is blocked, and a module needing persistence in production is blocked with it. That node moves ahead of the money spine for exactly this reason.
+
+And a repository landing separately is a repository that can be forgotten. The domain node's port is the reminder — an interface with no implementation is visible in a way an untested file is not.
