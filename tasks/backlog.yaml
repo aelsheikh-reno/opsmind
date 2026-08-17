@@ -1971,7 +1971,7 @@
       - "Three attempts per task counted across every gate, not three per gate, and the third stops for Ahmed"
   risk: low
   blocks_product: true
-  status: todo
+  status: done
   note: >
     BLOCKS PRODUCT. It is blocking module-deadlines-sweep right now, and every
     way past it games the gate (Ahmed, 2026-08-16).
