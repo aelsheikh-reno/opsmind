@@ -1861,6 +1861,29 @@
       - "tasks/backlog.yaml contributes nothing to size-impl and every line to size-total"
       - "size-impl stays 400 and never-waivable; size-total counts every line as before"
       - "A 450-line diff with no comments is still refused"
+- id: agent-loop-discipline
+  title: Plan before build, verify before claiming, annotate briefly, stop at three
+  phase: 0
+  depends_on: []
+  spec: PIPELINE.md#the-agents
+  produces:
+    - .claude/commands/build-task.md
+    - .claude/agents/implementer.md
+    - .claude/agents/reviewer.md
+    - .claude/agents/test-author.md
+    - docs/architecture/decisions.md
+    - tasks/backlog.yaml
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "build-task plans before implementing: files, estimated impl lines each, assertions to files, both budgets, unmerged dependencies"
+      - "An estimate over either budget proposes the split in the plan and stops for Ahmed"
+      - "A built result diverging from the plan by more than 25% on impl lines is reported with what was missed"
+      - "No claim of passing, verified or mutations killed without the command, the commit and the output in the same message"
+      - "A claim relayed from a subagent is re-run or attributed as unverified"
+      - "The comment limits appear in implementer.md and reviewer.md in identical words"
+      - "The reviewer still fails a comment contradicting its code or recording a superseded decision, in one review"
+      - "Three attempts per task counted across every gate, not three per gate, and the third stops for Ahmed"
   risk: low
   blocks_product: true
   status: todo
@@ -1962,6 +1985,27 @@
     tests/gates/size-impl-comments.test.ts already builds its gate fixtures
     exactly this way and its end-to-end cases pass, so the shape was proven; the
     fix is the same three lines applied to fixture_repo().
+    No new gate and no new script (Ahmed, 2026-08-16). Every one of these is a
+    judgement, and a script that could check it would be a script that could be
+    argued with. Recorded as ADR-036 with the week's evidence.
+
+    Four failures in one week, none of them a missing gate. module-deadlines-sweep
+    was re-split three times because its shape was discovered while building.
+    ALL GATES PASS was reported from a run made before the commit it described.
+    A mutation result of 23 killed with zero survivors was scored against a red
+    baseline and did not reproduce — an independent re-run found 13 survivors in
+    30. And that same node took six passes across four gates without tripping the
+    old three-strike rule, because the rule counted per gate.
+
+    The comment limits carry the sharpest tension and it is recorded rather than
+    smoothed over: they restrict explanation in a repository that has just spent
+    ADR-035 establishing annotation is worth protecting. The reconciliation is
+    that a 3-line pointer to an ADR beats a 20-line copy that drifts out of date.
+
+    Note the reviewer's duty to fail a comment contradicting its code was NOT
+    already on main when this landed — it lives on the unmerged
+    gate-reviewer-context-authority branch. The minimal form is added here so the
+    comment limits are enforceable; the fuller authority order is still unmerged.
 
 - id: kernel-repository-integration-tests
   title: Integration tests over the six kernel repositories, against CI Postgres

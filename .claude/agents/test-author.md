@@ -41,3 +41,15 @@ Ask `differ` to generate cases from the legacy behaviour instead.
 - Never assert on an implementation detail — a private function name, an
   internal call order. Test the public surface and the observable outcome.
 - Never write a test whose expected value you derived by running the code.
+
+## Verify before claiming
+
+No claim of passing, complete, verified, all gates pass or mutations killed may
+be made without, in the same message: the exact command run, the commit it ran
+against, and its output. A claim you cannot show the output for is unverified,
+and saying so is the honest report.
+
+A mutation claim carries the reproducing command and the literal mutation list,
+the harness states its baseline first, and a kill counts only as failures
+strictly above that baseline. A run scored against a red baseline is not a run.
+
