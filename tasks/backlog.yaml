@@ -2169,6 +2169,26 @@
     green in CI and red locally is worse than either verdict alone, because a
     developer learns to ignore the local run.
 
+- id: gate-total-cov-nondeterministic
+  title: total-cov returns two verdicts for one commit
+  phase: 0
+  depends_on: [kernel-repository-integration-tests]
+  spec: PIPELINE.md#the-gates
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "Two coverage runs on one unchanged commit produce the same verdict"
+  risk: low
+  status: todo
+  note: >
+    RECORDED, NOT INVESTIGATED. Observed 2026-08-17 at commit 1012315: total-cov
+    reported FAIL, then PASS at 99.24% against a 99.24% baseline, on the same
+    commit with a clean tree and no change between runs. A false red is the same
+    class of defect as a false green (ADR-033) — both mean the verdict does not
+    describe the subject. Suspected: the integration suite boots six in-process
+    engines, and a coverage run that loses one file's instrumentation lands just
+    under a ratchet set at the exact measured value.
+
 - id: kernel-repository-integration-tests
   title: Integration tests over the six kernel repositories, against CI Postgres
   phase: 1
