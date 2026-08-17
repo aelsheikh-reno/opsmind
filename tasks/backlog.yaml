@@ -2176,13 +2176,21 @@
   spec: docs/architecture/data-ownership.md
   produces:
     - tests/integration/kernel/
+    - tests/integration/support/database.ts
     - .github/workflows/gates.yml
+    - vitest.config.ts
+    - package.json
+    - docs/architecture/decisions.md
+    - tasks/backlog.yaml
+    - tests/baseline.json
   done_when:
     gates: [lint, types, tests, coverage]
     assertions:
       - "Every exported function of the six kernel repositories is exercised against a real PostgreSQL"
-      - "The suite runs where CI provides a database and is skipped, loudly, where none is reachable"
-      - "A skipped run never reports the same result as a passed one"
+      - "The suite never skips: it uses DATABASE_URL when present, otherwise boots an in-process engine"
+      - "A test that cannot obtain an engine FAILS and names why — never a skip, never a pass"
+      - "The same migrations run on both engines, so a divergence surfaces as a migration failure rather than a silent behaviour difference"
+      - "A test passing locally and failing in CI, or the reverse, is reported as an engine-divergence finding — never retried, never called flakiness"
       - "Total repository coverage rises, and the new floor is recorded in tests/baseline.json"
   risk: low
   status: todo
@@ -2199,6 +2207,29 @@
     holds the line where it is. These files stay near zero until something
     executes them, and they are what payroll and the money spine read through.
     Hence before money-spine, not after.
+
+    ASSERTION 2 WAS AMENDED, AND THAT IS THE CONTRACT WORKING. As written this
+    node required the suite to be "skipped, loudly, where none is reachable".
+    That is the split-brain verdict ADR-037 refuses: a gate green in one place
+    and red in the other teaches a developer to ignore the local run, which is
+    the stale-baseline failure. The node predates that record. Under the
+    reviewer contract a spec contradicting an ADR resolves FOR THE ADR and the
+    spec is amended — so it was, rather than the ADR being quietly re-litigated
+    by a node older than it (Ahmed, 2026-08-17).
+
+    THE ENGINE CHOICE, which six kernel repositories and every module repository
+    inherit. DATABASE_URL when present, otherwise an in-process PGlite over a
+    socket so Prisma connects normally — no driver adapter, no preview feature,
+    no schema change. Never a skip.
+
+    CI keeps the engine production uses, deliberately. Migrations are the
+    highest-risk thing these tests exercise and the likeliest place two engines
+    diverge — constraint enforcement, NOT NULL backfills, the append-only
+    trigger. PGlite everywhere would buy exactness where it matters least and
+    give it up where it matters most. The harness runs the SAME migrations on
+    both, so a divergence surfaces as a migration failure rather than as a
+    silent behaviour difference.
+
 
 - id: kernel-source-compiler-api
   title: Read kernel source with the TypeScript compiler API
