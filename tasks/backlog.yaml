@@ -1099,7 +1099,7 @@
       - "A deadline type with no threshold row raises one misconfiguration alert per run, not silence"
       - "Business-day distance is (from, to]: due today is 0, due on the next working day is 1"
   risk: compliance
-  status: todo
+  status: done
   note: >
     The second half of module-deadlines. Its implementation and tests are
     already written — repository.ts, the full index.ts, thresholds.ts,
