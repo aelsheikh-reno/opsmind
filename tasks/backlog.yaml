@@ -1339,7 +1339,7 @@
       - "staging-deploy's size_waiver_reason describes staging-deploy"
       - "Every waived node has exactly one waiver reason, and it is its own"
   risk: low
-  status: todo
+  status: done
   note: >
     A scripted edit in #30 anchored on the file's first size_waiver_reason,
     which is staging-deploy's, and overwrote it with kernel-entities-law's text.
