@@ -1830,6 +1830,14 @@
   phase: 0
   depends_on: [gate-stale-input-refusal]
   spec: PIPELINE.md#the-gates
+  size_total: 1800
+  size_waiver_reason: >
+    1048 of 1750 added lines are tests, task prose and documentation, against
+    317 of implementation. Identical shape to every waiver ADR-029 catalogued,
+    and identical to the argument accepted for the three sweep nodes. Cutting
+    the test file to fit would remove the four shell demonstrations and the
+    polarity cases — which is the behaviour this node exists to eliminate.
+    Ahmed, 2026-08-17.
   produces:
     - scripts/gate.sh
     - scripts/size-impl.mjs
