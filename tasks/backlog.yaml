@@ -2193,7 +2193,7 @@
       - "A test passing locally and failing in CI, or the reverse, is reported as an engine-divergence finding — never retried, never called flakiness"
       - "Total repository coverage rises, and the new floor is recorded in tests/baseline.json"
   risk: low
-  status: todo
+  status: done
   note: >
     RECORDED, NOT BUILT. Ahmed 2026-08-15: it merges before money-spine.
 
@@ -2230,6 +2230,14 @@
     both, so a divergence surfaces as a migration failure rather than as a
     silent behaviour difference.
 
+    BUILT. ADR-038 records the engine rule and the three PGlite divergences it
+    cost — a connection dropped on any error response, prepared-statement names
+    colliding across the reconnect, and the per-database migrate advisory lock.
+    Coverage went 84.59% to 99.24% total, all six repositories at 100% of lines.
+    The DATABASE_URL path was demonstrated against a PGlite socket, not against
+    postgres:16: no PostgreSQL is reachable from the machine that built it,
+    which is the condition that made this node necessary. CI is its first real
+    run, and .github/workflows/gates.yml needed no change to give it one.
 
 - id: kernel-source-compiler-api
   title: Read kernel source with the TypeScript compiler API

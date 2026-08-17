@@ -416,3 +416,37 @@ Two alternatives were refused, and the refusals are the load-bearing half of thi
 The cost that is real: this pattern only pays off once `kernel-repository-integration-tests` exists. Until then a repository node is blocked, and a module needing persistence in production is blocked with it. That node moves ahead of the money spine for exactly this reason.
 
 And a repository landing separately is a repository that can be forgotten. The domain node's port is the reminder — an interface with no implementation is visible in a way an untested file is not.
+
+### ADR-038 · A repository test obtains an engine; it never skips
+
+Numbered 038: 032 is still reserved for the unmerged reviewer-context work, and 034 belonged to an abandoned node.
+
+**Context.** [ADR-037](#adr-037) settled that a `repository.ts` lands with its integration tests. This is the harness those tests — and every module repository after them — obtain a database from. The six kernel repositories sat between 0% and 15% line coverage (document 14, enrolment 0, jurisdiction 34, legal-entity 11, person 11, regime 15) because a Prisma call cannot be executed without PostgreSQL.
+
+The obvious harness runs when `DATABASE_URL` is set and skips otherwise. [ADR-037](#adr-037) already refused that: a gate green in one place and red in the other teaches a developer to ignore the local run, which is the stale-baseline failure [ADR-031](#adr-031) exists to prevent. The node predated that record and was amended for it (Ahmed, 2026-08-17).
+
+**Decision. A test never skips. It obtains an engine.**
+
+`DATABASE_URL` present, it is used. Absent, the harness boots **PGlite in-process behind a TCP socket** (`@electric-sql/pglite` + `@electric-sql/pglite-socket`), so Prisma connects through an ordinary `postgresql://` URL — no driver adapter, no preview feature, no schema change. Neither obtainable, the run **FAILS naming which of the two is missing and why**. Never a skip, never a pass.
+
+**An unreachable `DATABASE_URL` is a failure, not a reason to fall back.** Falling back would let a broken CI database read as green against an engine production never runs — the divergence this record exists to surface, arriving silently.
+
+**CI keeps the engine production uses, deliberately.** Migrations are the highest-risk thing these tests exercise and the likeliest place two engines diverge: constraint enforcement, NOT NULL backfills, the append-only trigger. PGlite everywhere would buy exactness where it matters least and give it up where it matters most.
+
+**The same `prisma migrate deploy` runs on both**, so an engine that disagrees surfaces as a migration failure rather than as a silent behaviour difference.
+
+**A test that passes locally and fails in CI, or the reverse, is a FINDING about engine divergence.** It is reported as one, with both engines named. It is never retried, and it is never called flakiness — that habit is what merged a red gate (#30) and left a stale baseline unread for twelve merges.
+
+**Isolation is a truncate between tests, in a schema of each file's own.** Not a transaction rolled back: repositories call the shared client directly (CLAUDE.md rule 3), so there is no transaction handle to route them through without changing `lib/` to suit its tests. Files run in parallel and a truncate is not scoped to anything, so a shared schema would have them wiping each other's rows — which reads afterwards as flakiness. The per-file schema also keeps the suite off the tables of whatever `DATABASE_URL` names.
+
+**Consequences.** Total repository line coverage went from 84.59% (335/396) to 99.24% (393/396), and all six repositories are at 100% of lines. Every module repository now has a harness to land against, so [ADR-037](#adr-037)'s split is payable.
+
+**Two engines cost two engines, and three divergences were measured rather than assumed.** All three are in the PGlite path and none is present on PostgreSQL:
+
+1. **The socket server drops the connection on any error response.** The query after an expected constraint violation fails with `Server has closed the connection`. `refusalFrom` in the harness absorbs it, and is the only way a test asserts a refusal.
+2. **Prepared statement names collide across that reconnect**, because the socket multiplexes every connection onto one backend: the fresh session re-prepares `s15` while the dead session's is still held. It appeared once in a full-suite run and would otherwise have been read as flakiness. `DEALLOCATE ALL` on the reconnected session — only when a reconnect actually happened, so PostgreSQL never sees it — closes it. `pgbouncer=true` closes it too and was rejected: it degrades a foreign-key violation to `unexpected message from server`, which is the behaviour under test.
+3. **Prisma's migrate advisory lock is per database**, so six files migrating six disjoint schemas at once would queue behind each other. `PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK` is set for the harness's own deploy; the schemas share nothing, so there is nothing for it to protect.
+
+The other costs are plainly real. About 8.5 s per test file goes on booting an engine and migrating it, and six in-process engines make the machine busier for everything else: a unit property test that cost 2.6–3.4 s reached 7.3 s and overran vitest's 5 s default, which is why `testTimeout` is 60 s with those figures beside it ([ADR-033](#adr-033)). Two engines also mean a bug can hide in the gap between them — the honest mitigation is that the migrations are identical and that any disagreement is a reportable finding rather than a re-run.
+
+**What is not verified here.** The `DATABASE_URL` path was exercised against a PGlite socket, not against `postgres:16`: no PostgreSQL is reachable from the machine this was built on, which is the condition that made this node necessary in the first place. Its first real run is CI.

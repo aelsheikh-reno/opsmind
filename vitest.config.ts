@@ -107,6 +107,10 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    // A timeout is for a hang, never for contention (ADR-033). tests/integration
+    // boots six in-process engines, under which a unit test costing 2.6-3.4 s
+    // reached 7.3 s and overran the 5 s default; 60 s is ~8x that (ADR-038).
+    testTimeout: 60_000,
     include: ["tests/**/*.{test,spec}.{ts,tsx}"],
     exclude: ["node_modules/**", "reference/**", ".next/**"],
     coverage: {
