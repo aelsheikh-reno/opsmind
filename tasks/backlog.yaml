@@ -2169,6 +2169,26 @@
     green in CI and red locally is worse than either verdict alone, because a
     developer learns to ignore the local run.
 
+- id: gate-total-cov-nondeterministic
+  title: total-cov returns two verdicts for one commit
+  phase: 0
+  depends_on: [kernel-repository-integration-tests]
+  spec: PIPELINE.md#the-gates
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "Two coverage runs on one unchanged commit produce the same verdict"
+  risk: low
+  status: todo
+  note: >
+    RECORDED, NOT INVESTIGATED. Observed 2026-08-17 at commit 1012315: total-cov
+    reported FAIL, then PASS at 99.24% against a 99.24% baseline, on the same
+    commit with a clean tree and no change between runs. A false red is the same
+    class of defect as a false green (ADR-033) — both mean the verdict does not
+    describe the subject. Suspected: the integration suite boots six in-process
+    engines, and a coverage run that loses one file's instrumentation lands just
+    under a ratchet set at the exact measured value.
+
 - id: kernel-repository-integration-tests
   title: Integration tests over the six kernel repositories, against CI Postgres
   phase: 1
@@ -2176,13 +2196,21 @@
   spec: docs/architecture/data-ownership.md
   produces:
     - tests/integration/kernel/
+    - tests/integration/support/database.ts
     - .github/workflows/gates.yml
+    - vitest.config.ts
+    - package.json
+    - docs/architecture/decisions.md
+    - tasks/backlog.yaml
+    - tests/baseline.json
   done_when:
     gates: [lint, types, tests, coverage]
     assertions:
       - "Every exported function of the six kernel repositories is exercised against a real PostgreSQL"
-      - "The suite runs where CI provides a database and is skipped, loudly, where none is reachable"
-      - "A skipped run never reports the same result as a passed one"
+      - "The suite never skips: it uses DATABASE_URL when present, otherwise boots an in-process engine"
+      - "A test that cannot obtain an engine FAILS and names why — never a skip, never a pass"
+      - "The same migrations run on both engines, so a divergence surfaces as a migration failure rather than a silent behaviour difference"
+      - "A test passing locally and failing in CI, or the reverse, is reported as an engine-divergence finding — never retried, never called flakiness"
       - "Total repository coverage rises, and the new floor is recorded in tests/baseline.json"
   risk: low
   status: todo
@@ -2199,6 +2227,37 @@
     holds the line where it is. These files stay near zero until something
     executes them, and they are what payroll and the money spine read through.
     Hence before money-spine, not after.
+
+    ASSERTION 2 WAS AMENDED, AND THAT IS THE CONTRACT WORKING. As written this
+    node required the suite to be "skipped, loudly, where none is reachable".
+    That is the split-brain verdict ADR-037 refuses: a gate green in one place
+    and red in the other teaches a developer to ignore the local run, which is
+    the stale-baseline failure. The node predates that record. Under the
+    reviewer contract a spec contradicting an ADR resolves FOR THE ADR and the
+    spec is amended — so it was, rather than the ADR being quietly re-litigated
+    by a node older than it (Ahmed, 2026-08-17).
+
+    THE ENGINE CHOICE, which six kernel repositories and every module repository
+    inherit. DATABASE_URL when present, otherwise an in-process PGlite over a
+    socket so Prisma connects normally — no driver adapter, no preview feature,
+    no schema change. Never a skip.
+
+    CI keeps the engine production uses, deliberately. Migrations are the
+    highest-risk thing these tests exercise and the likeliest place two engines
+    diverge — constraint enforcement, NOT NULL backfills, the append-only
+    trigger. PGlite everywhere would buy exactness where it matters least and
+    give it up where it matters most. The harness runs the SAME migrations on
+    both, so a divergence surfaces as a migration failure rather than as a
+    silent behaviour difference.
+
+    BUILT. ADR-038 records the engine rule and the three PGlite divergences it
+    cost — a connection dropped on any error response, prepared-statement names
+    colliding across the reconnect, and the per-database migrate advisory lock.
+    Coverage went 84.59% to 99.24% total, all six repositories at 100% of lines.
+    The DATABASE_URL path was demonstrated against a PGlite socket, not against
+    postgres:16: no PostgreSQL is reachable from the machine that built it,
+    which is the condition that made this node necessary. CI is its first real
+    run, and .github/workflows/gates.yml needed no change to give it one.
 
 - id: kernel-source-compiler-api
   title: Read kernel source with the TypeScript compiler API
