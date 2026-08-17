@@ -1777,7 +1777,7 @@
       - "A type with no ThresholdTable row is still unconfigured when overdue, never scored as safe"
       - "The spec sentence, the test and this assertion change together, so no commit leaves the build self-contradictory"
   risk: compliance
-  status: todo
+  status: done
   note: >
     Restores the per-type ceiling. An overdue deadline breaches every window its
     type has and reports the highest severity configured FOR THAT TYPE, so a type
