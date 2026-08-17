@@ -130,8 +130,8 @@ Nothing merges until every gate passes. Gates are scripts, not judgements.
 | `cov-waiver` | A task that legitimately lowers either number carries `coverage_waiver` and a `coverage_waiver_reason` on its node. Unexplained, or not a number, it fails |
 | `differential` | Output matches the legacy system on the golden dataset, or the difference is explicitly approved |
 | `security` | `claude-code-security-review` finds nothing high |
-| `size-impl` | Implementation under 400 added lines, or the task is split. Never waivable |
-| `size-total` | Whole diff under 1500 added lines, unless the node carries a `size_total` waiver Ahmed granted (ADR-029) |
+| `size-impl` | Implementation under 400 added **code** lines, or the task is split. In every source language this repository writes — `.ts`, `.tsx`, `.mjs`, `.cjs`, `.js`, `.sh` — a comment-only line and a blank line are not implementation and are not counted; a line carrying code *and* a trailing comment counts as code, in full. TypeScript and JavaScript are read by the TypeScript compiler through `tests/kernel/kernel-source.ts`, so a `//` inside a string, a template literal or a JSX expression is code; shell is read against the shell grammar in `scripts/size-impl.mjs`, so a `#` inside a quoted string, inside a heredoc, in `${x#prefix}` or on the shebang line is code (ADR-035). `tasks/backlog.yaml` is excluded entirely — it is task metadata, not authored source. Every other file is counted line for line as before. Never waivable |
+| `size-total` | Whole diff under 1500 added lines, unless the node carries a `size_total` waiver Ahmed granted (ADR-029). Counts every added line of every file — comments and blanks included |
 
 **The coverage denominator is the diff, not the repository (ADR-030).** The floor
 never moved — 90 and 70 are what they always were — but it used to be handed to
@@ -189,6 +189,27 @@ thorough tests compete with implementation for the same allowance, and the
 cheapest way to pass is to write fewer of them — which would have the gate
 paying an agent to skimp on exactly what CLAUDE.md calls non-negotiable.
 Lockfiles are excluded from both.
+
+**A comment is not implementation (ADR-035).** The 400 comes from the
+SmartBear/Cisco study of reviewer cognitive load, and the same study found that
+authors who *annotate* their changes ship materially fewer defects, because
+annotating forces self-review. Charging annotations to the code budget makes
+deleting them the cheapest path to green, which inverts the finding the
+threshold rests on — the argument ADR-026 made for documentation and ADR-028 for
+generated DDL, applied to the third artifact a reviewer reads. So `size-impl`
+counts a line only when code survives on it once its language's comments are
+removed, in **every source language this repository writes** — TypeScript,
+TSX, JavaScript and shell alike, because the argument is about what a reviewer
+has to hold in their head and never was about TypeScript. `tasks/backlog.yaml`
+is out of the budget altogether for the same reason: a node is planning, not
+implementation, and charging it makes a thinner node the cheapest way to pass.
+It is a discount on the code budget and nothing else: `size-total` still counts
+every line of every file, backlog and comments included, because a
+comment-heavy diff is still a large diff for a reviewer, and it is now the only
+budget holding that line. `scripts/size-impl.mjs` takes the measurement and
+fails closed — if it cannot run, cannot reach the reader or cannot classify a
+file, `size-impl` FAILs rather than reporting a count it did not take
+(ADR-031).
 
 The differential gate is the one that makes autonomy defensible. A `money` task
 merging without it is the failure mode that produces a wrong payslip.

@@ -123,11 +123,29 @@ def fixture_repo(backlog, task_current=None, prepare=None, prefix="gate-size-pro
     npx/npm stubs in measure() — the sandbox exists to observe one gate, and
     re-running the whole suite inside it proves nothing. The stub lives in a
     temporary copy of scripts/; the real gate.sh has no such escape.
+
+    The fixture also carries the two things a size-impl measurement needs, for
+    the same reason it carries a git repository at all. Since ADR-035 size-impl
+    READS a .ts or .tsx line rather than counting it, and the reading is the
+    TypeScript compiler's through tests/kernel/kernel-source.ts. A fixture with
+    no node_modules and no reader cannot classify anything, so it refuses —
+    correctly, that is the fail-closed rule — and every measurement probe below
+    it reports on the sandbox's toolchain instead of on the exclusions it means
+    to pin. So node_modules is symlinked in (gitignored here, so `git add -A`
+    never commits a pointer at an absolute path) and the reader is copied in
+    BEFORE the base commit, which keeps it out of the diff the fixture then
+    measures. This is not a softening of anything: it is making the fixture the
+    state a real run has. tests/gates/size-impl-comments.test.ts builds its gate
+    fixtures the same way.
     """
     d = tempfile.mkdtemp(prefix=prefix)
     SANDBOXES.append(d)
     shutil.copytree(os.path.join(REPO, "scripts"), os.path.join(d, "scripts"))
     stub(os.path.join(d, "scripts", "test-guards.sh"))
+    os.symlink(os.path.join(REPO, "node_modules"), os.path.join(d, "node_modules"))
+    os.makedirs(os.path.join(d, "tests", "kernel"))
+    shutil.copyfile(os.path.join(REPO, "tests", "kernel", "kernel-source.ts"),
+                    os.path.join(d, "tests", "kernel", "kernel-source.ts"))
     os.mkdir(os.path.join(d, "tasks"))
     with open(os.path.join(d, "tasks", "backlog.yaml"), "w") as f:
         f.write(backlog)
@@ -138,7 +156,7 @@ def fixture_repo(backlog, task_current=None, prepare=None, prefix="gate-size-pro
     # the same reason: an ignored path is not a dirty tree, so the probe below
     # tests waiver resolution rather than the refusal.
     with open(os.path.join(d, ".gitignore"), "w") as f:
-        f.write(".task-current.yaml\n")
+        f.write(".task-current.yaml\nnode_modules\n")
     if task_current is not None:
         with open(os.path.join(d, ".task-current.yaml"), "w") as f:
             f.write(task_current)
@@ -392,9 +410,11 @@ check("a neighbouring task on the same backlog keeps the default budget",
 # too, which is the failure this gate exists to prevent. So these run gate.sh's
 # full path over a throwaway repository with a real two-commit diff.
 #
-# The node toolchain is stubbed: the sandbox has no node_modules, so lint, types
-# and the vitest runs would fail on their own account and prove nothing about
-# the measurement. Only the size lines are read.
+# npx and npm are stubbed: lint, types and the vitest runs would fail in here on
+# their own account and prove nothing about the measurement. Only the size lines
+# are read. The stub does not extend to `node` itself — size-impl.mjs has to
+# really run, over the really-symlinked node_modules and the reader fixture_repo
+# copies in, or the probes below would grade a refusal rather than a count.
 def size_lines(out, gate):
     for line in out.splitlines():
         if line.startswith(gate):

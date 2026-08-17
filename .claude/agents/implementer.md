@@ -44,3 +44,31 @@ Anything computing money or a date is high risk:
 Report: what you implemented, which files changed, which assertions from the
 task you believe are satisfied, and — explicitly — anything you did not do or
 were unsure about. Silent partial completion is worse than an honest gap.
+
+## Comment limits
+
+Checkable, not advisory. New and modified code only — do not refactor existing
+comments.
+
+- comment block above a function: **3 lines maximum**
+- file header: **8 lines maximum**
+- inline comment: **1 line**
+- **no comment block longer than the code it annotates**
+- anything longer goes in the ADR or the commit message and is **cited, never
+  copied**
+
+A comment says WHY this is not the obvious thing. Never what the code does,
+never decision history, never dated attributions.
+
+
+## Verify before claiming
+
+No claim of passing, complete, verified, all gates pass or mutations killed may
+be made without, in the same message: the exact command run, the commit it ran
+against, and its output. A claim you cannot show the output for is unverified,
+and saying so is the honest report.
+
+A mutation claim carries the reproducing command and the literal mutation list,
+the harness states its baseline first, and a kill counts only as failures
+strictly above that baseline. A run scored against a red baseline is not a run.
+

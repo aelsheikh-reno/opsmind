@@ -140,21 +140,32 @@ interface Parsed {
 }
 
 /**
- * Parsing is memoised on the source text: a sweep asks the same file for its
- * comments, then for its literals, then for its declarations, and re-parsing
- * each time is work with no new answer attached.
+ * Parsing is memoised on the source text and the script kind it was read in:
+ * a sweep asks the same file for its comments, then for its literals, then for
+ * its declarations, and re-parsing each time is work with no new answer
+ * attached. The kind is part of the key because the same bytes parse into two
+ * different trees under the two kinds, and answering a .tsx question from a
+ * cached .ts parse is exactly the silent wrong answer this reader exists to
+ * avoid.
  *
- * Everything is parsed as TypeScript rather than TSX. `lib/kernel/` is shared
- * vocabulary and holds no components, and `<T>` in a .ts file means a type
- * argument — the reading the compiler only takes in this mode.
+ * The DEFAULT is TypeScript rather than TSX, and that is deliberate for
+ * `lib/kernel/`: it is shared vocabulary holding no components, and `<T>` in a
+ * .ts file means a type argument — the reading the compiler only takes in this
+ * mode. A .tsx file must be parsed as TSX or the opposite mistake happens:
+ * `<div>{x}</div>` is read as a type assertion, the JSX is not a tree, and the
+ * comment ranges inside it are wrong. So callers reading a real file pass the
+ * kind their extension implies rather than inheriting this default.
  */
 const parses = new Map<string, Parsed>();
 
-function parse(source: string): Parsed {
-  const cached = parses.get(source);
+function parse(source: string, kind: ts.ScriptKind = ts.ScriptKind.TS): Parsed {
+  const key = `${kind}\u0000${source}`;
+  const cached = parses.get(key);
   if (cached !== undefined) return cached;
 
-  const file = ts.createSourceFile("kernel.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const name =
+    kind === ts.ScriptKind.TSX ? "kernel.tsx" : kind === ts.ScriptKind.JS ? "kernel.js" : "kernel.ts";
+  const file = ts.createSourceFile(name, source, ts.ScriptTarget.Latest, true, kind);
   const tokens: ts.Node[] = [];
   const collect = (node: ts.Node): void => {
     const children = node.getChildren(file);
@@ -168,23 +179,34 @@ function parse(source: string): Parsed {
   // one included, because the end-of-file token is a token. `getLeading…` alone
   // would miss a comment that trails code on its own line, which is exactly
   // where a rate gets explained; the two together miss nothing.
+  //
+  // A range is kept only where it lies inside that trivia span. The two
+  // `get…CommentRanges` helpers are text scanners rather than parser output:
+  // handed a position they read forward through whatever looks like a comment,
+  // and they are right precisely because everything between a token's full
+  // start and its start IS trivia. JSX text is the exception — it carries none,
+  // so its own characters begin at the full start and the scanner reads them —
+  // and `<div>// not a comment</div>` renders those characters. Bounding every
+  // range by the token's start drops the misreading and keeps every real
+  // comment, whose whole extent is in the trivia by construction.
   const comments: ts.CommentRange[] = [];
   const seen = new Set<number>();
   for (const token of tokens) {
     const trivia = token.getFullStart();
+    const start = token.getStart(file);
     const found = [
       ...(ts.getTrailingCommentRanges(source, trivia) ?? []),
       ...(ts.getLeadingCommentRanges(source, trivia) ?? []),
     ];
     for (const range of found) {
-      if (seen.has(range.pos)) continue;
+      if (range.end > start || seen.has(range.pos)) continue;
       seen.add(range.pos);
       comments.push(range);
     }
   }
 
   const parsed: Parsed = { file, tokens, comments };
-  parses.set(source, parsed);
+  parses.set(key, parsed);
   return parsed;
 }
 
@@ -210,6 +232,23 @@ const NAME = /^[A-Za-z_]\w*$/;
 export interface BlankOptions {
   /** Blank the contents of string and template literals too. Default true. */
   strings?: boolean;
+  /**
+   * Parse as TSX rather than TS. Default false. Set it for a `.tsx` file and
+   * for nothing else: the two kinds disagree about `<`, so each is wrong on the
+   * other's files.
+   */
+  tsx?: boolean;
+  /**
+   * Parse as JavaScript rather than TypeScript. Default false. Set it for a
+   * `.mjs`, `.cjs` or `.js` file, so that the compiler reads it under the
+   * grammar it was written in rather than under one that happens to accept most
+   * of it. `scripts/size-impl.mjs` passes it (ADR-035): this repository's build
+   * scripts and its two eslint configs are JavaScript, and a comment in one of
+   * them is no more implementation than a comment in a `.ts` file.
+   *
+   * `tsx` wins if both are set, which no caller should do.
+   */
+  js?: boolean;
 }
 
 /**
@@ -226,6 +265,14 @@ const LITERAL_TOKENS = new Set<ts.SyntaxKind>([
   ts.SyntaxKind.TemplateMiddle,
   ts.SyntaxKind.TemplateTail,
 ]);
+
+/** The script kind a caller's options ask for; TS unless one is named. */
+const scriptKind = (options: BlankOptions): ts.ScriptKind =>
+  options.tsx === true
+    ? ts.ScriptKind.TSX
+    : options.js === true
+      ? ts.ScriptKind.JS
+      : ts.ScriptKind.TS;
 
 /**
  * Replaces comments — and, by default, the contents of string, template and
@@ -245,7 +292,7 @@ const LITERAL_TOKENS = new Set<ts.SyntaxKind>([
  */
 export function blankNonCode(source: string, options: BlankOptions = {}): string {
   const blankStrings = options.strings !== false;
-  const { file, tokens, comments } = parse(source);
+  const { file, tokens, comments } = parse(source, scriptKind(options));
   const out = source.split("");
   const blank = (from: number, to: number): void => {
     for (let index = from; index < to; index += 1) {
@@ -265,6 +312,50 @@ export function blankNonCode(source: string, options: BlankOptions = {}): string
 /** Comments gone, string contents kept — for reading declarations and members. */
 export function codeWithStrings(source: string): string {
   return blankNonCode(source, { strings: false });
+}
+
+// ------------------------------------------------------ classifying a line --
+
+/**
+ * What one physical line of a file carries. A line is `code` if any code
+ * survives on it once comments are removed, `comment` if it had text and none
+ * of it survived, and `blank` if it was empty or whitespace to begin with.
+ */
+export type LineKind = "blank" | "comment" | "code";
+
+/**
+ * Every line of a file, classified. Used by `scripts/size-impl.mjs`, which
+ * charges only `code` lines to the 400-line implementation budget (ADR-035):
+ * an annotation is not implementation, and charging it makes deleting it the
+ * cheapest way to a green gate.
+ *
+ * The classification is the compiler's, not a scanner's, and the difference is
+ * the whole point. `//` inside a string literal, inside a template literal and
+ * inside a JSX expression is CODE; only the ranges the parser reports as
+ * comment trivia are comments. A line scanner reading declarations out of
+ * string literals is the mistake this file was written to stop making, and
+ * "the line starts with //" is the same mistake with a smaller blast radius.
+ *
+ * A line carrying code AND a trailing comment is code, in full and with no
+ * partial credit — string contents are kept here (`strings: false`) so a
+ * literal never blanks a line down to nothing, and the alternative rule would
+ * reward moving an explanation onto the line it explains.
+ *
+ * Pass `tsx: true` for a `.tsx` file. Under the default TS kind
+ * `<div>{x}</div>` parses as a type assertion rather than as JSX, and the
+ * comment ranges that come back describe a file nobody wrote. Pass `js: true`
+ * for a `.mjs`, `.cjs` or `.js` file: the discount applies to every source
+ * language this repository writes (ADR-035), and JavaScript is read by the same
+ * compiler through `ts.ScriptKind.JS` rather than by a second scanner. Shell is
+ * the one language with no compiler here, and its classification lives in
+ * `scripts/size-impl.mjs` with its limits written down.
+ */
+export function classifyLines(source: string, options: BlankOptions = {}): LineKind[] {
+  const code = blankNonCode(source, { tsx: options.tsx, js: options.js, strings: false }).split("\n");
+  return source.split("\n").map((line, index) => {
+    if (line.trim() === "") return "blank";
+    return (code[index] ?? "").trim() === "" ? "comment" : "code";
+  });
 }
 
 export interface NumericLiteral {

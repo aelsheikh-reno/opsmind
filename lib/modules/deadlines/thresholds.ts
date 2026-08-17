@@ -22,6 +22,29 @@ export const SOURCE_ID = "deadline-monitor";
 export const APP_ID = "opsmind";
 
 /**
+ * One fingerprint segment, with the separator escaped.
+ *
+ * `:` joins the segments, so a segment that CONTAINS one collides two identities
+ * into a single string: `("document", "123:expiry", "renewal")` and
+ * `("document", "123", "expiry:renewal")` both read `…:document:123:expiry:renewal`,
+ * and the Alert Manager dedupes the second away — an alert that is not merely
+ * wrong but invisible, which is the failure mode this module exists to prevent.
+ *
+ * Escaped rather than rejected at `registerDeadline`, because fingerprints are
+ * also computed for jurisdiction ids and policy names (the misconfiguration
+ * alerts), and a check on one caller leaves every other caller colliding. The
+ * backslash is escaped too, or `a\` + `:b` and `a` + `\:b` would collide in its
+ * place.
+ *
+ * A segment containing neither character is returned byte for byte, so no
+ * existing identity moves: the fingerprint IS the alert's identity, and changing
+ * one resolves the old alert and reopens it as a new one.
+ */
+function escapeSegment(segment: string): string {
+  return segment.replace(/[\\:]/g, (char) => `\\${char}`);
+}
+
+/**
  * The deterministic identity of one watched deadline:
  * `{tenant}:{app}:{source}:{entity}:{policy}` (flows-alerting.md), which for
  * this module reads `…:deadline-monitor:document:123:expiry`.
@@ -34,7 +57,7 @@ export const APP_ID = "opsmind";
  * for the same reason — retuning a window must not reopen the alert.
  */
 export function fingerprintFor(tenant: string, entityType: string, entityId: string, deadlineType: string): string {
-  return [tenant, APP_ID, SOURCE_ID, entityType, entityId, deadlineType].join(":");
+  return [tenant, APP_ID, SOURCE_ID, entityType, entityId, deadlineType].map(escapeSegment).join(":");
 }
 
 /**
@@ -65,8 +88,24 @@ export function highestSeverity(): Severity {
 }
 
 /**
- * The severity for a deadline that is `businessDaysRemaining` away, or null
- * when no configured window is breached.
+ * What a threshold table says about one deadline. THREE outcomes, not two.
+ *
+ * Returning `null` for both "no window is breached" and "no window is
+ * configured" let a caller write `if (severityFor(...) === null) return;` and
+ * silently drop an unwatched deadline — a hole read as safety, which is the
+ * exact failure this module exists to prevent (spec, Note:46). The two facts are
+ * opposite, so the type distinguishes them and the compiler makes the caller
+ * say which it meant, rather than trusting it to remember to call `isConfigured`
+ * as well.
+ */
+export type SeverityVerdict =
+  | { readonly status: "breached"; readonly severity: Severity }
+  | { readonly status: "safe" }
+  | { readonly status: "unconfigured" };
+
+/**
+ * What this table says about a deadline `businessDaysRemaining` away: breached
+ * at some severity, safe inside every configured window, or unconfigured.
  *
  * Where several windows are breached — 30 and 7 both fire at 5 days remaining —
  * the MAXIMUM severity wins, never the tightest window. Rows of
@@ -97,20 +136,28 @@ export function highestSeverity(): Severity {
  * — so it has no opinion on an expired visa, and there is no legacy oracle for
  * this rule to cite.
  *
- * A type with no rows configured is never breached here, overdue or not. That is
- * a hole, not an answer, so the sweep raises a misconfiguration alert for the
- * type rather than this file inventing a default window — and overdue is not a
- * licence to score a type nobody configured.
+ * A type with no rows configured is never scored here, overdue or not: it
+ * answers `unconfigured`, which is a hole and not an answer, so the sweep raises
+ * a misconfiguration alert for the type rather than this file inventing a
+ * default window — and overdue is not a licence to score a type nobody
+ * configured.
  */
-export function severityFor(rules: readonly ThresholdRule[], deadlineType: string, businessDaysRemaining: number): Severity | null {
+export function severityFor(
+  rules: readonly ThresholdRule[],
+  deadlineType: string,
+  businessDaysRemaining: number,
+): SeverityVerdict {
   const overdue = businessDaysRemaining < 0;
   let worst: Severity | null = null;
+  let configured = false;
   for (const rule of rules) {
     if (rule.deadlineType !== deadlineType) continue;
+    configured = true;
     if (!overdue && businessDaysRemaining > rule.businessDaysBefore) continue;
     worst = worst === null ? rule.severity : moreSevere(worst, rule.severity);
   }
-  return worst;
+  if (!configured) return { status: "unconfigured" };
+  return worst === null ? { status: "safe" } : { status: "breached", severity: worst };
 }
 
 /** True when any window is configured for this type at all. */
