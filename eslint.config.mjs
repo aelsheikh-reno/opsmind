@@ -43,9 +43,19 @@ export default defineConfig([
             group: ["@/lib/modules/*/!(index)", "@/lib/modules/*/*/**"],
             message: "Import a module through its index.ts. Deep imports break the boundary."
           },
+          // A capability service is reached exactly as a module is. ADR-021's
+          // claim is that the seam is the same call whether the capability is a
+          // folder or a container, and the risk it names to police is interface
+          // bypass inside the monolith — a seam anyone can reach around is not
+          // a seam, so it is refused here before there is a service to argue
+          // about.
+          {
+            group: ["@/lib/services/*/!(index)", "@/lib/services/*/*/**"],
+            message: "Import a service through its index.ts. Deep imports break the boundary."
+          },
           {
             group: ["@/lib/db", "@prisma/client"],
-            message: "Only a module's repository.ts may touch the database."
+            message: "Only a repository.ts may touch the database."
           }
         ]
       }]
@@ -55,8 +65,16 @@ export default defineConfig([
   // 2 · repositories, lib/db.ts and prisma tooling are the one exception.
   // lib/db.ts constructs the single client those repositories import, so one
   // pool exists instead of one per module (data-ownership.md).
+  //
+  // A capability service's repository is named here for the same reason a
+  // module's is: ADR-039 makes its reuse target an importable package on the
+  // host's storage, so exclusive table ownership — not the network — is the
+  // whole of its boundary. Exempting it is only half the change: what makes the
+  // exemption safe is that scripts/check-boundaries.sh now reads the '// owns:'
+  // declaration of these three globs, not two. Widen one without the other and
+  // the file may import the client and is checked by nothing.
   {
-    files: ["lib/db.ts", "lib/modules/*/repository.ts", "lib/kernel/*/repository.ts", "prisma/**"],
+    files: ["lib/db.ts", "lib/modules/*/repository.ts", "lib/kernel/*/repository.ts", "lib/services/*/repository.ts", "prisma/**"],
     rules: { "no-restricted-imports": "off" }
   },
 
