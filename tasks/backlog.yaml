@@ -3274,12 +3274,12 @@
   also_read:
     - docs/architecture/flows-alerting.md
     - docs/architecture/components-services.md
-    - docs/architecture/components-services.md
   produces:
     - lib/modules/deadlines/index.ts
     - tests/modules/deadlines/
     - docs/architecture/flows-alerting.md
     - docs/architecture/components-core-deadline-monitor.md
+    - docs/architecture/components-services.md
     - docs/architecture/decisions.md
     - tasks/backlog.yaml
     - tests/baseline.json
@@ -3302,11 +3302,44 @@
     means spelling the field name — the engine would carry the word in order to
     find a value it neither understands nor cares about.
 
-    TWO FIELD DECLARATIONS CHANGE, of 177 mentions in the repository. Everything
-    else is OpsMind addressing itself, which is allowed: it is a compliance system
-    for five jurisdictions and is entitled to know what one is. No column is
-    renamed and no migration is required.
+    TWO FIELD DECLARATIONS CHANGE. `git grep -o -w jurisdictionId origin/main`
+    counts 216 occurrences, 56 of them in lib/; every one outside the two port
+    types is OpsMind addressing itself, which is allowed — it is a compliance
+    system for five jurisdictions and is entitled to know what one is. No column
+    is renamed and no migration is required.
 
     It lands NOW rather than later because the cost of a second edit to a merged
     compliance module is one edit today and two once a client compiles against the
     old names.
+
+- id: gate-produces-matches-the-diff
+  title: Nothing checks that a node's produces lists the files it changed
+  phase: 0
+  depends_on: []
+  spec: PIPELINE.md#the-gates
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "A task changing a file absent from its node's produces is refused, naming the file"
+      - "A produces entry naming a directory is satisfied by a change anywhere inside it"
+  risk: low
+  status: todo
+  note: >
+    RECORDED, NOT INVESTIGATED. Raised by the reviewer of
+    deadlines-alert-contract-vocabulary, 2026-08-18, as the THIRD CONSECUTIVE
+    node in one chain to change a document absent from its own produces —
+    flows-alerting.md, then decisions.md, then components-services.md. Every one
+    was caught by adversarial review rather than by a gate, and review is the
+    most expensive place to catch a bookkeeping error.
+
+    The graph is the pipeline's own planning record and every task is required
+    to keep it current, which is the argument ADR-035 used to take
+    tasks/backlog.yaml out of the size budget. A produces list that quietly
+    drifts is that record going stale in the one place nothing measures.
+
+    The third occurrence was worse than a missing entry: the edit meant for
+    produces anchored on a filename that appeared in also_read FIRST, so it
+    duplicated the entry there and never touched produces at all. That is the
+    same anchoring failure that destroyed staging-deploy's waiver reason in #30
+    and that mark-task-done.sh exists to prevent for the status line, arriving
+    on a different key.
