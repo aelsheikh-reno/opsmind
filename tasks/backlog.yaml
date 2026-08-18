@@ -1691,6 +1691,7 @@
     - templates/eslint.config.mjs
     - tests/scaffold/eslint-boundaries.test.ts
     - tasks/backlog.yaml
+    - tests/baseline.json
   done_when:
     gates: [lint, types, tests]
     assertions:
