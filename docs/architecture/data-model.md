@@ -245,6 +245,92 @@ Both tables are new, and every field is derived rather than specified: from `reg
 | `—` | data, not code | Rows are edited in Settings without a deployment, exactly as a SOC tunes detection rules |
 
 
+## Alert Manager
+
+> Specified before any of it is built, for the reason `spec-coverage-audit`
+> exists: inventing a data model inside an implementation PR under a size budget
+> is how `DeadlineRegistration` and `ThresholdTable` came to be specified by one
+> cell of the ownership map. [flows-alerting.md](flows-alerting.md) is rich on
+> behaviour and silent on columns; this is the columns.
+>
+> **These tables live in the host application's storage** ([ADR-039](decisions.md#adr-039)):
+> the Alert Manager is an importable package, so it brings its definitions and
+> owns them exclusively rather than holding a store of its own.
+
+#### `Alert`
+
+*new · one row per (source, fingerprint) · [ADR-020](decisions.md#adr-020)*
+
+| Field | Type / values | Why |
+|---|---|---|
+| `sourceId` | string | Which source raised it. Scopes the fingerprint — two sources may legitimately compute the same one |
+| `fingerprint` | string | The source's deterministic identity, `{tenant}:{app}:{source}:{entity}:{policy}`. **Opaque to the engine**: never split, never parsed. `fingerprintFor` escapes `:` and `\` inside a segment, so splitting would mis-cut every deadline alert and silently merge two identities |
+| `state` | firing \| acknowledged \| suppressed \| resolved | The four of [ADR-020](decisions.md#adr-020), and only those four |
+| `stale` | boolean | **A flag on an open alert, not a fifth state.** An alert can be firing *and* unconfirmed at once; a fifth state would make that unrepresentable. Set when a run did not cover this alert's areas, cleared when one does |
+| `severity` | enum | Set by the source, never judged by the engine. **Monotonic while open** — it may rise in place; a genuine downgrade is resolve-then-reopen, or dedupe breaks |
+| `policyId` | string | What rule fired. Recorded even when the engine holds no configuration for it — an unknown policy is accepted, never refused |
+| `context` | json | The source's own diagnostic payload. **Never read for scoping** ([ADR-040](decisions.md#adr-040)) — the engine must not parse a caller's bag |
+| `firstSeenAt` | timestamp | When this identity first fired. Survives re-firing |
+| `lastSeenAt` | timestamp | The most recent run or raise that carried it |
+| `resolvedAt` | timestamp \| null | Null while open. **The row survives resolution** — nothing is deleted to close an alert |
+
+`@@unique([sourceId, fingerprint])`. That uniqueness *is* the dedupe: reporting
+the same fingerprint twice updates one row and never creates a second identity
+for one fact.
+
+#### `AlertArea`
+
+*new · the scopes an alert belongs to · [ADR-040](decisions.md#adr-040), [ADR-043](decisions.md#adr-043)*
+
+| Field | Type / values | Why |
+|---|---|---|
+| `alertId` | → Alert |   |
+| `area` | string | **An opaque scope key in the caller's own vocabulary.** The engine compares it and never interprets it. It names no jurisdiction, no deadline and no document — that is the whole of [ADR-043](decisions.md#adr-043) |
+
+`@@unique([alertId, area])`.
+
+**Why a row per area rather than an array column.** Resolution by absence asks
+"were *all* of this alert's areas inside the set the run declared complete", which
+is an anti-join against this table and an array containment test against the
+alternative. The join also carries the STALE rule cleanly: one unchecked area is
+enough to mark the alert unconfirmed. The array form is defensible and cheaper to
+write; it is rejected here because the query that matters is the nightly one.
+
+**One alert may hold several areas** and that is not a partial-resolution problem
+— [ADR-044](decisions.md#adr-044) settles it. The areas name where the *impact*
+is, never where the *fault* is: an unconfigured deadline type is one global fault
+affecting three jurisdictions, and resolution follows the fault, so the alert
+clears everywhere at once.
+
+#### `AlertEvent`
+
+*new · append-only · every state change and what caused it*
+
+| Field | Type / values | Why |
+|---|---|---|
+| `alertId` | → Alert |   |
+| `at` | timestamp |   |
+| `kind` | raised \| reasserted \| severity_raised \| stale_marked \| stale_cleared \| acknowledged \| suppressed \| unsuppressed \| resolved | What happened |
+| `fromState, toState` | enum \| null | Null where the kind changes no state — a reassert or a stale flag |
+| `actor` | → User \| null | **Null means the source or the engine did it**, and a human resolve is the case that must never be indistinguishable from an automatic one |
+| `runId` | string \| null | The run that caused it, where a run did |
+| `reason` | string \| null | Required on suppress; carries the incomplete-scope reason on `stale_marked` |
+
+**Never updated, never deleted.** The alert row carries current state so the hot
+path does not replay history; this table is why the current state can be trusted.
+
+#### `AlertSource`
+
+*new · who is expected to report, and when each last did*
+
+| Field | Type / values | Why |
+|---|---|---|
+| `sourceId` | string, unique | Matches `Alert.sourceId` |
+| `kind` | repeating \| direct \| fire_only | The three shapes of [flows-alerting.md](flows-alerting.md). `fire_only` gets quiet-window auto-resolve as its accepted degraded mode |
+| `expectedEvery` | interval \| null | Null for `direct`, which is not expected to report on a cadence |
+| `lastRunAt` | timestamp \| null | Null until it first speaks. A source past its cadence is dark, and the engine raises one source-dark alert per silent source — **a dead watcher can flag alerts unconfirmed and can never close them** |
+| `lastRunId` | string \| null |   |
+
 ## Views
 
 #### `search_index`

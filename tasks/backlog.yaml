@@ -2488,19 +2488,18 @@
     of data-ownership.md. flows-alerting.md is rich on behaviour and silent on
     columns; data-model.md has no alert card at all.
 
-    THE DOCUMENTED CONTRACT IS ALREADY STALE. flows-alerting.md and
-    components-services.md both print reportRun(sourceId, runId, alerts[]). The
-    merged port takes a fourth argument, scopes, and scoped completeness is
-    stated in that same page's prose three sections down. The doc is corrected
-    to the shipped shape rather than the shipped shape to the doc: the argument
-    is what carries the rule the page calls load-bearing.
+    BOTH OF THIS NODE'S WARNINGS WERE OVERTAKEN BEFORE IT RAN, 2026-08-18, and
+    the note is corrected rather than left to send someone re-doing settled work.
 
-    THE SCOPE KEY IS A DOMAIN LEAK, and it is recorded rather than fixed here.
-    ReportedAlert.jurisdictionId names an OpsMind concept in the one contract
-    the extraction criterion says a second product must use unchanged. The
-    engine can satisfy it structurally and treat it as opaque, which is what the
-    nodes below do. Whether the port is renamed — an edit to a merged compliance
-    module — is Ahmed's, not this node's.
+    The stale contract is fixed. flows-alerting.md and components-services.md both
+    printed reportRun(sourceId, runId, alerts[]) against a merged port taking four
+    arguments; both now print the scopes argument, corrected by
+    deadlines-alert-contract-scope-and-failure and deadlines-alert-contract-vocabulary.
+
+    The scope key is no longer a domain leak. This node recorded it as Ahmed's to
+    decide, and he decided: ADR-043 renames it to `area` on both halves of the
+    port, so the shapes here inherit an opaque key rather than proposing one. A
+    source's own storage and inputs were untouched and no column moved.
 
     Documentation only, so size-impl is zero (ADR-026). Report and stop.
 - id: service-alerts-surface-and-lifecycle
