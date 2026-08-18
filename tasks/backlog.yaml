@@ -2206,7 +2206,7 @@
       - "deregistering something already gone is not an error"
       - "listRegistrations returns the whole set, because absence from a complete report is what resolves an alert"
   risk: low
-  status: todo
+  status: done
   note: >
     Carried out of module-deadlines-sweep on 2026-08-17, not written fresh. The
     code is already reviewed and its source-level assertion already passes; what
