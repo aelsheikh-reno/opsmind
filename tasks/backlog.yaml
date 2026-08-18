@@ -2434,7 +2434,7 @@
       - "eslint.config.mjs and templates/eslint.config.mjs still carry identical boundary blocks"
       - "No module or kernel repository changes verdict"
   risk: low
-  status: todo
+  status: done
   note: >
     Nothing under lib/services/ has ever existed, so the enforcement layer has
     never been asked about it, and it currently answers wrongly in two
