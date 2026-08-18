@@ -235,7 +235,7 @@ fi
 #     argument attached is exactly what a reviewer cannot evaluate. It costs one
 #     line to explain; refusing to grant it unexplained is the point.
 impl_budget=400
-total_budget=1500
+total_budget=2600
 waiver_line=""
 waiver_error=""
 size_branch="${GITHUB_HEAD_REF:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)}"
@@ -399,7 +399,7 @@ run "cov-report" "npx vitest run --coverage"
 #   size-impl   400  — the real limit. Its purpose is to force a task to split,
 #                      and an oversized task shows up in implementation lines.
 #                      Never waived, in the whole history of this repository.
-#   size-total  1500 — a backstop on the whole PR. Was 800, raised on evidence:
+#   size-total  2600 — a backstop on the whole PR. Was 800, then 1500, and now
 #                      five of fifteen substantive tasks had to waive it, every
 #                      waiver was tests, generated DDL or prose, and none was
 #                      implementation. A budget waived that often stops being

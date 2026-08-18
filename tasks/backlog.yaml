@@ -2252,6 +2252,12 @@
     engines, and a coverage run that loses one file's instrumentation lands just
     under a ratchet set at the exact measured value.
 
+    RESOLVED 2026-08-18, same root cause and same fix as
+    harness-pglite-socket-unreachable-under-load: contention, not measurement.
+    Verified after the bound — two coverage runs and three full gate runs all
+    reported 400 of 403 lines, 9925 basis points, with nothing changed between
+    them.
+
 - id: kernel-repository-integration-tests
   title: Integration tests over the six kernel repositories, against CI Postgres
   phase: 1
@@ -3092,6 +3098,13 @@
     behavioural difference between PGlite and PostgreSQL. Related to
     gate-total-cov-nondeterministic, which suspects the same instrumented run.
 
+    RESOLVED 2026-08-18 by the pool bound in pipeline-budgets work
+    (vitest maxWorkers 4). The socket was never the fault: an unbounded pool put
+    fourteen forks, seven engines and seven migrate subprocesses on the machine
+    at once. Bounded, three consecutive suite runs and three consecutive full
+    gate runs on one commit agreed, and peak load fell from 36 to 6.95 on 14
+    cores.
+
 - id: pipeline-risk-merge-policy
   title: A money or compliance task merges itself, and the differential is what makes that safe
   phase: 0
@@ -3147,6 +3160,13 @@
     would block the status flip, so the two must be decided together — either
     the flip goes through a pull request like everything else, or the bypass
     stays and is acknowledged rather than accidental.
+
+    RULED 2026-08-18 (ADR-042): enforce_admins stays OFF and the bypass stays,
+    deliberately, because enforcing it would block the step-12 status flip that
+    keeps the graph honest. The assertion above is therefore withdrawn rather
+    than met. What it costs is recorded in ADR-042 instead of here: the merge
+    button can still push past a red gates check, which is the #30 failure mode,
+    and merge-when-green.sh is the compensating control on every automated path.
 
 - id: harness-local-gate-cannot-complete
   title: The full gate no longer completes on a developer machine
