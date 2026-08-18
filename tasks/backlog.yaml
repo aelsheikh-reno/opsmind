@@ -3291,7 +3291,7 @@
       - "OpsMind's own storage and inputs still name a jurisdiction, and no migration is required"
       - "A sweep reports the same scopes and the same breaches as before, under the new field name"
   risk: compliance
-  status: todo
+  status: done
   note: >
     ADR-043. The other half of ADR-040, found by that node's reviewer before a
     client had been written against the port.
