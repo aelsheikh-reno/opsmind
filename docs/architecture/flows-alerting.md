@@ -25,11 +25,18 @@ reportRun(sourceId, runId, alerts[])   repeating sources
   · the run's complete breach set
   · an EMPTY report is meaningful: "I ran, nothing breached"
     — it is also the liveness signal
-raiseAlert(fingerprint, severity, policyId, context)
+raiseAlert(fingerprint, severity, policyId, areas, context)
   · direct and fire-only sources
+  · `areas` are the CALLER'S OWN opaque scope keys, in the same
+    vocabulary as reportRun's scopes. The engine compares them
+    and never interprets them
 resolveAlert(fingerprint)              idempotent
 acknowledge(alertId, actor) · suppress(fingerprint, until, actor, reason)
 ```
+
+> **Note** — **`raiseAlert` names the area it applies to, and it is an ARGUMENT** ([ADR-040](decisions.md#adr-040), Ahmed 2026-08-18). Resolution by absence is only sound inside an area the run declared checked, and the out-of-band path used to carry no area at all — the scope sat in a free-form `context` bag. **The engine must never dig a scope out of `context`**: that bakes one caller's vocabulary into a component built to be imported by several applications ([ADR-039](decisions.md#adr-039)), and a caller that spells the key differently loses its scoping silently rather than loudly. It is a LIST because one alert can legitimately span several scopes — an unconfigured deadline type affects every jurisdiction holding one.
+
+> **Note** — **A failed alert never ends the run, and an area whose alert failed is reported incomplete.** Carrying on is the same reasoning that made completeness scoped rather than global: one failure must not take every area dark. But an area the run could not raise an alert for was not fully checked, so it must not be reported complete — otherwise absence would resolve the very alert the run failed to raise, which is the first rule undone by the second (ADR-040).
 
 Fingerprints are deterministic — `{tenant}:{app}:{source}:{entity}:{policy}` — computed by the source from its own data, so no source needs memory of what it raised. Severity is not part of the fingerprint (escalation would break dedupe) and is monotonic while an alert is open: a genuine downgrade is resolve-then-reopen.
 
