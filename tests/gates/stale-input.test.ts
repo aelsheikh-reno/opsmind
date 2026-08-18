@@ -361,7 +361,7 @@ describe("assertion 5 · a path the gate does not measure still runs", () => {
     expect(result.code, result.out).toBe(0);
     expect(result.line("boundaries"), result.out).toContain("pass");
     expect(result.line("size-impl"), result.out).toContain("400");
-    expect(result.line("size-total"), result.out).toContain("1500");
+    expect(result.line("size-total"), result.out).toContain("2600");
   });
 });
 

@@ -131,7 +131,7 @@ Nothing merges until every gate passes. Gates are scripts, not judgements.
 | `differential` | Output matches the legacy system on the golden dataset, or the difference is explicitly approved |
 | `security` | `claude-code-security-review` finds nothing high |
 | `size-impl` | Implementation under 400 added **code** lines, or the task is split. In every source language this repository writes — `.ts`, `.tsx`, `.mjs`, `.cjs`, `.js`, `.sh` — a comment-only line and a blank line are not implementation and are not counted; a line carrying code *and* a trailing comment counts as code, in full. TypeScript and JavaScript are read by the TypeScript compiler through `tests/kernel/kernel-source.ts`, so a `//` inside a string, a template literal or a JSX expression is code; shell is read against the shell grammar in `scripts/size-impl.mjs`, so a `#` inside a quoted string, inside a heredoc, in `${x#prefix}` or on the shebang line is code (ADR-035). `tasks/backlog.yaml` is excluded entirely — it is task metadata, not authored source. Every other file is counted line for line as before. Never waivable |
-| `size-total` | Whole diff under 1500 added lines, unless the node carries a `size_total` waiver Ahmed granted (ADR-029). Counts every added line of every file — comments and blanks included |
+| `size-total` | Whole diff under 2600 added lines, unless the node carries a `size_total` waiver Ahmed granted (ADR-029). Counts every added line of every file — comments and blanks included |
 
 **The coverage denominator is the diff, not the repository (ADR-030).** The floor
 never moved — 90 and 70 are what they always were — but it used to be handed to

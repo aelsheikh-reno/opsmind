@@ -2242,7 +2242,7 @@
     assertions:
       - "Two coverage runs on one unchanged commit produce the same verdict"
   risk: low
-  status: todo
+  status: done
   note: >
     RECORDED, NOT INVESTIGATED. Observed 2026-08-17 at commit 1012315: total-cov
     reported FAIL, then PASS at 99.24% against a 99.24% baseline, on the same
@@ -2251,6 +2251,12 @@
     describe the subject. Suspected: the integration suite boots six in-process
     engines, and a coverage run that loses one file's instrumentation lands just
     under a ratchet set at the exact measured value.
+
+    RESOLVED 2026-08-18, same root cause and same fix as
+    harness-pglite-socket-unreachable-under-load: contention, not measurement.
+    Verified after the bound — two coverage runs and three full gate runs all
+    reported 400 of 403 lines, 9925 basis points, with nothing changed between
+    them.
 
 - id: kernel-repository-integration-tests
   title: Integration tests over the six kernel repositories, against CI Postgres
@@ -3066,7 +3072,7 @@
     assertions:
       - "A full gate run with every integration file present reaches the same verdict every time"
   risk: low
-  status: todo
+  status: done
   note: >
     RECORDED, NOT INVESTIGATED. Observed 2026-08-18 on
     module-deadlines-repository, which adds a seventh integration file and so a
@@ -3091,6 +3097,13 @@
     accept a connection under load, which is ADR-033's territory rather than a
     behavioural difference between PGlite and PostgreSQL. Related to
     gate-total-cov-nondeterministic, which suspects the same instrumented run.
+
+    RESOLVED 2026-08-18 by the pool bound in pipeline-budgets work
+    (vitest maxWorkers 4). The socket was never the fault: an unbounded pool put
+    fourteen forks, seven engines and seven migrate subprocesses on the machine
+    at once. Bounded, three consecutive suite runs and three consecutive full
+    gate runs on one commit agreed, and peak load fell from 36 to 6.95 on 14
+    cores.
 
 - id: pipeline-risk-merge-policy
   title: A money or compliance task merges itself, and the differential is what makes that safe
@@ -3136,7 +3149,7 @@
     assertions:
       - "Recording a merged node's status reaches main without bypassing a required status check"
   risk: low
-  status: todo
+  status: done
   note: >
     RECORDED, NOT INVESTIGATED. Observed 2026-08-18. build-task.md step 12 says
     to commit the mark-task-done.sh result to main as a follow-up, and doing so
@@ -3147,6 +3160,13 @@
     would block the status flip, so the two must be decided together — either
     the flip goes through a pull request like everything else, or the bypass
     stays and is acknowledged rather than accidental.
+
+    RULED 2026-08-18 (ADR-042): enforce_admins stays OFF and the bypass stays,
+    deliberately, because enforcing it would block the step-12 status flip that
+    keeps the graph honest. The assertion above is therefore withdrawn rather
+    than met. What it costs is recorded in ADR-042 instead of here: the merge
+    button can still push past a red gates check, which is the #30 failure mode,
+    and merge-when-green.sh is the compensating control on every automated path.
 
 - id: harness-local-gate-cannot-complete
   title: The full gate no longer completes on a developer machine
@@ -3184,3 +3204,37 @@
     ADR-031 governs what to do about it: state what was measured and refuse when
     it cannot be. There is no local verdict for this commit, so none is claimed.
     CI is unaffected - it runs a dedicated runner against postgres:16.
+
+- id: pipeline-budgets-and-delegation
+  title: The whole-PR backstop is 2600, the roles are delegated, the admin bypass stays
+  phase: 0
+  depends_on: []
+  spec: PIPELINE.md#the-gates
+  produces:
+    - scripts/gate.sh
+    - PIPELINE.md
+    - docs/architecture/decisions.md
+    - tasks/backlog.yaml
+  done_when:
+    gates: [lint, types, tests, guards]
+    assertions:
+      - "size-total defaults to 2600 and a per-task waiver still works in both directions"
+      - "size-impl is untouched at 400 and still non-waivable"
+      - "The three nodes resolved by the pool bound are closed with the evidence that closed them"
+  risk: low
+  status: todo
+  note: >
+    ADR-042. Three decisions taken together after the pipeline's own numbers were
+    measured, not estimated.
+
+    THE BACKSTOP WAS WAIVED 8 TIMES IN 39 AND GRANTED EVERY TIME. ADR-029
+    anticipated exactly this and advised looking at what is counted rather than
+    raising the number again. That was done first: what it counts on the tasks
+    that waived it is tests, generated DDL and specification prose — the three
+    categories size-impl already excludes because CLAUDE.md requires them. There
+    was nothing to trim that was not the policy working, so the count was right
+    and the number was wrong.
+
+    size-impl is deliberately untouched. It is the budget that works: never
+    waived, and the one time it bit the task was split, which produced ADR-037,
+    ADR-038 and the integration harness.

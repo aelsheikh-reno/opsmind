@@ -244,6 +244,8 @@ A budget waived a third of the time stops being read. The waiver reasons had gro
 
 **Consequences.** A waiver becomes rare enough to mean something again: the four tasks that would have needed one at 800 now pass on the default, and a task that still needs 1500 raised is genuinely unusual and worth the reviewer's attention. The number is calibrated to what this repository actually produces — a compliance task's tests routinely run three to four times its implementation, which is the ratio the testing policy asks for rather than a symptom. The risk accepted is that 1500 is roomier and a bloated PR could hide inside it; that is what `size-impl` is for, and it is the budget that has never had to move. If `size-total` starts being waived routinely again, the answer is to look at what is being counted, not to raise it a second time.
 
+> **Raised a second time anyway, 2026-08-18 ([ADR-042](#adr-042)).** The sentence above was tested and did not hold: the counting was examined first, and what it counts is tests, generated DDL and specification prose — every category CLAUDE.md requires. There was nothing to trim that was not the policy working.
+
 ### ADR-030 · Coverage is measured on the lines the task changed, plus a total-coverage ratchet
 
 **Context.** The coverage gate handed its floor straight to vitest as a whole-repository threshold — `npx vitest run --coverage --coverage.thresholds.lines=$cov`, with `$cov` 90 for money and compliance, 70 for low, and 90 when the risk is unknown. The 90 was calibrated against a repository that was almost entirely domain logic. It is now also six `lib/kernel/*/repository.ts` files of Prisma plumbing sitting between 0% and 15% — document 14, enrolment 0, jurisdiction 8, legal-entity 11, person 11, regime 15 — because no PostgreSQL is reachable outside CI and a unit test structurally cannot enter a query body. They pin the repository total at 79.20%.
@@ -500,3 +502,20 @@ This is the strongest evidence for keeping real PostgreSQL in CI. No amount of l
 **What is genuinely given up, and it is real.** The second pair of eyes on a *green* compliance PR. A task whose differential passes because the legacy behaviour is **also wrong** now merges unread. Legacy is evidence, not authority (2026-08-16), and some of it has never been validated — so this is not a theoretical cost. The mitigation is that the differ reports agreement as well as disagreement, and an agreement on an unvalidated rule is still a claim Ahmed can audit after the fact rather than before it.
 
 **Not settled here.** Whether the phase boundary — Ahmed approving the next phase's task graph — should also go. With the hold removed it is the only remaining stopping condition in the pipeline.
+
+
+### ADR-042 · size-total is 2600; the roles are delegated again; admin bypass stays
+
+Three pipeline decisions, Ahmed 2026-08-18, recorded together because they were taken together after the pipeline's own numbers were measured.
+
+**One — `size-total` rises from 1500 to 2600.** 8 of 39 completed nodes carried a waiver and **every one was granted**: 1200, 1300, 1700, 1800, 1800, 2100, 2500, 2600. A budget that fires on one task in five and is then always granted is not a limit, it is a confirmation dialog — it has never once caused work to be split or reconsidered, only a round trip to Ahmed.
+
+[ADR-029](#adr-029) anticipated this and advised against it: *look at what is being counted, not raise it a second time.* **That was done first, and it is why the raise stands.** What `size-total` counts, on the tasks that waived it, is tests, generated migration SQL and specification prose — the three categories `size-impl` already excludes precisely because CLAUDE.md mandates them. A compliance task's tests routinely run three to four times its implementation because the testing policy asks for that. There was nothing to trim that was not the policy working correctly, so the count was right and the number was wrong.
+
+**`size-impl` is untouched at 400 and stays non-waivable.** It is the budget that works: never waived in the repository's history, and the one time it bit, the task was split — which produced [ADR-037](#adr-037), [ADR-038](#adr-038), the integration harness, and six kernel repositories going from 11% to 100% line coverage. The distinction being preserved is that **implementation is bounded hard and everything the policy requires around it is bounded softly.**
+
+**Two — the subagent roles are delegated again.** `implementer`, `test-author` and `reviewer` return to their own context windows. They had collapsed into one agent doing all three, which silently removes the two separations the pipeline is built on: tests written blind to the implementation, and a reviewer that cannot agree with itself. On the PR before this one the same agent wrote the code and then its tests — tests that photograph the implementation rather than check the specification, which is the exact failure `test-author` exists to prevent.
+
+**Three — `enforce_admins` stays off, and the bypass is now deliberate rather than accidental.** `main` carries branch protection with `strict: true` and a required `gates` check, but admins are not enforced. That is knowingly kept: `build-task.md` step 12 commits the `mark-task-done.sh` result straight to `main`, which prints `Bypassed rule violations`, and enforcing admins would block the status flip that keeps the graph honest.
+
+**What that costs, stated plainly.** The merge button can still push past a red `gates` check — the #30 failure mode, which is the reason `merge-when-green.sh` exists. The compensating control is that every automated merge goes through that script, which re-reads the verdict immediately before merging and fails closed. The hole is now open by decision, and a human clicking merge on a red PR is the one path nothing in this pipeline can stop.
