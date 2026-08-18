@@ -19,10 +19,15 @@ export default defineConfig([
   // project this scaffolds is built by the same agent harness and grows the same
   // directory on its first parallel task. reference/** is here for the same
   // shape of reason: a second tree of code the project does not own.
+  //
+  // coverage/** is the same argument and one step stronger: the cov-report gate
+  // has every scaffolded project write coverage/lcov.info on each run, so
+  // istanbul's own report JavaScript is regenerated in-tree before eslint walks.
   globalIgnores([
     ".next/**",
     "out/**",
     "build/**",
+    "coverage/**",
     "next-env.d.ts",
     "reference/**",
     ".claude/worktrees/**",

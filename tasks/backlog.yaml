@@ -1690,11 +1690,13 @@
     - eslint.config.mjs
     - templates/eslint.config.mjs
     - tests/scaffold/eslint-boundaries.test.ts
+    - tasks/backlog.yaml
+    - tests/baseline.json
   done_when:
     gates: [lint, types, tests]
     assertions:
       - "npx eslint . reports nothing from coverage/, and the ignore is stated in the config rather than left to .gitignore"
-      - "The ignore is named in ALLOWED_EXTRA_IGNORES with its reason, so the template comparison still holds"
+      - "The ignore is in templates/eslint.config.mjs too, so the template comparison still holds and removing it from either side fails the scaffold suite"
   risk: low
   status: todo
   note: >
@@ -1713,6 +1715,19 @@
     every rule off for a path and was the one remaining way to soften a boundary
     rule invisibly. Adding it means naming it in ALLOWED_EXTRA_IGNORES with a
     reason, or adding it to the template too.
+
+    ASSERTION 2 WAS AMENDED, 2026-08-18. It asked for the ignore to be named in
+    ALLOWED_EXTRA_IGNORES; the implementer put it in the template instead and
+    argued this node's wording predated the question. Agreed, on three grounds.
+    The cov-report gate has EVERY scaffolded project write coverage/lcov.info on
+    its first run, so every one of them regrows the directory — the same argument
+    the template already makes for .claude/worktrees/**, and strictly stronger,
+    since a worktree waits for a parallel task. ADR-033 names
+    ALLOWED_EXTRA_IGNORES as a softening surface, so an ignore belonging to every
+    project should not be spent enlarging it. And the template is the stronger
+    enforcement: it REQUIRES the ignore where ALLOWED_EXTRA_IGNORES merely
+    permits it, so dropping it from either side now fails the scaffold suite —
+    verified by mutation rather than assumed.
 
 - id: gate-suite-test-timeouts
   title: Six more files run under vitest's default 5s testTimeout and go red on a busy machine

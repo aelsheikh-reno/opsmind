@@ -18,10 +18,15 @@ export default defineConfig([
   // — files no PR had touched, in a tree that is not the subject of the run.
   // Adding it to .gitignore fixed the diff and left the lint gate reading two
   // checkouts as one, so it is stated here too and is in templates/ as well.
+  //
+  // coverage/** is the same hole one path over: `vitest run --coverage` rewrites
+  // that HTML report on every gate run, and eslint was reporting a warning from
+  // istanbul's block-navigation.js. In templates/ too — every project regrows it.
   globalIgnores([
     ".next/**",
     "out/**",
     "build/**",
+    "coverage/**",
     "generated/**",
     "next-env.d.ts",
     "reference/**",
