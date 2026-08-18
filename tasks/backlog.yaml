@@ -3431,10 +3431,15 @@
     is the more dangerous shape: anyone trimming the shell guard on the grounds
     that eslint already covers it would open the hole silently.
 
-    IT IS WORSE IN THE TEMPLATE. templates/ ships eslint.config.mjs and not
-    check-boundaries.sh, so a project scaffolded from it gets the dead pattern
-    and no shell guard behind it — the one-level deep import is genuinely
-    unenforced there.
+    IT IS WORSE IN THE TEMPLATE, AND THAT IS THE HALF NOT TO DEFER ON. templates/
+    ships eslint.config.mjs and not check-boundaries.sh, so a project scaffolded
+    from it receives the dead pattern with NOTHING behind it: its CLAUDE.md rule 4
+    is unenforced at one level, entirely, not merely enforced by a different tool.
+    "The shell catches it" is true here and false there, so this node must not be
+    deferred on that ground. Raised by the reviewer of gate-service-boundary-rules,
+    which also confirmed that node ships a SECOND instance of the dead pattern,
+    @/lib/services/*/!(index) — already inside this node's first assertion, which
+    reads "a module or service one level past its index.ts".
 
     Deliberately not fixed inside gate-service-boundary-rules: the fix rewrites
     the module boundary block, which that node's assertion 6 forbids moving. The
