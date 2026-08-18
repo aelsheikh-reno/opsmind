@@ -2967,7 +2967,7 @@
       - "An area whose alert call failed is reported incomplete, so absence never resolves an alert the run failed to raise"
       - "An area that was checked and had nothing to report stays complete, and absence there does resolve"
   risk: compliance
-  status: todo
+  status: done
   note: >
     ADR-040. Two corrections to a merged compliance module, landing together
     because they are one sentence read from both ends: an alert closes only
