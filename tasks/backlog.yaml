@@ -3147,3 +3147,40 @@
     would block the status flip, so the two must be decided together — either
     the flip goes through a pull request like everything else, or the bypass
     stays and is acknowledged rather than accidental.
+
+- id: harness-local-gate-cannot-complete
+  title: The full gate no longer completes on a developer machine
+  phase: 0
+  depends_on: []
+  spec: PIPELINE.md#the-gates
+  done_when:
+    gates: [tests]
+    assertions:
+      - "A full gate run completes on a 14-core developer machine and returns one verdict"
+  risk: low
+  status: todo
+  note: >
+    RECORDED, NOT INVESTIGATED, AND IT BLOCKS EVERY TASK. Observed 2026-08-18 on
+    pipeline-risk-merge-policy, a markdown-only change. ./scripts/gate.sh did not
+    finish within ten minutes; the tests gate reported 10 of 36 files failed with
+    905 of 989 cases run, and EVERY failure was a timeout rather than an
+    assertion — migrations exceeding 120s, a hook exceeding 10s, and the eslint
+    flat config, described in its own message as "about 1.2s of work on an idle
+    machine", exceeding 120s.
+
+    IT IS SATURATION, NOT A BUG IN ANY TEST. Load average reached 151 on 14
+    cores, with 378s of the run spent on module IMPORT alone. The change was
+    proved inert first: all 17 test files that read any file it touched pass, 709
+    cases green.
+
+    THE CAUSE IS CUMULATIVE AND KNOWN. The suite now boots seven in-process
+    PostgreSQL engines and loads the whole typescript-eslint graph, on a WSL2
+    machine already carrying three VS Code extension hosts, three language
+    servers and a Chrome. harness-pglite-socket-unreachable-under-load and
+    gate-total-cov-nondeterministic are the same root cause seen earlier and
+    smaller: this is that curve arriving at the point where there is no verdict
+    at all rather than an unstable one.
+
+    ADR-031 governs what to do about it: state what was measured and refuse when
+    it cannot be. There is no local verdict for this commit, so none is claimed.
+    CI is unaffected - it runs a dedicated runner against postgres:16.
