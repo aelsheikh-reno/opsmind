@@ -2220,8 +2220,10 @@
     with its integration tests rather than with the module logic it serves.
 
     It depends on kernel-repository-integration-tests because that node builds
-    the harness — a real database in CI, skipped loudly and never silently
-    where none is reachable — and this node is its first module-side consumer.
+    the harness — an engine the suite OBTAINS rather than skips for,
+    DATABASE_URL when present and an in-process PGlite when not (ADR-038,
+    which settled that after this node was written) — and this node is its
+    first module-side consumer.
 
     Two alternatives were refused when the sweep hit this, and are recorded here
     so they are not re-proposed. A diff-cov waiver: that gate deliberately has no
@@ -3034,3 +3036,58 @@
     the deadline monitor. What was missing was never the owner; it was this.
 
     Roughly 90-130 implementation lines, of which about 25 are schema.
+
+- id: test-timezone-migration-skips-without-a-database
+  title: deadline-calendar-timezone.test.ts skips five cases when no engine is reachable
+  phase: 0
+  depends_on: [kernel-repository-integration-tests]
+  spec: docs/architecture/decisions.md
+  done_when:
+    gates: [tests]
+    assertions:
+      - "The five migration cases obtain an engine and run, or fail naming why; they never skip"
+  risk: low
+  status: todo
+  note: >
+    RECORDED, NOT INVESTIGATED. Observed 2026-08-18 while verifying
+    module-deadlines-repository: the full suite reports "984 passed | 5
+    skipped". The five are the timezone migration cases from #50, which predate
+    ADR-038 and use describe.skip when no database is reachable — the exact
+    shape ADR-038 forbids, and the reason the test-count ratchet counts five
+    cases that nothing runs.
+
+- id: harness-pglite-socket-unreachable-under-load
+  title: A PGlite socket refuses connections when seven engines boot under coverage
+  phase: 0
+  depends_on: [kernel-repository-integration-tests]
+  spec: docs/architecture/decisions.md
+  done_when:
+    gates: [tests]
+    assertions:
+      - "A full gate run with every integration file present reaches the same verdict every time"
+  risk: low
+  status: todo
+  note: >
+    RECORDED, NOT INVESTIGATED. Observed 2026-08-18 on
+    module-deadlines-repository, which adds a seventh integration file and so a
+    seventh in-process engine. Under ./scripts/gate.sh — which runs the suite
+    WITH coverage instrumentation, and reported 616s of import time against the
+    ~5s a bare run takes — tests/integration/kernel/person.test.ts failed with
+    P1001, unable to reach its own PGlite socket at 127.0.0.1:34835. Three bare
+    suite runs immediately afterwards were clean at 989, and a bare `vitest
+    run --coverage` was clean too.
+
+    THE SHARPEST EVIDENCE IS AT GATE LEVEL. On ONE commit, c0a7e80,
+    ./scripts/gate.sh returned FAIL and then PASS with nothing changed
+    between the runs, and the failing run took two cases in a different file
+    than the run before it. That is a second gate whose verdict is not a
+    function of its subject (ADR-031), and it is the reason this is recorded
+    at gate level rather than as a slow test.
+
+    IT IS LOCAL ONLY. CI sets DATABASE_URL to a postgres:16 service
+    (.github/workflows/gates.yml), so no PGlite socket is ever booted there
+    and no CI verdict can be affected by this. It is not engine
+    divergence (ADR-038) and must not be filed as one: the same engine failed to
+    accept a connection under load, which is ADR-033's territory rather than a
+    behavioural difference between PGlite and PostgreSQL. Related to
+    gate-total-cov-nondeterministic, which suspects the same instrumented run.
