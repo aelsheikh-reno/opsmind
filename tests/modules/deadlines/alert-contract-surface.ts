@@ -24,7 +24,10 @@
 //       context: Record<string, unknown>,
 //     ): Promise<void>
 //
-// `areas` are opaque scope keys, matching the `jurisdictionId` of `RunScope`.
+// `areas` are opaque scope keys, matching the `area` of `RunScope`. ADR-043
+// renamed that field from `jurisdictionId` so the port carries ONE vocabulary
+// and none of it is OpsMind's; the values it carries here are still
+// jurisdiction ids, because that is what OpsMind puts in them.
 //
 // TOLERANT PLUMBING, STRICT ASSERTIONS — the same split `./surface` uses. The
 // fakes take `...rest: unknown[]` so that a module still on the four-argument
@@ -139,7 +142,7 @@ export type AlertStatus = "firing" | "stale" | "resolved";
 export type AlertState = {
   fingerprint: string;
   severity: Severity;
-  /** The scope it was reported in — `ReportedAlert.jurisdictionId`. */
+  /** The scope it was reported in — `ReportedAlert.area` (ADR-043). */
   scope: string | undefined;
   status: AlertStatus;
 };
@@ -180,7 +183,7 @@ export function alertEngine(plan: FailurePlan = {}) {
 
   const scopeIsComplete = (scopes: RunScope[] | undefined, scope: string | undefined): boolean => {
     if (scopes === undefined) return true;
-    return scopes.some((row) => row.jurisdictionId === scope && row.complete);
+    return scopes.some((row) => row.area === scope && row.complete);
   };
 
   const engine = {
@@ -201,7 +204,7 @@ export function alertEngine(plan: FailurePlan = {}) {
         board.set(alert.fingerprint, {
           fingerprint: alert.fingerprint,
           severity: alert.severity,
-          scope: alert.jurisdictionId ?? known?.scope,
+          scope: alert.area ?? known?.scope,
           status: "firing",
         });
       }
@@ -245,7 +248,7 @@ export type AlertEngine = ReturnType<typeof alertEngine>;
 const isRunScope = (value: unknown): value is RunScope =>
   value !== null &&
   typeof value === "object" &&
-  typeof (value as RunScope).jurisdictionId === "string" &&
+  typeof (value as RunScope).area === "string" &&
   typeof (value as RunScope).complete === "boolean";
 
 /**
@@ -360,13 +363,15 @@ export function registerDeadline(
 
 // ----------------------------------------------------------- reading a run --
 
-/** The scope row a run declared for `jurisdictionId`, if it declared one. */
-export const scopeFor = (run: RunCall, jurisdictionId: string): RunScope | undefined =>
-  run.scopes?.find((row) => row.jurisdictionId === jurisdictionId);
+/** The scope row a run declared for `area`, if it declared one. */
+export const scopeFor = (run: RunCall, area: string): RunScope | undefined =>
+  run.scopes?.find((row) => row.area === area);
 
-/** Every jurisdiction the run declared a scope for, in emission order. */
+/** Every area the run declared a scope for, in emission order. The helper keeps
+ *  its name: the FIELD is `area` (ADR-043), and what OpsMind puts in it is still
+ *  a jurisdiction id — the port stopped naming the noun, OpsMind did not. */
 export const scopedJurisdictions = (run: RunCall): string[] =>
-  (run.scopes ?? []).map((row) => row.jurisdictionId);
+  (run.scopes ?? []).map((row) => row.area);
 
 /** True when the run reported a breach whose identity ends `tail`. */
 export const reportedBreach = (run: RunCall, tail: string): boolean =>

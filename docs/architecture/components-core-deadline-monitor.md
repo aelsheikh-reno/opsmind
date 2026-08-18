@@ -26,11 +26,15 @@
 
 ```
 reportRun("deadline-monitor", r9, [
-  { fingerprint: "…document:123:expiry", severity: "major" },
-  { fingerprint: "…filing:44:due",      severity: "minor" }
+  { fingerprint: "…document:123:expiry", severity: "major", area: "AE" },
+  { fingerprint: "…filing:44:due",      severity: "minor", area: "EG" }
+], [
+  { area: "AE", complete: true }, { area: "EG", complete: true }
 ])
 An empty array is a valid, meaningful report — "I ran,
 nothing is breached" — and doubles as the liveness signal.
+The `area` on both is a jurisdiction here; the field does
+not say so, because the engine never interprets it.
 ```
 
 > **Note** — **A statutory due date and the date you file by are two dates.** The statutory date is `periodEnd + Regime.deadlineDays` in plain **calendar** days — UAE VAT is the 28th day after the tax period ends (Federal Decree-Law No. 8 of 2017, Article 64), so a period ending 31 March is 28 April. Not business days: read that way, 28 days would land roughly twelve days late, which is a penalty.
@@ -62,5 +66,7 @@ nothing is breached" — and doubles as the liveness signal.
 > **Note** — **An alert names the area it was raised in, and a failed alert never ends the sweep** ([ADR-040](decisions.md#adr-040)). The out-of-band path carried no scope at all: `raiseAlert` took a fingerprint, a severity, a policy and a free-form context bag, so an alert raised between runs sat outside every area the run declared, while absence from a completed report went on resolving. It now takes the areas it applies to as a **named argument** — opaque scope keys in the same vocabulary as the run's scopes, never dug back out of `context`, because a component built to serve several products must not learn one caller's spelling of "jurisdiction". A missing calendar names the one jurisdiction it blocks; a missing threshold row names **every** jurisdiction the type is registered in, which is why the argument is a list.
 >
 > **A failed alert call is survived, and paid for in completeness.** The sweep continues and still reports, because taking every jurisdiction dark for one failed call is the larger failure — the same reasoning that made completeness scoped rather than global. But an area whose alert could not be raised **was not fully checked**, so it is reported **incomplete**, with a reason naming the policy and the failure. Otherwise surviving the failure would quietly undo the scoping: absence from a "complete" report would resolve the very alert the run failed to raise. One scope entry per jurisdiction either way — an area already declared complete is **downgraded in place**, never appended a second time.
+>
+> **The scope field is named `area` on both halves of the contract** ([ADR-043](decisions.md#adr-043)). The report's breaches and scopes said `jurisdictionId` while `raiseAlert` said `areas` — one port speaking two vocabularies, which forces the engine's own source to carry a word it neither understands nor cares about. **Nothing about how this module stores or receives a deadline changes**: a registration still names a jurisdiction, no column was renamed and there is no migration. Only the two types that ride across to the Alert Manager are neutral.
 
 > **Note** — Because resolution comes from **absence in a completed report**, modules never call cancel: they update their own data (renew the visa, pay the filing) and the next run observes the cleared state. The missed-cancel failure mode does not exist by construction. Full lifecycle: [alerting flow](flows-alerting.md).

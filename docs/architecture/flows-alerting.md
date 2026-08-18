@@ -21,10 +21,12 @@
 **The Alert Manager contract**
 
 ```
-reportRun(sourceId, runId, alerts[])   repeating sources
-  · the run's complete breach set
+reportRun(sourceId, runId, alerts[], scopes[])   repeating sources
+  · the run's complete breach set, and the scopes it checked
   · an EMPTY report is meaningful: "I ran, nothing breached"
     — it is also the liveness signal
+  · every alert and every scope names its `area` — the caller's
+    own opaque key, in the same vocabulary as raiseAlert's
 raiseAlert(fingerprint, severity, policyId, areas, context)
   · direct and fire-only sources
   · `areas` are the CALLER'S OWN opaque scope keys, in the same
@@ -35,6 +37,8 @@ acknowledge(alertId, actor) · suppress(fingerprint, until, actor, reason)
 ```
 
 > **Note** — **`raiseAlert` names the area it applies to, and it is an ARGUMENT** ([ADR-040](decisions.md#adr-040)). Resolution by absence is only sound inside an area the run declared checked, and the out-of-band path used to carry no area at all — the scope sat in a free-form `context` bag. **The engine must never dig a scope out of `context`**: that bakes one caller's vocabulary into a component built to be imported by several applications ([ADR-039](decisions.md#adr-039)), and a caller that spells the key differently loses its scoping silently rather than loudly. It is a LIST because one alert can legitimately span several scopes — an unconfigured deadline type affects every jurisdiction holding one.
+
+> **Note** — **The scope field is spelled `area` on both halves of the port** ([ADR-043](decisions.md#adr-043)). `reportRun`'s alerts and scopes named a jurisdiction while `raiseAlert` took `areas`: one contract in two vocabularies, and TypeScript is structural, so the engine's own source would have had to spell an OpsMind noun in order to read a value it never interprets. A source's own storage and its own inputs are untouched — the deadline monitor still registers against a jurisdiction and no column moved; only what crosses to the engine is neutral.
 
 > **Note** — **A failed alert never ends the run, and an area whose alert failed is reported incomplete.** Carrying on is the same reasoning that made completeness scoped rather than global: one failure must not take every area dark. But an area the run could not raise an alert for was not fully checked, so it must not be reported complete — otherwise absence would resolve the very alert the run failed to raise, which is the first rule undone by the second (ADR-040).
 

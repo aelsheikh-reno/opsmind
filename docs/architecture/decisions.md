@@ -490,6 +490,8 @@ This is the strongest evidence for keeping real PostgreSQL in CI. No amount of l
 
 **The argument is a LIST, and that is derived rather than decided.** The decision above says "the area", singular, and the reviewer of the implementing change was right to ask. It follows necessarily from a rule that was already settled: one misconfiguration alert is raised per unconfigured deadline TYPE per run, not one per deadline — and a deadline type spans every jurisdiction holding a registration of it. A singular parameter would force either one alert per jurisdiction, contradicting the per-type rule, or an alert that names one scope while silently affecting several, which is the exact unsoundness this record exists to remove. So `areas: readonly string[]`, and an alert that belongs to one scope passes a list of one. **Ahmed has not ruled on this**; it is recorded here so the Alert Manager is not written against an ambiguity, and it is the shape to confirm or reject before `service-alerts-surface-and-lifecycle` compiles a client against it.
 
+> **Amended 2026-08-18 by [ADR-043](#adr-043).** The scope field on this port is now named `area`, not `jurisdictionId` — the Context above describes it under its old name. Only the field's spelling moved; everything this record decides about scoping and about a failed alert is unchanged.
+
 **Not settled here.** Whether a run in which every alert call failed should still count as a run — reported, with every area incomplete — or as no run at all.
 
 
@@ -521,3 +523,18 @@ Three pipeline decisions, Ahmed 2026-08-18, recorded together because they were 
 **Three — `enforce_admins` stays off, and the bypass is now deliberate rather than accidental.** `main` carries branch protection with `strict: true` and a required `gates` check, but admins are not enforced. That is knowingly kept: `build-task.md` step 12 commits the `mark-task-done.sh` result straight to `main`, which prints `Bypassed rule violations`, and enforcing admins would block the status flip that keeps the graph honest.
 
 **What that costs, stated plainly.** The merge button can still push past a red `gates` check — the #30 failure mode, which is the reason `merge-when-green.sh` exists. The compensating control is that every automated merge goes through that script, which re-reads the verdict immediately before merging and fails closed. The hole is now open by decision, and a human clicking merge on a red PR is the one path nothing in this pipeline can stop.
+
+
+### ADR-043 · The alert contract carries no OpsMind noun, including in its field names
+
+**Context.** [ADR-039](#adr-039) makes the Alert Manager an importable package: a second codebase adds it and calls it in its own process. [ADR-040](#adr-040) gave `raiseAlert` a vocabulary-free `areas` argument for exactly that reason. But `reportRun`'s side of the same port was left alone, and it carries `ReportedAlert.jurisdictionId` and `RunScope.jurisdictionId`.
+
+**That is not cosmetic, and the collision is concrete.** `service-alerts-surface-and-lifecycle` carries two assertions that cannot both hold: its client must satisfy this port *exactly*, and *no file in the service may name a jurisdiction*. TypeScript is structural, so reading a scope means spelling the field's name — the engine's own source would contain `jurisdictionId` in order to find a value it neither understands nor cares about. Found by the reviewer of `deadlines-alert-contract-scope-and-failure`, before a client had been written against it.
+
+**Decision.** **The scope field on the alert contract is named `area`**, matching the `areas` argument [ADR-040](#adr-040) already introduced — one vocabulary across the port rather than two. `ReportedAlert.area` and `RunScope.area`. Ahmed's decision, 2026-08-18, choosing this over dropping the no-vocabulary rule or interposing a translator.
+
+**What is deliberately NOT renamed.** OpsMind's own storage and its own inputs. `DeadlineRegistration.jurisdictionId` stays a column, `DeadlineInput.jurisdictionId` and `Registration.jurisdictionId` stay fields, and the module's internal variables stay as they are. **OpsMind is entitled to know what a jurisdiction is** — it is a compliance system for five Gulf jurisdictions. The rule was only ever about the component being lent to other applications. Two field declarations change. `git grep -o -w jurisdictionId origin/main` counts **216** occurrences before the change, 56 of them in `lib/`; every one outside the two port types is OpsMind addressing itself. There is **no migration** and nothing about how anything is stored changes.
+
+**Consequences.** Both of `service-alerts-surface-and-lifecycle`'s assertions become satisfiable, and its client can be written without the port forcing a word into it. The cost is a second edit to a merged compliance module within a day of the first — paid now, deliberately, because the alternative is paying it *after* a client compiles against the old names, when it stops being one edit and becomes two.
+
+**A translator was rejected.** It would need writing, testing and keeping in step with both sides, and it has to live somewhere — whichever side owns it is the side that knows both vocabularies, which is the problem moved rather than solved.

@@ -214,8 +214,14 @@ const strings = (value: unknown): string[] | undefined =>
  * The spec fixes the INFORMATION — which scopes are complete — and not its
  * encoding, so the three encodings that carry exactly that information are all
  * read: `{complete, incomplete}`, `{completeScopes, incompleteScopes}`, and a
- * list of `{jurisdictionId, complete}` rows. Anything else reads as "no
- * declaration", which is what makes the scoping tests able to fail.
+ * list of `{area, complete}` rows. Anything else reads as "no declaration",
+ * which is what makes the scoping tests able to fail.
+ *
+ * `area` is the decided spelling (ADR-043); `jurisdictionId` was the spelling
+ * before it and is still read here, because nothing in THIS file asserts what
+ * the field is called — these cases are about which scopes a run declared
+ * complete. The name itself is pinned by alert-vocabulary.test.ts, which is the
+ * one place that should fail if it changes.
  */
 function readScopes(value: unknown): ScopeDeclaration | undefined {
   if (value === null || typeof value !== "object") return undefined;
@@ -235,17 +241,22 @@ function readScopes(value: unknown): ScopeDeclaration | undefined {
 function scopesIn(extra: readonly unknown[]): ScopeDeclaration | undefined {
   for (const value of extra) {
     if (Array.isArray(value)) {
+      const scopeKey = (row: unknown): string | undefined => {
+        const record = row as Record<string, unknown>;
+        const found = record.area ?? record.jurisdictionId;
+        return typeof found === "string" ? found : undefined;
+      };
       const rows = value.filter(
-        (row): row is { jurisdictionId: string; complete: boolean } =>
+        (row): row is { complete: boolean } =>
           row !== null &&
           typeof row === "object" &&
-          typeof (row as Record<string, unknown>).jurisdictionId === "string" &&
+          scopeKey(row) !== undefined &&
           typeof (row as Record<string, unknown>).complete === "boolean",
       );
       if (rows.length > 0) {
         return {
-          complete: rows.filter((row) => row.complete).map((row) => row.jurisdictionId),
-          incomplete: rows.filter((row) => !row.complete).map((row) => row.jurisdictionId),
+          complete: rows.filter((row) => row.complete).map((row) => scopeKey(row) as string),
+          incomplete: rows.filter((row) => !row.complete).map((row) => scopeKey(row) as string),
         };
       }
       continue;
@@ -257,7 +268,10 @@ function scopesIn(extra: readonly unknown[]): ScopeDeclaration | undefined {
 }
 
 /**
- * The jurisdiction an alert was scored in.
+ * The area an alert was scored in — `ReportedAlert.area` since ADR-043, which
+ * renamed the field so the Alert Manager's port carries no OpsMind noun. The
+ * VALUE OpsMind puts there is still a jurisdiction id, which is why every
+ * caller below compares it against "AE" and "KW".
  *
  * Per-scope resolution is impossible without it: the Alert Manager is asked to
  * resolve absent fingerprints "only within the scopes the run declares complete"
@@ -268,7 +282,7 @@ function scopesIn(extra: readonly unknown[]): ScopeDeclaration | undefined {
  */
 export function scopeOf(alert: ReportedAlert): string | undefined {
   const record = alert as unknown as Record<string, unknown>;
-  const found = record.jurisdictionId ?? record.scope ?? record.jurisdiction;
+  const found = record.area ?? record.jurisdictionId ?? record.scope ?? record.jurisdiction;
   return typeof found === "string" ? found : undefined;
 }
 
