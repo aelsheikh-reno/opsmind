@@ -1698,7 +1698,7 @@
       - "npx eslint . reports nothing from coverage/, and the ignore is stated in the config rather than left to .gitignore"
       - "The ignore is in templates/eslint.config.mjs too, so the template comparison still holds and removing it from either side fails the scaffold suite"
   risk: low
-  status: todo
+  status: done
   note: >
     Found while fixing gate-suite-flakiness and deliberately not fixed there
     (ADR-033, "What this record does not fix"). eslint flat config does not read
