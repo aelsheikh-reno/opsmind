@@ -111,6 +111,28 @@ export default defineConfig({
     // boots six in-process engines, under which a unit test costing 2.6-3.4 s
     // reached 7.3 s and overran the 5 s default; 60 s is ~8x that (ADR-038).
     testTimeout: 60_000,
+
+    // BOUNDED SO THE SUITE FITS A DEVELOPER MACHINE, not only a CI runner
+    // (ADR-033). The binding resource is not CPU. Seven integration files each
+    // boot an in-process PostgreSQL and shell out to `prisma migrate deploy`,
+    // so an unbounded pool — one fork per core, fourteen on the machine this
+    // was measured on — put fourteen forks, seven database engines and seven
+    // migrate subprocesses on it at once.
+    //
+    // Measured 2026-08-18 on an idle 14-core WSL2 box: peak load average 36,
+    // with a file still timing out; started from an already-busy machine the
+    // full gate produced NO VERDICT AT ALL, timing out after ten minutes at
+    // load 151. Two consecutive unbounded runs of the same commit disagreed
+    // about whether a file passed, which is the defect, not the duration.
+    //
+    // The number bounds CONCURRENT ENGINES, which is why it is small and flat
+    // rather than derived from the core count: a 64-core machine does not make
+    // seven simultaneous migrations cheaper, and a verdict that depends on how
+    // busy the machine happened to be is not a verdict (ADR-031).
+    //
+    // It changes no assertion. The same files run, in the same isolation, and
+    // report the same results — fewer of them at a time.
+    maxWorkers: 4,
     include: ["tests/**/*.{test,spec}.{ts,tsx}"],
     exclude: ["node_modules/**", "reference/**", ".next/**"],
     coverage: {

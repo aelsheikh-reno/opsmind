@@ -212,7 +212,9 @@ file, `size-impl` FAILs rather than reporting a count it did not take
 (ADR-031).
 
 The differential gate is the one that makes autonomy defensible. A `money` task
-merging without it is the failure mode that produces a wrong payslip.
+merging without it is the failure mode that produces a wrong payslip — and since
+2026-08-18 it carries that weight alone, because a money or compliance task now
+merges itself rather than waiting for Ahmed ([ADR-041](docs/architecture/decisions.md#adr-041)).
 
 ---
 
@@ -238,7 +240,8 @@ By design, and it should be a handful of items per week rather than per hour:
 
 1. **Business rule adjudication.** The differ found that the new code and the
    legacy system disagree. One of them is wrong and only you know which. This is
-   the valuable one — it surfaces bugs in the current system.
+   the valuable one — it surfaces bugs in the current system. It reaches you as
+   a RED GATE that stopped a merge, not as a pull request sitting in a queue.
 2. **Approving the task graph** at the start of each phase.
 3. **Anything an agent flags as ambiguous** in the specification.
 4. **Cutover.**

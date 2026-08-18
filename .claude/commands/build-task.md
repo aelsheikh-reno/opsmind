@@ -70,8 +70,8 @@ Run task `$1` from `tasks/backlog.yaml` through the full pipeline.
    the task id, each assertion and whether it is met, the gate results, and any
    question for Ahmed.
 
-11. **Merge policy by risk.**
-    - `risk: low` → merge once CI is green, and merge ONLY through the guard:
+11. **Merge policy.** Every task merges the same way, and ONLY through the
+    guard:
 
       ```
       ./scripts/merge-when-green.sh <pr-number> squash
@@ -82,11 +82,20 @@ Run task `$1` from `tasks/backlog.yaml` through the full pipeline.
       that is not SUCCESS, failing closed if it cannot read one at all. This is
       not ceremony: on #30 a polling loop treated a FAILURE verdict as a reason
       to stop waiting rather than a reason to stop, and the next command merged
-      a red gate into main. There is no branch protection catching that
-      server-side.
-    - `risk: money` or `compliance` → never merge. Instead:
-      `gh pr comment --body "risk: <risk> — waiting for Ahmed's review"`
-      and leave the PR open. Human adjudication is the point of the tag.
+      a red gate into main.
+
+      `risk: money` and `risk: compliance` NO LONGER HOLD the pull request for a
+      human to merge (ADR-041, Ahmed 2026-08-18). What the tag still buys is the
+      part that catches a wrong number: a differential test against the legacy
+      system, and a 90% floor on the lines the task changed. A disagreement with
+      the legacy system turns the gate RED, which stops the merge and reaches
+      Ahmed as a business-rule adjudication — the hold was never what caught
+      that.
+
+      STOP AND ASK ANYWAY, tag or no tag, when the differ reports a
+      disagreement, when the specification is ambiguous, or when finishing the
+      task would mean inventing a business rule. Those reach Ahmed on their own
+      merits.
 
 12. **Flip the status**, and only through the script:
 

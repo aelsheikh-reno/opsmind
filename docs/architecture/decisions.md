@@ -487,3 +487,16 @@ This is the strongest evidence for keeping real PostgreSQL in CI. No amount of l
 **Consequences.** `AlertManager.raiseAlert` gains an area parameter, and the merged deadline monitor changes with it rather than around it. **An area whose alert could not be raised was not fully checked, so the run reports that area incomplete** — otherwise (3) silently undoes (1), by letting absence close an alert the run failed to raise. That is a derived constraint, not a separate decision: it is what (1) means once (3) exists.
 
 **Not settled here.** Whether a run in which every alert call failed should still count as a run — reported, with every area incomplete — or as no run at all.
+
+
+### ADR-041 · A money or compliance task merges itself; the differential is what makes that safe
+
+**Context.** `risk: money` and `risk: compliance` did three separate things: require a differential test against the legacy system, raise the diff-coverage floor from 70 to 90 on the lines the task changed, and **hold the pull request open for Ahmed to merge by hand**. 29 of 78 nodes carry one of the two tags, so the hold was the pipeline's main stopping condition — it ran out of *permitted* work long before it ran out of work.
+
+**Decision.** The **hold is removed. The other two stay.** A money or compliance task merges itself through `merge-when-green.sh` exactly as a low-risk one does. Ahmed's decision, 2026-08-18, choosing this over also dropping the differential or collapsing the risk tiers entirely.
+
+**Consequences.** What the tag buys is unchanged where it matters: **nothing merges a payroll or tax calculation without a differential test against the system currently paying people**, and without 90% coverage of its own changed lines. A disagreement with the legacy oracle turns the gate RED, which stops the merge on its own — so the case the hold existed for still reaches Ahmed, through a failing gate rather than through a queue of open pull requests. That is a better channel, not a worse one: a red gate names what disagreed, where a waiting PR only says someone should look.
+
+**What is genuinely given up, and it is real.** The second pair of eyes on a *green* compliance PR. A task whose differential passes because the legacy behaviour is **also wrong** now merges unread. Legacy is evidence, not authority (2026-08-16), and some of it has never been validated — so this is not a theoretical cost. The mitigation is that the differ reports agreement as well as disagreement, and an agreement on an unvalidated rule is still a claim Ahmed can audit after the fact rather than before it.
+
+**Not settled here.** Whether the phase boundary — Ahmed approving the next phase's task graph — should also go. With the hold removed it is the only remaining stopping condition in the pipeline.
