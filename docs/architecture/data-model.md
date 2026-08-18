@@ -231,6 +231,9 @@ Both tables are new, and every field is derived rather than specified: from `reg
 
 #### `ThresholdTable`
 
+
+> **No jurisdiction column, deliberately** ([ADR-044](decisions.md#adr-044)). One row applies to all five jurisdictions, so configuring a type fixes it everywhere at once and there is no half-configured state. What that gives up is a jurisdiction needing different notice from its neighbours — read the ADR before adding the column, because the alerting behaviour above it depends on the fault being global.
+
 *new · detection tuning · [ADR-020](decisions.md#adr-020)*
 
 | Field | Type / values | Why |
