@@ -3204,3 +3204,37 @@
     ADR-031 governs what to do about it: state what was measured and refuse when
     it cannot be. There is no local verdict for this commit, so none is claimed.
     CI is unaffected - it runs a dedicated runner against postgres:16.
+
+- id: pipeline-budgets-and-delegation
+  title: The whole-PR backstop is 2600, the roles are delegated, the admin bypass stays
+  phase: 0
+  depends_on: []
+  spec: PIPELINE.md#the-gates
+  produces:
+    - scripts/gate.sh
+    - PIPELINE.md
+    - docs/architecture/decisions.md
+    - tasks/backlog.yaml
+  done_when:
+    gates: [lint, types, tests, guards]
+    assertions:
+      - "size-total defaults to 2600 and a per-task waiver still works in both directions"
+      - "size-impl is untouched at 400 and still non-waivable"
+      - "The three nodes resolved by the pool bound are closed with the evidence that closed them"
+  risk: low
+  status: todo
+  note: >
+    ADR-042. Three decisions taken together after the pipeline's own numbers were
+    measured, not estimated.
+
+    THE BACKSTOP WAS WAIVED 8 TIMES IN 39 AND GRANTED EVERY TIME. ADR-029
+    anticipated exactly this and advised looking at what is counted rather than
+    raising the number again. That was done first: what it counts on the tasks
+    that waived it is tests, generated DDL and specification prose — the three
+    categories size-impl already excludes because CLAUDE.md requires them. There
+    was nothing to trim that was not the policy working, so the count was right
+    and the number was wrong.
+
+    size-impl is deliberately untouched. It is the budget that works: never
+    waived, and the one time it bit the task was split, which produced ADR-037,
+    ADR-038 and the integration harness.
