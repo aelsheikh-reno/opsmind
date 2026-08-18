@@ -3110,7 +3110,7 @@
       - "A differential disagreement still turns the gate red and still stops the merge"
       - "An ambiguous specification still stops the task, tag or no tag"
   risk: low
-  status: todo
+  status: done
   note: >
     ADR-041. The hold was the pipeline's main stopping condition — 29 of 78
     nodes carry money or compliance — so removing it is what lets a phase run to
