@@ -598,10 +598,13 @@ describe("the backlog is out of size-impl and still inside size-total", () => {
   });
 
   it("is still counted, in full, by size-total", () => {
-    const gated = gateRun({ "tasks/backlog.yaml": backlogOf(1600) }, PLACEHOLDER);
+    // 2700 against the 2600 backstop (ADR-042). The magnitude tracks the
+    // budget; the assertion does not — size-total must still see every line of
+    // a backlog that size-impl is now blind to.
+    const gated = gateRun({ "tasks/backlog.yaml": backlogOf(2700) }, PLACEHOLDER);
     expect(line(gated, "size-impl"), gated.out).toContain("pass");
     expect(line(gated, "size-total"), "size-total stopped counting the backlog").toContain("FAIL");
-    expect(gated.out).toMatch(/1600/);
+    expect(gated.out).toMatch(/2700/);
   });
 
   it("does not exempt every YAML file — a workflow is authored behaviour", () => {
@@ -662,17 +665,17 @@ describe("assertion 8 · nothing else about the size gates moved", () => {
       "lib/modules/deadlines/sweep.ts": commentLines(100) + codeLines(350),
     });
     expect(line(gated, "size-impl"), gated.out).toContain("pass");
-    // 450 added lines against a 1500 backstop: it passes, and the total the
+    // 450 added lines against a 2600 backstop: it passes, and the total the
     // suite would fail on is still the undiscounted one. The failing direction
-    // is pinned below, where the same discount does not save a 1600-line diff.
+    // is pinned below, where the same discount does not save a 2700-line diff.
     expect(line(gated, "size-total"), gated.out).toContain("pass");
 
     const big = gateRun({
-      "lib/modules/deadlines/sweep.ts": commentLines(1400) + codeLines(200),
+      "lib/modules/deadlines/sweep.ts": commentLines(2500) + codeLines(200),
     });
-    expect(line(big, "size-impl"), "1400 comment lines were charged as code").toContain("pass");
+    expect(line(big, "size-impl"), "2500 comment lines were charged as code").toContain("pass");
     expect(line(big, "size-total"), "size-total stopped counting comments").toContain("FAIL");
-    expect(big.out).toMatch(/1600/);
+    expect(big.out).toMatch(/2700/);
   });
 });
 
