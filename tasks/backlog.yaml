@@ -3222,7 +3222,7 @@
       - "size-impl is untouched at 400 and still non-waivable"
       - "The three nodes resolved by the pool bound are closed with the evidence that closed them"
   risk: low
-  status: todo
+  status: done
   note: >
     ADR-042. Three decisions taken together after the pipeline's own numbers were
     measured, not estimated.
