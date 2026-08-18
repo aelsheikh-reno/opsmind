@@ -77,4 +77,18 @@ nodes rather than by `data-model.md`.
 `search_index` and `commitment_forecast` are carded and unbuilt; both are
 matviews, so their absence from the schema is expected rather than a gap.
 
+## Questions the Alert Manager shapes do not answer
+
+> Raised by `shapes-alert-manager`, 2026-08-18, and deliberately left open —
+> that node specifies columns and answers no behavioural question it finds.
+
+| Question | Why it is open |
+|---|---|
+| **Tenant cannot be queried without splitting the fingerprint.** `Alert` has no tenant column; the tenant is the first segment of the fingerprint, which the engine is forbidden to split ([flows-alerting](flows-alerting.md)). So "every alert for tenant X" has no sound query today | Found while writing the columns. Either `Alert` gains a tenant column the source supplies, or the engine never needs that query. It is not obvious which, and guessing puts a column in the one contract a second product must use unchanged |
+| Retention of a resolved alert | `data-retention.md` governs documents and says nothing about alerts. The row deliberately survives resolution, so something must eventually decide how long |
+| Whether `AlertSeverity` is one enum shared with the deadline monitor's, or two | Sharing couples detection to the engine across the exact seam [ADR-020](decisions.md#adr-020) exists to create; duplicating risks two lists drifting. Recorded on `service-alerts-store` as open before this node and still open after it |
+| Suppressed, then absent from a completed report — does it resolve? | Absence from a complete report resolves, and suppression is an *open* state that neither closes nor resolves. Both rules are stated; their intersection is not |
+| How late is dark | `expectedEvery` gives a cadence and none of the pages gives a tolerance. A source a minute late is not dark; a source a day late is |
+| Partial resolution across areas | [ADR-044](decisions.md#adr-044) records this as unsettled rather than answered: no rule in service today has a per-area fault spanning several areas, and an alert has no per-area state between open and resolved |
+
 > **Note** — Everything else that was ever open in this design now has a numbered record in [decisions](decisions.md). If a question isn't answered anywhere on this site, that is a gap — raise it and it becomes either a page edit or ADR-026.
