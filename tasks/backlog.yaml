@@ -3343,3 +3343,40 @@
     same anchoring failure that destroyed staging-deploy's waiver reason in #30
     and that mark-task-done.sh exists to prevent for the status line, arriving
     on a different key.
+
+- id: thresholds-shared-and-areas-are-impact
+  title: A threshold window is shared, and an alert's areas name impact rather than fault
+  phase: 1
+  depends_on: [deadlines-alert-contract-vocabulary]
+  spec: docs/architecture/decisions.md
+  produces:
+    - docs/architecture/decisions.md
+    - docs/architecture/components-core-deadline-monitor.md
+    - docs/architecture/data-model.md
+    - tasks/backlog.yaml
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "The shared threshold window is recorded as a decision, with the notice it cannot express named as its cost"
+      - "The distinction between an alert's impact and its fault is stated where a reader of the monitor or the data model will meet it"
+      - "ADR-040's open question about a singular area argument is closed"
+  risk: low
+  status: todo
+  note: >
+    NO CODE CHANGES. The behaviour was already correct; nothing had written down
+    WHY, and the gap was found by Ahmed asking what happens when one of three
+    jurisdictions on a single alert is fixed and the others are not.
+
+    The answer is that it cannot happen: ThresholdTable has no jurisdiction
+    column, so the fault is global and one row closes the alert everywhere at
+    once. That was true before this node and undocumented, which is how the
+    question arose.
+
+    IT ALSO CLOSES ADR-040'S OPEN QUESTION. That record left it unsettled whether
+    the area argument should have been singular. It should not: one of the two
+    rules in service is genuinely multi-area, and because resolution follows the
+    fault rather than the impact, a list creates no stuck-alert problem.
+
+    The general case Ahmed was pointing at is recorded as unsettled rather than
+    answered — a future rule whose fault is per-area and spans several areas
+    would need partial resolution, and the contract has no per-area state.

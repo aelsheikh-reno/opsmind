@@ -538,3 +538,23 @@ Three pipeline decisions, Ahmed 2026-08-18, recorded together because they were 
 **Consequences.** Both of `service-alerts-surface-and-lifecycle`'s assertions become satisfiable, and its client can be written without the port forcing a word into it. The cost is a second edit to a merged compliance module within a day of the first — paid now, deliberately, because the alternative is paying it *after* a client compiles against the old names, when it stops being one edit and becomes two.
 
 **A translator was rejected.** It would need writing, testing and keeping in step with both sides, and it has to live somewhere — whichever side owns it is the side that knows both vocabularies, which is the problem moved rather than solved.
+
+
+### ADR-044 · A threshold window is shared across jurisdictions, and an alert's areas name impact rather than fault
+
+**Context.** Ahmed asked what happens when one alert covers three jurisdictions — *"nobody configured a threshold for visas"*, affecting the UAE, Egypt and Kuwait — and he fixes only one of them. The alert would stay open, correctly, because the other two are still broken; but there would be no way to record that one of them is fixed. A partial fix that cannot be expressed is a real defect, and the question was the right one to ask.
+
+**What was found.** It cannot happen, for a reason nothing had written down: **`ThresholdTable` carries no jurisdiction column.** There is no UAE visa rule and no Egypt visa rule — there is one `(deadlineType, businessDaysBefore)` row for every jurisdiction at once. The fault is global, so the fix is global, and one row closes the alert everywhere simultaneously. There is no half-fixed state to record.
+
+**Decision. The window stays shared.** Ahmed's decision, 2026-08-18, after the alternative was put to him: a jurisdiction column would let Egypt warn at thirty days on a filing where the UAE warns at seven.
+
+**The cost, which is real.** Where two jurisdictions genuinely need different notice, that difference cannot be expressed and the safest number has to be set for everybody — which means over-warning the jurisdictions that needed less. Nothing in the specification currently claims two of the five differ, and no legacy evidence was gathered to check; the decision was taken on simplicity, and this paragraph is what to re-read if a jurisdiction ever needs its own window.
+
+**AN ALERT'S `areas` NAME WHERE THE IMPACT IS, NOT WHERE THE FAULT IS.** This is the distinction the question exposed and it governs how resolution behaves:
+
+- **Missing business calendar** — fault and impact coincide. The fault is *in* that jurisdiction, the alert names one area, and fixing that jurisdiction clears it.
+- **No threshold configured** — they do not coincide. **One global fault**, several affected scopes. The alert names three areas because three completeness scopes are affected, not because there are three things to fix.
+
+**Resolution follows the fault, never the impact.** Add the row, and the next sweep finds the type configured, raises nothing, and the alert resolves by absence across every area at once. So no partial resolution is needed, none is possible, and **[ADR-040](#adr-040)'s list-valued `areas` creates no stuck-alert problem** — which also settles the question left open there about whether the argument should have been singular. It should not: one of the two rules in service today is genuinely multi-area.
+
+**Not settled here, and it is the general case Ahmed's instinct was pointing at.** A future rule whose fault is *per-area* and which spans several areas at once would need partial resolution, and nothing in the alert contract supports it — an alert is open or resolved, with no per-area state between. Neither rule in service today has that shape. If one is ever added, this is the record to reopen, and the answer is more likely to be one alert per area than a partially-resolvable alert.
