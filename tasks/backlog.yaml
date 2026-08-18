@@ -2956,6 +2956,8 @@
     - lib/modules/deadlines/index.ts
     - tests/modules/deadlines/
     - docs/architecture/components-core-deadline-monitor.md
+    - docs/architecture/flows-alerting.md
+    - docs/architecture/decisions.md
     - tests/baseline.json
   done_when:
     gates: [lint, types, boundaries, tests, coverage]
@@ -3238,3 +3240,25 @@
     size-impl is deliberately untouched. It is the budget that works: never
     waived, and the one time it bit the task was split, which produced ADR-037,
     ADR-038 and the integration harness.
+
+- id: gate-test-count-cannot-see-a-skip
+  title: The test-count ratchet counts a skipped case as a case
+  phase: 0
+  depends_on: []
+  spec: PIPELINE.md#the-gates
+  done_when:
+    gates: [tests]
+    assertions:
+      - "A task that converts a running case to a skipped one cannot hold the count flat unnoticed"
+  risk: low
+  status: todo
+  note: >
+    RECORDED, NOT INVESTIGATED. Raised by the reviewer of
+    deadlines-alert-contract-scope-and-failure, 2026-08-18, as an observation
+    rather than a defect in that node. gate.sh reads numTotalTests from vitest,
+    which counts skipped cases, so the ratchet cannot tell a running test from an
+    it.skip. In that node it was harmless — the two converted cases already
+    asserted nothing, so the report became more honest rather than less — but the
+    gate would not catch a future task that skipped its way to a flat count,
+    which is precisely the "did everything still RUN" question this ratchet
+    exists to answer and the one no other gate asks.

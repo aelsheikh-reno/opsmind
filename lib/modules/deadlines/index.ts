@@ -94,9 +94,11 @@ export interface ReportedAlert {
 export interface RunScope {
   jurisdictionId: string;
   complete: boolean;
-  /** The jurisdiction's own civil date, when it was scored. */
+  /** The jurisdiction's own civil date, when it was scored. Survives a
+   *  downgrade: a scope can be scored and still not fully checked. */
   civilDate?: Date;
-  /** Why it could not be scored. Absent when complete. */
+  /** Why the run did not finish it — unscorable, or an alert it could not
+   *  raise (ADR-040). Absent when complete; several are joined by "; ". */
   reason?: string;
 }
 
@@ -109,10 +111,19 @@ export interface AlertManager {
     alerts: ReportedAlert[],
     scopes: readonly RunScope[],
   ): Promise<void>;
+  /**
+   * `areas` are the caller's own opaque scope keys, in the same vocabulary as
+   * RunScope: an alert closes only inside an area a run declared checked, so
+   * one raised without an area could never be resolved by absence. The engine
+   * compares them and never interprets them, and it never reads a scope out of
+   * `context` — one caller's spelling of a context key must not become the
+   * component's contract (ADR-040, ADR-039).
+   */
   raiseAlert(
     fingerprint: string,
     severity: Severity,
     policyId: string,
+    areas: readonly string[],
     context: Record<string, unknown>,
   ): Promise<void>;
 }
@@ -181,12 +192,14 @@ function raiseMisconfiguration(
   entityType: string,
   entityId: string,
   policyId: string,
+  areas: readonly string[],
   context: Record<string, unknown>,
 ): Promise<void> {
   return deps.alerts.raiseAlert(
     fingerprintFor(deps.tenant, entityType, entityId, policyId),
     highestSeverity(),
     policyId,
+    areas,
     context,
   );
 }
@@ -243,7 +256,7 @@ export async function registerDeadline(
   const { verdict, businessDaysRemaining, dueOnNonWorkingDay } = evaluation;
 
   if (verdict.status === "breached") {
-    await deps.alerts.raiseAlert(evaluation.fingerprint, verdict.severity, registration.deadlineType, {
+    await deps.alerts.raiseAlert(evaluation.fingerprint, verdict.severity, registration.deadlineType, [jurisdictionId], {
       ...registration,
       businessDaysRemaining,
       dueOnNonWorkingDay,
@@ -279,6 +292,12 @@ export async function deregisterDeadline(ref: DeadlineRef, deps: DeadlineDeps): 
  * in the broken scope is resolved. Aborting instead would take every
  * jurisdiction dark for one bad calendar (Ahmed's decision, 2026-08-14).
  *
+ * A failing alert call is the same shape of failure and gets the same answer:
+ * the run carries on and still reports, and the areas that alert covered are
+ * declared incomplete, because a run that could not raise an alert did not
+ * check that area (ADR-040). reportRun itself is left unguarded — what a run
+ * that cannot report at all should do is not settled.
+ *
  * "Today" is each jurisdiction's own civil date, never the UTC day: the job
  * fires at 02:00, which in the Gulf is 22:00 the UTC day before.
  */
@@ -305,15 +324,50 @@ export async function runDeadlineSweep(deps: DeadlineDeps): Promise<SweepReport>
   const scopes: RunScope[] = [];
   let evaluated = 0;
 
+  // The one door through which a scope becomes incomplete, whether that is its
+  // first declaration or a downgrade of one already declared complete. One
+  // RunScope per jurisdiction, always: a report carrying the same area twice —
+  // once complete, once not — says both and means neither. The earlier reason
+  // is kept alongside the new one; each names a different thing the run could
+  // not do, and a jurisdiction can be both unscorable and alert-refused.
+  const markUnchecked = (jurisdictionId: string, reason: string): void => {
+    const declared = scopes.find((scope) => scope.jurisdictionId === jurisdictionId);
+    if (!declared) {
+      scopes.push({ jurisdictionId, complete: false, reason });
+      return;
+    }
+    declared.complete = false;
+    declared.reason = declared.reason ? `${declared.reason}; ${reason}` : reason;
+  };
+
+  // A failed alert never ends the run — the healthy jurisdictions are still
+  // reported. But an area whose alert could not be raised was NOT fully
+  // checked, so it is declared incomplete: absence from a complete report
+  // resolves, and it must never resolve the alert this run just failed to raise
+  // (ADR-040). The reason carries the policy and the failure, because an area
+  // going incomplete with no way to tell why is the silent swallow twice over.
+  const raiseOrMarkUnchecked = async (
+    entityType: string,
+    entityId: string,
+    policyId: string,
+    areas: readonly string[],
+    context: Record<string, unknown>,
+  ): Promise<void> => {
+    try {
+      await raiseMisconfiguration(deps, entityType, entityId, policyId, areas, context);
+    } catch (error) {
+      const cause = error instanceof Error ? error.message : String(error);
+      for (const area of areas) {
+        markUnchecked(area, `alert ${policyId} for ${entityType} ${entityId} could not be raised: ${cause}`);
+      }
+    }
+  };
+
   for (const [jurisdictionId, rows] of byJurisdiction) {
     const calendar = await deps.calendars.forJurisdiction(jurisdictionId);
     if (!calendar) {
-      scopes.push({
-        jurisdictionId,
-        complete: false,
-        reason: `no BusinessCalendar for jurisdiction ${jurisdictionId}; its deadlines were not scored`,
-      });
-      await raiseMisconfiguration(deps, "jurisdiction", jurisdictionId, MISSING_CALENDAR_POLICY, {
+      markUnchecked(jurisdictionId, `no BusinessCalendar for jurisdiction ${jurisdictionId}; its deadlines were not scored`);
+      await raiseOrMarkUnchecked("jurisdiction", jurisdictionId, MISSING_CALENDAR_POLICY, [jurisdictionId], {
         jurisdictionId,
         unscoredRegistrations: rows.length,
         runId,
@@ -337,9 +391,15 @@ export async function runDeadlineSweep(deps: DeadlineDeps): Promise<SweepReport>
   // One alert per unconfigured TYPE per run, not one per deadline: a missing
   // row is a single actionable signal, and silence is not an option.
   for (const deadlineType of unconfigured) {
-    await raiseMisconfiguration(deps, "deadline-type", deadlineType, NO_THRESHOLD_POLICY, {
+    const affected = registrations.filter((row) => row.deadlineType === deadlineType);
+    // Genuinely several areas: one missing threshold row leaves the type
+    // unscorable everywhere it is registered, so every one of those
+    // jurisdictions is what this alert covers and what goes incomplete if it
+    // cannot be raised.
+    const areas = [...new Set(affected.map((row) => row.jurisdictionId))];
+    await raiseOrMarkUnchecked("deadline-type", deadlineType, NO_THRESHOLD_POLICY, areas, {
       deadlineType,
-      registrations: registrations.filter((row) => row.deadlineType === deadlineType).length,
+      registrations: affected.length,
       runId,
     });
   }
