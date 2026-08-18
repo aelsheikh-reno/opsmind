@@ -3480,3 +3480,47 @@
     It costs nothing today because lib/services/ is empty. It stops costing
     nothing the moment service-alerts-surface-and-lifecycle lands, which is why
     it is recorded now rather than after.
+
+- id: gate-test-count-trusts-an-unchecked-run
+  title: test-count reads a total from a run it never checks for failures
+  phase: 0
+  depends_on: []
+  spec: PIPELINE.md#the-gates
+  produces:
+    - scripts/gate.sh
+    - tests/gates/
+    - tasks/backlog.yaml
+    - tests/baseline.json
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "A counting run with any failed or uncollected suite is refused, never read as a total"
+      - "Three gate runs on one unchanged commit return the same test-count verdict"
+  risk: low
+  status: todo
+  note: >
+    Observed 2026-08-18 on spec-coverage-audit, a DOCS-ONLY change. Three
+    ./scripts/gate.sh runs on one unchanged commit returned FAIL, FAIL, PASS. The
+    middle one printed "1064 tests, floor is 1111 — 47 fewer than the base", while
+    a direct `npx vitest run` measured 1111 and the gate's own counting command,
+    run standalone three times, measured 1111 every time.
+
+    THE MECHANISM IS VISIBLE IN THE GATE. test-count runs its OWN vitest
+    invocation, separate from the `tests` gate above it, and reads numTotalTests
+    out of the JSON while checking nothing else about that run. A suite that fails
+    to collect contributes no tests to the total and no complaint, so a transient
+    collection failure is reported as though the SUITE SHRANK — which is the one
+    thing this ratchet exists to detect. A false red here is the same class of
+    defect as a false green (ADR-033): the verdict stops describing its subject.
+
+    ALSO WORTH FIXING WHILE THERE: vitest prints "JSON report written to
+    /dev/stdout" into the same stream it writes the JSON to, overwriting the
+    start of its own report. The sed survives it only because numTotalTests
+    happens to land after the damage.
+
+    I CLOSED gate-total-cov-nondeterministic AS RESOLVED ON THE SAME DAY, on the
+    evidence of three identical gate runs and two identical coverage runs after
+    the vitest pool was bounded. That evidence was real and the bound did help,
+    but the conclusion was too strong: the underlying instability was reduced, not
+    removed, and it has surfaced again on a different gate. Reopening that node
+    is not the answer — this one names a concrete mechanism it did not.
