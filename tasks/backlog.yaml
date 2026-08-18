@@ -2242,7 +2242,7 @@
     assertions:
       - "Two coverage runs on one unchanged commit produce the same verdict"
   risk: low
-  status: todo
+  status: done
   note: >
     RECORDED, NOT INVESTIGATED. Observed 2026-08-17 at commit 1012315: total-cov
     reported FAIL, then PASS at 99.24% against a 99.24% baseline, on the same
