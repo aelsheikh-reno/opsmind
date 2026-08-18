@@ -3361,7 +3361,7 @@
       - "The distinction between an alert's impact and its fault is stated where a reader of the monitor or the data model will meet it"
       - "ADR-040's open question about a singular area argument is closed"
   risk: low
-  status: todo
+  status: done
   note: >
     NO CODE CHANGES. The behaviour was already correct; nothing had written down
     WHY, and the gap was found by Ahmed asking what happens when one of three
