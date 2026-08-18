@@ -3158,7 +3158,7 @@
     assertions:
       - "A full gate run completes on a 14-core developer machine and returns one verdict"
   risk: low
-  status: todo
+  status: done
   note: >
     RECORDED, NOT INVESTIGATED, AND IT BLOCKS EVERY TASK. Observed 2026-08-18 on
     pipeline-risk-merge-policy, a markdown-only change. ./scripts/gate.sh did not
