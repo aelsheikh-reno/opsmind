@@ -6,8 +6,26 @@
 set -uo pipefail
 findings=()
 
-# a module repository must declare its tables and touch only those
-for repo in lib/modules/*/repository.ts lib/kernel/*/repository.ts; do
+# Every repository the enforcement layer knows about, in one list.
+#
+# A capability service's repository is read exactly as a module's is. ADR-039
+# makes its reuse target an importable package on the HOST's storage, so the
+# network is no longer any part of its boundary and exclusive table ownership
+# is the whole of it — declared here, in the same words, or it does not exist.
+# eslint permits that file to import the client on precisely this basis, and the
+# two halves only move together: exempt it from the import rule while this loop
+# still reads two globs and the result is a file that may reach the database and
+# is checked by nothing, which is worse than the red lint it replaces because it
+# is silent.
+#
+# One list rather than one per loop, because the loops below drifting apart is
+# how a repository ends up read by the ownership check and not by the evasion
+# check. Unmatched globs stay literal here; the `-f` guard in each loop is what
+# absorbs them, which is why lib/services/ not existing yet costs nothing.
+repositories=(lib/modules/*/repository.ts lib/kernel/*/repository.ts lib/services/*/repository.ts)
+
+# a repository must declare its tables and touch only those
+for repo in "${repositories[@]}"; do
   [[ -f "$repo" ]] || continue
   mod=$(basename "$(dirname "$repo")")
   owned=$(grep -oE "^\s*//\s*owns:.*" "$repo" | head -1 | sed 's/.*owns://')
@@ -24,7 +42,7 @@ done
 
 # obfuscated database access is itself a violation — casting or bracket-indexing
 # the client is how a gate gets evaded, so the evasion is what gets flagged
-for repo in lib/modules/*/repository.ts lib/kernel/*/repository.ts; do
+for repo in "${repositories[@]}"; do
   [[ -f "$repo" ]] || continue
   while IFS= read -r hit; do
     findings+=("obfuscated db access in $repo: $hit")
@@ -43,10 +61,12 @@ while IFS= read -r f; do
 done < <(grep -rl "@/lib/db\|@prisma/client" --include="*.ts" --include="*.tsx" lib app 2>/dev/null \
          | grep -v "repository.ts" | grep -vx "lib/db.ts" || true)
 
-# no deep imports past a module index
+# no deep imports past a module or service index. A service is named here for
+# ADR-021's reason: the seam is the same call whether the capability is a folder
+# or a container, so reaching around it is the same violation.
 while IFS= read -r hit; do
   findings+=("deep import: $hit")
-done < <(grep -rEn "from ['\"]@/lib/modules/[a-z-]+/[a-z]" --include="*.ts" --include="*.tsx" lib app 2>/dev/null \
+done < <(grep -rEn "from ['\"]@/lib/(modules|services)/[a-z-]+/[a-z]" --include="*.ts" --include="*.tsx" lib app 2>/dev/null \
          | grep -vE "/index['\"]" || true)
 
 # no paid booleans in the schema

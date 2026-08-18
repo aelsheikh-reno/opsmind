@@ -2421,6 +2421,7 @@
     - templates/eslint.config.mjs
     - scripts/check-boundaries.sh
     - tests/scaffold/eslint-boundaries.test.ts
+    - tests/scaffold/service-boundary-rules.test.ts
     - tasks/backlog.yaml
     - tests/baseline.json
   done_when:
@@ -3395,3 +3396,87 @@
     The general case Ahmed was pointing at is recorded as unsettled rather than
     answered — a future rule whose fault is per-area and spans several areas
     would need partial resolution, and the contract has no per-area state.
+
+- id: gate-deep-import-extglob-never-fires
+  title: The one-level deep-import rule has never fired, in eslint or in the template it ships
+  phase: 0
+  depends_on: [gate-service-boundary-rules]
+  spec: PIPELINE.md#the-gates
+  produces:
+    - eslint.config.mjs
+    - templates/eslint.config.mjs
+    - tests/scaffold/eslint-boundaries.test.ts
+    - tasks/backlog.yaml
+    - tests/baseline.json
+  done_when:
+    gates: [lint, types, boundaries, tests]
+    assertions:
+      - "An import of a module or service one level past its index.ts is refused by eslint alone, with check-boundaries.sh disabled"
+      - "The nested form keeps failing exactly as it does today"
+      - "No existing import in the repository changes verdict"
+  risk: low
+  status: todo
+  note: >
+    FOUND BY THE IMPLEMENTER OF gate-service-boundary-rules AND VERIFIED
+    INDEPENDENTLY, 2026-08-18. `no-restricted-imports` group patterns do not
+    support extglob in eslint 9, so `@/lib/modules/*/!(index)` matches nothing
+    and has never matched anything. Measured directly: a file importing
+    `@/lib/modules/payroll/repository` produces ZERO eslint errors, while the
+    nested `@/lib/modules/payroll/internal/thing` fires normally — so only the
+    `*/*/**` half of that group has ever worked.
+
+    CLAUDE.md RULE 4 IS STILL ENFORCED, by scripts/check-boundaries.sh, which was
+    confirmed to catch the same one-level import and name it. So this is not an
+    open hole today. It is a rule that LOOKS like enforcement and is not, which
+    is the more dangerous shape: anyone trimming the shell guard on the grounds
+    that eslint already covers it would open the hole silently.
+
+    IT IS WORSE IN THE TEMPLATE, AND THAT IS THE HALF NOT TO DEFER ON. templates/
+    ships eslint.config.mjs and not check-boundaries.sh, so a project scaffolded
+    from it receives the dead pattern with NOTHING behind it: its CLAUDE.md rule 4
+    is unenforced at one level, entirely, not merely enforced by a different tool.
+    "The shell catches it" is true here and false there, so this node must not be
+    deferred on that ground. Raised by the reviewer of gate-service-boundary-rules,
+    which also confirmed that node ships a SECOND instance of the dead pattern,
+    @/lib/services/*/!(index) — already inside this node's first assertion, which
+    reads "a module or service one level past its index.ts".
+
+    Deliberately not fixed inside gate-service-boundary-rules: the fix rewrites
+    the module boundary block, which that node's assertion 6 forbids moving. The
+    service group added there mirrors the module group exactly, so services are
+    refused precisely as modules are — the same rule, and the same gap, until
+    this node closes it for both.
+
+- id: gate-pages-may-import-a-service
+  title: The page boundary names modules and adapters, and not services
+  phase: 0
+  depends_on: [gate-service-boundary-rules]
+  spec: PIPELINE.md#the-gates
+  produces:
+    - eslint.config.mjs
+    - templates/eslint.config.mjs
+    - tests/scaffold/eslint-boundaries.test.ts
+    - tasks/backlog.yaml
+    - tests/baseline.json
+  done_when:
+    gates: [lint, types, boundaries, tests]
+    assertions:
+      - "A page importing a capability service directly is refused, as it already is for a module"
+      - "The route layer keeps whatever access it has today"
+  risk: low
+  status: todo
+  note: >
+    RECORDED, NOT FIXED. Raised by the implementer of gate-service-boundary-rules,
+    which listed four changes and did not list this one; it declined to decide
+    unilaterally, correctly.
+
+    eslint block 3 restricts pages from importing `@/lib/modules/**` and
+    `@/lib/adapters/**`. It does not name `@/lib/services/**`, so once the Alert
+    Manager exists a page may import it directly, bypassing the seam ADR-021
+    exists to keep callable. CLAUDE.md rule 2 says a page renders and rule 4 says
+    a module's public surface is its index.ts; neither carves out a capability
+    service.
+
+    It costs nothing today because lib/services/ is empty. It stops costing
+    nothing the moment service-alerts-surface-and-lifecycle lands, which is why
+    it is recorded now rather than after.
