@@ -1161,7 +1161,7 @@
       - "The tables with no field-level shape are listed, split by owner and by whether they are already built"
       - "The list is reported and nothing is written — no shape is invented by this task"
   risk: low
-  status: todo
+  status: done
   note: >
     data-model.md says up front that it covers "the shapes that changed or are
     new in the target" and that unchanged tables are not repeated. That is
