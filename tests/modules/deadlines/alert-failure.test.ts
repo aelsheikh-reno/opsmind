@@ -463,32 +463,49 @@ describe("the invariants, over every combination of faults and refusals", () => 
     withUnwatched.flatMap((unwatchedIn) => refusals.map((refuses) => ({ blind, unwatchedIn, refuses }))),
   );
 
-  for (const { blind, unwatchedIn, refuses } of cases) {
+  /**
+   * Which areas the run may declare complete, derived from the WORLD rather
+   * than from what the module reported: an area with no calendar was never
+   * scored, and an area named by a REFUSED alert was not fully checked
+   * (ADR-040, "Consequences").
+   *
+   * Computed at collection time, not inside the case, because it decides
+   * whether the combination is one this node may assert at all.
+   */
+  const completeAreas = ({ blind, unwatchedIn, refuses }: Case): string[] => {
+    const refused = new Set<string>();
+    if (refuses.includes(MISSING_CALENDAR_POLICY)) for (const id of blind) refused.add(id);
+    if (refuses.includes(NO_THRESHOLD_POLICY)) for (const id of unwatchedIn) refused.add(id);
+    return ALL.filter((id) => !blind.includes(id) && !refused.has(id));
+  };
+
+  for (const scenarioCase of cases) {
+    const { blind, unwatchedIn, refuses } = scenarioCase;
+    const expectComplete = completeAreas(scenarioCase);
+
+    // A run in which NO area comes out complete is the one thing ADR-040
+    // expressly leaves open: "Whether a run in which every alert call failed
+    // should still count as a run — reported, with every area incomplete — or
+    // as no run at all." Asserting either way here would invent the decision.
+    //
+    // SKIPPED RATHER THAN DROPPED, on purpose. A silent `return` inside the
+    // body reads as a passing assertion and is worth nothing; a skip says in
+    // the report that this combination is waiting on a decision, and it is the
+    // placeholder to un-skip the day that decision lands. It still counts in
+    // the total, so the "did everything run" ratchet is unaffected either way.
+    const runCase = expectComplete.length === 0 ? it.skip : it;
+    const openQuestion = expectComplete.length === 0 ? " — every area incomplete, left open by ADR-040" : "";
     const name =
       `no calendar in [${blind}], unconfigured type in [${unwatchedIn}], ` +
-      `the Alert Manager refuses [${refuses}]`;
+      `the Alert Manager refuses [${refuses}]${openQuestion}`;
 
-    it(name, async () => {
+    runCase(name, async () => {
       const registrations: Registration[] = ALL.map((id, index) => breaching(`document:${index}`, id));
       for (const [index, id] of unwatchedIn.entries()) {
         registrations.push(unwatched(`document:9${index}`, id));
       }
       const calendars = ALL.filter((id) => !blind.includes(id)).map((id) => CALENDARS[id]);
       const state = scenario(registrations, calendars, alertEngine({ policies: refuses }));
-
-      // Which areas the run cannot declare complete, derived from the world
-      // rather than from what the module reported: an area with no calendar was
-      // never scored, and an area named by a REFUSED alert was not fully
-      // checked (ADR-040, "Consequences").
-      const refusedAreas = new Set<string>();
-      if (refuses.includes(MISSING_CALENDAR_POLICY)) for (const id of blind) refusedAreas.add(id);
-      if (refuses.includes(NO_THRESHOLD_POLICY)) for (const id of unwatchedIn) refusedAreas.add(id);
-      const expectComplete = ALL.filter((id) => !blind.includes(id) && !refusedAreas.has(id));
-
-      // A run with no complete area at all is the case ADR-040 leaves open
-      // ("whether a run in which every alert call failed should still count as
-      // a run"), so it is not asserted here in either direction.
-      if (expectComplete.length === 0) return;
 
       await sweep(state);
       const run = onlyRun(state.alerts);

@@ -2956,6 +2956,7 @@
     - lib/modules/deadlines/index.ts
     - tests/modules/deadlines/
     - docs/architecture/components-core-deadline-monitor.md
+    - docs/architecture/flows-alerting.md
     - tests/baseline.json
   done_when:
     gates: [lint, types, boundaries, tests, coverage]

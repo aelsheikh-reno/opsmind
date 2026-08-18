@@ -488,6 +488,8 @@ This is the strongest evidence for keeping real PostgreSQL in CI. No amount of l
 
 **Consequences.** `AlertManager.raiseAlert` gains an area parameter, and the merged deadline monitor changes with it rather than around it. **An area whose alert could not be raised was not fully checked, so the run reports that area incomplete** — otherwise (3) silently undoes (1), by letting absence close an alert the run failed to raise. That is a derived constraint, not a separate decision: it is what (1) means once (3) exists.
 
+**The argument is a LIST, and that is derived rather than decided.** The decision above says "the area", singular, and the reviewer of the implementing change was right to ask. It follows necessarily from a rule that was already settled: one misconfiguration alert is raised per unconfigured deadline TYPE per run, not one per deadline — and a deadline type spans every jurisdiction holding a registration of it. A singular parameter would force either one alert per jurisdiction, contradicting the per-type rule, or an alert that names one scope while silently affecting several, which is the exact unsoundness this record exists to remove. So `areas: readonly string[]`, and an alert that belongs to one scope passes a list of one. **Ahmed has not ruled on this**; it is recorded here so the Alert Manager is not written against an ambiguity, and it is the shape to confirm or reject before `service-alerts-surface-and-lifecycle` compiles a client against it.
+
 **Not settled here.** Whether a run in which every alert call failed should still count as a run — reported, with every area incomplete — or as no run at all.
 
 

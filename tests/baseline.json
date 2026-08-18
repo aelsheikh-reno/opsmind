@@ -1,6 +1,6 @@
 {
   "tests": 1080,
-  "coverage_bp": 9800,
+  "coverage_bp": 9900,
   "why": [
     "The number of tests the suite must not drop below.",
     "",
@@ -38,7 +38,7 @@
     "measured at the time (240 of 303 lines). The number is low because six",
     "lib/kernel/*/repository.ts files are Prisma plumbing no unit test can reach.",
     "They are deliberately NOT excluded from coverage — raising them is",
-    "kernel-repository-integration-tests, and that node bumps this key. Raised to 9924 by that node (393 of 396 lines): all six are at 100% of lines, measured with `npx vitest run --coverage` and computed from the DA records in coverage/lcov.info.",
+    "kernel-repository-integration-tests, and that node bumps this key. Raised to 9924 by that node (393 of 396 lines): all six are at 100% of lines, measured with `npx vitest run --coverage` and computed from the DA records in coverage/lcov.info. Raised from 9800 to 9900 by deadlines-alert-contract-scope-and-failure, which measured 9928 (414 of 417). NOT to the measured peak, and the arithmetic is the reason: 417 executable lines make one line 24 basis points, so a ratchet pinned at 9928 fails on a single line and CI has previously measured about one line lower than the same commit measured locally. 9900 clears that delta and still closes most of the 128-point gap the old 9800 was leaving open. The hair-trigger argument that kept it at 9800 was about gate-total-cov-nondeterministic, which is now closed as resolved, so the loose floor no longer has that justification — only the one-line CI delta, which is what 9900 is sized against.",
     "",
     "THIS INTEGER IS ITSELF PART OF THE RATCHET. The gate resolves it from the",
     "PR base as well as from the working tree, because a ratchet read only from",

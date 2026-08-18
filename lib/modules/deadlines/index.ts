@@ -324,11 +324,12 @@ export async function runDeadlineSweep(deps: DeadlineDeps): Promise<SweepReport>
   const scopes: RunScope[] = [];
   let evaluated = 0;
 
-  // One RunScope per jurisdiction, always: a scope already declared is
-  // downgraded in place rather than appended a second time, because a report
-  // carrying the same area twice — once complete, once not — says both and
-  // means neither. The earlier reason is kept alongside the new one; each names
-  // a different thing the run could not do.
+  // The one door through which a scope becomes incomplete, whether that is its
+  // first declaration or a downgrade of one already declared complete. One
+  // RunScope per jurisdiction, always: a report carrying the same area twice —
+  // once complete, once not — says both and means neither. The earlier reason
+  // is kept alongside the new one; each names a different thing the run could
+  // not do, and a jurisdiction can be both unscorable and alert-refused.
   const markUnchecked = (jurisdictionId: string, reason: string): void => {
     const declared = scopes.find((scope) => scope.jurisdictionId === jurisdictionId);
     if (!declared) {
@@ -365,11 +366,7 @@ export async function runDeadlineSweep(deps: DeadlineDeps): Promise<SweepReport>
   for (const [jurisdictionId, rows] of byJurisdiction) {
     const calendar = await deps.calendars.forJurisdiction(jurisdictionId);
     if (!calendar) {
-      scopes.push({
-        jurisdictionId,
-        complete: false,
-        reason: `no BusinessCalendar for jurisdiction ${jurisdictionId}; its deadlines were not scored`,
-      });
+      markUnchecked(jurisdictionId, `no BusinessCalendar for jurisdiction ${jurisdictionId}; its deadlines were not scored`);
       await raiseOrMarkUnchecked("jurisdiction", jurisdictionId, MISSING_CALENDAR_POLICY, [jurisdictionId], {
         jurisdictionId,
         unscoredRegistrations: rows.length,
