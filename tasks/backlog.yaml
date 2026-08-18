@@ -3149,7 +3149,7 @@
     assertions:
       - "Recording a merged node's status reaches main without bypassing a required status check"
   risk: low
-  status: todo
+  status: done
   note: >
     RECORDED, NOT INVESTIGATED. Observed 2026-08-18. build-task.md step 12 says
     to commit the mark-task-done.sh result to main as a follow-up, and doing so
