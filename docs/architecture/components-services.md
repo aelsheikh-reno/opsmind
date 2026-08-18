@@ -27,6 +27,9 @@
 | **Authorization** | getPermissions(userId) → role, entities[], permissions[] · check(userId, action, resource). Owns role definitions, the grant matrix, entity scope, per-app vocabulary. One-time claim tokens | Passwords or sessions — authentication is the IdP's job; and the IdP must never know payroll:approve exists ([ADR-007](decisions.md#adr-007)) |
 
 
+> **Note** — **The port is declared on BOTH sides, and the dependency points one way only.** `lib/services/alerts/index.ts` declares its own `ReportedAlert`, `RunScope` and client type and imports nothing from any caller; the caller declares the same shapes as `AlertManager`. TypeScript is structural, so the two meet without either importing the other — which is the mechanism [ADR-043](decisions.md#adr-043) relies on, and the only arrangement in which "must never know" survives contact with the compiler. A service that imported its caller's port type would name that caller in its own source and could not be lifted into a second codebase. **The compile-level assignability check therefore lives outside the service** — in the tests, bound with an explicit annotation and no cast, so a signature disagreement is a red `npm run typecheck` rather than a runtime surprise.
+
+
 ## The two hard integration seams
 
 **Work Items → core callback.** Resolving an item means the core must act — re-run a rule, push an expense. The contract: a signed webhook to `/internal/work-items/resolved` plus a periodic reconciliation sweep, the same pattern as Drive ([ADR-012](decisions.md#adr-012)). While in-process it is a function call; the contract is what matters.
