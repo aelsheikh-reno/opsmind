@@ -2712,9 +2712,12 @@
     This node does not choose. It is the reason the node is written down before
     it is available.
 
-    THE DOCUMENTED CONTRACT IS AMENDED HERE, not the code: both
-    flows-alerting.md and components-services.md print a three-argument
-    reportRun while the merged port takes four.
+    THE DOCUMENTED CONTRACT WAS ALREADY AMENDED, by
+    deadlines-alert-contract-vocabulary on 2026-08-18: flows-alerting.md and
+    components-services.md both printed a three-argument reportRun while the
+    merged port took four, and that node was renaming the same fields in both
+    files anyway — leaving one correct and its sibling wrong would have been
+    worse than either. Nothing is owed here; check them rather than assume.
 
     Roughly 200-260 implementation lines. compliance, and never auto-merged:
     this is the code that decides when a compliance alert is allowed to close.
@@ -3262,3 +3265,48 @@
     gate would not catch a future task that skipped its way to a flat count,
     which is precisely the "did everything still RUN" question this ratchet
     exists to answer and the one no other gate asks.
+
+- id: deadlines-alert-contract-vocabulary
+  title: The alert contract names its scope generically, so the engine need not say jurisdiction
+  phase: 1
+  depends_on: [deadlines-alert-contract-scope-and-failure]
+  spec: docs/architecture/decisions.md
+  also_read:
+    - docs/architecture/flows-alerting.md
+    - docs/architecture/components-services.md
+    - docs/architecture/components-services.md
+  produces:
+    - lib/modules/deadlines/index.ts
+    - tests/modules/deadlines/
+    - docs/architecture/flows-alerting.md
+    - docs/architecture/components-core-deadline-monitor.md
+    - docs/architecture/decisions.md
+    - tasks/backlog.yaml
+    - tests/baseline.json
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "No type on the AlertManager port names a jurisdiction, or any other OpsMind noun"
+      - "A caller can read a scope off the port without spelling an OpsMind word"
+      - "OpsMind's own storage and inputs still name a jurisdiction, and no migration is required"
+      - "A sweep reports the same scopes and the same breaches as before, under the new field name"
+  risk: compliance
+  status: todo
+  note: >
+    ADR-043. The other half of ADR-040, found by that node's reviewer before a
+    client had been written against the port.
+
+    THE COLLISION IS CONCRETE, not stylistic. service-alerts-surface-and-lifecycle
+    asserts both that its client satisfies this port exactly and that no file in
+    the service names a jurisdiction. TypeScript is structural, so reading a scope
+    means spelling the field name — the engine would carry the word in order to
+    find a value it neither understands nor cares about.
+
+    TWO FIELD DECLARATIONS CHANGE, of 177 mentions in the repository. Everything
+    else is OpsMind addressing itself, which is allowed: it is a compliance system
+    for five jurisdictions and is entitled to know what one is. No column is
+    renamed and no migration is required.
+
+    It lands NOW rather than later because the cost of a second edit to a merged
+    compliance module is one edit today and two once a client compiles against the
+    old names.

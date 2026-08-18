@@ -235,7 +235,7 @@ describe("an area whose alert failed is reported incomplete", () => {
   it("reports exactly one RunScope per jurisdiction — a downgrade, never a second row", async () => {
     // `RunScope` is the unit of completeness, and two rows for one jurisdiction
     // is not a scope declaration, it is an ambiguity. An engine reading
-    // `scopes.find(row => row.jurisdictionId === "AE")` would resolve by
+    // `scopes.find(row => row.area === "AE")` would resolve by
     // absence or not depending on emission order.
     const state = spanningRefusal();
     await sweep(state);

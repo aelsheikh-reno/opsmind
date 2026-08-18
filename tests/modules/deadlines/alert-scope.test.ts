@@ -17,9 +17,15 @@
 //     raiseAlert(fingerprint, severity, policyId, areas, context)
 //
 // with `areas` a list of OPAQUE scope keys in the same vocabulary as
-// `RunScope.jurisdictionId` (flows-alerting.md, "The contract — three verbs").
-// It is a LIST because one alert legitimately spans several scopes: an
-// unconfigured deadline type affects every jurisdiction holding one.
+// `RunScope.area` (flows-alerting.md, "The contract — three verbs"). It is a
+// LIST because one alert legitimately spans several scopes: an unconfigured
+// deadline type affects every jurisdiction holding one.
+//
+// That scope field was `RunScope.jurisdictionId` when these cases were written.
+// ADR-043 renamed it to `area`, so that the port carries one vocabulary and
+// none of it is OpsMind's. Nothing this file asserts changed with it — the
+// cases below are about WHERE the scope travels and WHICH areas it names, and
+// the field's name is pinned by alert-vocabulary.test.ts instead.
 //
 // The failure-handling half of ADR-040 — assertions 2, 3 and 4 — is in
 // alert-failure.test.ts. Splitting them keeps a disagreement about WHERE the
@@ -169,7 +175,7 @@ describe("the area is an argument, in the position the contract fixes", () => {
     // same vocabulary as reportRun's scopes. The engine compares them and never
     // interprets them." So nothing on this path may normalise, upper-case or
     // validate the key against a register of jurisdictions — the Alert Manager
-    // matches it against `RunScope.jurisdictionId` by equality and by nothing
+    // matches it against `RunScope.area` by equality and by nothing
     // else, and a key rewritten on one path and not the other stops matching.
     // AE is present and healthy only so that the run has a complete scope: what
     // a run in which EVERY area is incomplete should do is expressly left open

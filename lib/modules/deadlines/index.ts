@@ -69,15 +69,18 @@ export interface DeadlineStore {
 /**
  * One breached deadline, in the shape the Alert Manager takes.
  *
- * `jurisdictionId` is the completeness scope it was scored in (see RunScope).
- * It has to travel with the alert: resolution by absence applies only inside a
- * scope the run declared complete, and a fingerprint —
- * `{tenant}:{app}:{source}:{entity}:{policy}` — carries no jurisdiction segment.
+ * `area` is the completeness scope it was scored in (see RunScope), and it has
+ * to travel with the alert: resolution by absence applies only inside a scope
+ * the run declared complete, and a fingerprint —
+ * `{tenant}:{app}:{source}:{entity}:{policy}` — carries no scope segment. The
+ * value this module puts there is a jurisdiction; the name does not say so,
+ * because the engine reading it serves callers that scope by something else
+ * (ADR-043, ADR-039).
  */
 export interface ReportedAlert {
   fingerprint: string;
   severity: Severity;
-  jurisdictionId: string;
+  area: string;
 }
 
 /**
@@ -92,7 +95,9 @@ export interface ReportedAlert {
  * because aborting takes every jurisdiction dark for one bad calendar.
  */
 export interface RunScope {
-  jurisdictionId: string;
+  /** Opaque to the Alert Manager, matching `raiseAlert`'s `areas` — one
+   *  vocabulary across the port, not two (ADR-043). Here it is a jurisdiction. */
+  area: string;
   complete: boolean;
   /** The jurisdiction's own civil date, when it was scored. Survives a
    *  downgrade: a scope can be scored and still not fully checked. */
@@ -331,9 +336,9 @@ export async function runDeadlineSweep(deps: DeadlineDeps): Promise<SweepReport>
   // is kept alongside the new one; each names a different thing the run could
   // not do, and a jurisdiction can be both unscorable and alert-refused.
   const markUnchecked = (jurisdictionId: string, reason: string): void => {
-    const declared = scopes.find((scope) => scope.jurisdictionId === jurisdictionId);
+    const declared = scopes.find((scope) => scope.area === jurisdictionId);
     if (!declared) {
-      scopes.push({ jurisdictionId, complete: false, reason });
+      scopes.push({ area: jurisdictionId, complete: false, reason });
       return;
     }
     declared.complete = false;
@@ -382,10 +387,10 @@ export async function runDeadlineSweep(deps: DeadlineDeps): Promise<SweepReport>
       // reasons: one was scored and found clear, the other could not be scored
       // at all and is raised as a misconfiguration below.
       if (verdict.status === "breached") {
-        breaches.push({ fingerprint, severity: verdict.severity, jurisdictionId });
+        breaches.push({ fingerprint, severity: verdict.severity, area: jurisdictionId });
       }
     }
-    scopes.push({ jurisdictionId, complete: true, civilDate });
+    scopes.push({ area: jurisdictionId, complete: true, civilDate });
   }
 
   // One alert per unconfigured TYPE per run, not one per deadline: a missing
