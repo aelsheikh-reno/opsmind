@@ -3072,7 +3072,7 @@
     assertions:
       - "A full gate run with every integration file present reaches the same verdict every time"
   risk: low
-  status: todo
+  status: done
   note: >
     RECORDED, NOT INVESTIGATED. Observed 2026-08-18 on
     module-deadlines-repository, which adds a seventh integration file and so a
