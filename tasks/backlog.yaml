@@ -2480,7 +2480,7 @@
       - "Nothing in the shape names a jurisdiction, a deadline or a document — the scope key is opaque and is documented as opaque"
       - "The questions this shape cannot answer are listed in open-items.md and none of them is answered here"
   risk: low
-  status: todo
+  status: done
   note: >
     Written before the store, for the reason spec-coverage-audit exists:
     inventing a data model inside an implementation PR under a size budget is
