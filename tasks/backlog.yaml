@@ -2507,6 +2507,24 @@
   phase: 1
   depends_on: [module-deadlines-sweep, shapes-alert-manager, deadlines-alert-contract-scope-and-failure]
   spec: docs/architecture/flows-alerting.md
+  size_total: 2800
+  size_waiver_reason: >
+    2650 added lines, of which 139 are implementation. Ahmed, 2026-08-19. The
+    shape ADR-042 raised the budget for, arriving in the first node after it:
+    tests and fixtures, not code. 653 lines are the source reader and fixture
+    surface that the five remaining alert nodes import rather than rewrite, and
+    660 are the transition cases the coverage gate demanded after refusing the
+    first attempt at 50% of its changed lines — nine exported transitions had no
+    caller.
+
+    There is nothing to split. The implementation is 139 lines of one coherent
+    public surface, and moving tests to a follow-up PR would land a compliance
+    service with half its coverage and need a waiver for that instead. Cutting
+    tests to fit a line budget is what excluding them from size-impl exists to
+    prevent.
+
+    2800 rather than 2650 so a review round does not have to come back for
+    another fifty lines.
   also_read:
     - docs/architecture/components-services.md     # what it must never know
     - docs/architecture/architecture-containers.md # ADR-021, in-process behind the target interface
