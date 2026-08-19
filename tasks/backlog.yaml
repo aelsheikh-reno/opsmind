@@ -3666,3 +3666,45 @@
 
     I described this run to Ahmed as a working safety net on 2026-08-18. It was
     not, and had not been at any point.
+
+- id: gate-boundaries-non-async-transaction
+  title: A transaction with a non-async callback is still invisible to the ownership check
+  phase: 0
+  depends_on: [gate-boundaries-blind-to-a-transaction]
+  spec: PIPELINE.md#the-gates
+  produces:
+    - scripts/check-boundaries.sh
+    - tests/scaffold/service-boundary-rules.test.ts
+    - tasks/backlog.yaml
+    - tests/baseline.json
+  done_when:
+    gates: [lint, types, boundaries, tests]
+    assertions:
+      - "A table touched inside db.$transaction((tx) => ...) with no async keyword is reported by name"
+      - "No existing repository changes verdict, measured by comparing the touched-table set of every one"
+  risk: low
+  status: todo
+  note: >
+    Left uncovered by gate-boundaries-blind-to-a-transaction and recorded rather
+    than smuggled in. The handle regex requires `async` before the callback, so
+    `db.$transaction((tx) => tx.alert.findMany())` reads as nothing.
+
+    THE REVIEWER DISAGREED WITH LEAVING IT AND WAS PROBABLY RIGHT. The
+    implementer judged the non-async form exotic; the reviewer judged it
+    ordinary TypeScript for a one-statement transaction, and making `async`
+    optional a one-token change whose worst case is a demand for a declaration
+    rather than a missed violation. It is a node rather than a same-PR edit only
+    because a change to this script without a case is untested behaviour in the
+    file that carries the whole of CLAUDE.md rule 1 for a repository.
+
+    Two other limits are documented in the script itself and are NOT this node:
+    a destructured callback parameter, which is genuinely exotic, and a handle
+    whose name collides with an unrelated variable, which false-alarms rather
+    than misses.
+
+    ALSO WORTH FOLDING IN WHEN THIS IS OPENED, from the same review: raw SQL is
+    covered per-repository by three separate source-reading tests rather than
+    centrally, so all eight repositories are protected today and a ninth is
+    protected only if its author remembers to write that test. Nothing is
+    unprotected; the guarantee wants moving into the shared script the next time
+    this machinery is open.

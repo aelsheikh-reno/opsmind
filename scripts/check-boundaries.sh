@@ -33,11 +33,47 @@ for repo in "${repositories[@]}"; do
     findings+=("$repo has no '// owns:' declaration listing its tables (see CLAUDE.md)")
     continue
   fi
+  # The declaration as a list of whole lowercase names, one per line. The
+  # comparison below is equality: a substring match let a repository declaring
+  # `AlertEvent` touch `Alert` undetected, and this schema is built from such
+  # pairs (Person/PersonRole, Deadline/DeadlineRegistration). Split on commas
+  # and spaces alike so a declaration written either way is read the same.
+  declared=$(echo "$owned" | tr -s ', \t' '\n\n\n' | tr '[:upper:]' '[:lower:]' | grep -v '^$')
+
+  # Inside `db.$transaction(async (tx) => ...)` a table is reached as
+  # `tx.alert`, which a `db.` pattern cannot see — so read the transaction
+  # handle too. Its name is the author's choice, not always `tx`, so take it
+  # from the source: the newlines are squeezed out first because the callback
+  # is commonly wrapped onto the line after `$transaction(`, and the second
+  # grep keeps the trailing identifier of each match, which is the parameter.
+  handles='db'
+  while IFS= read -r handle; do
+    [[ -n "$handle" ]] && handles="$handles|$handle"
+  done < <(tr '\n' ' ' < "$repo" \
+           | grep -oE '\$transaction\([[:space:]]*async[[:space:]]*\(?[[:space:]]*[A-Za-z_][A-Za-z0-9_]*' \
+           | grep -oE '[A-Za-z_][A-Za-z0-9_]*$' | sort -u)
+
+  # WHAT THIS READER DOES NOT SEE, measured rather than supposed. Each fails in
+  # the safe direction — a missed violation, or a demand for a declaration —
+  # but a future author needs to know without rediscovering it:
+  #   · `$transaction((tx) => ...)` with a NON-ASYNC callback. Ordinary
+  #     TypeScript for a one-statement transaction; making `async` optional is a
+  #     one-token change and wants a case with it.
+  #   · a DESTRUCTURED parameter, `async ({ alert }) => ...`. Exotic, since it
+  #     means destructuring model delegates off the client.
+  #   · a handle whose name collides with an unrelated variable: a handle named
+  #     `t` in a file containing `t.format.call(...)` demands a declaration for
+  #     `format`. A false alarm, not a miss.
+  # Covered and easy to assume otherwise: a type annotation
+  # `async (tx: Prisma.TransactionClient) =>`, and a parameter with no
+  # parentheses, `async tx =>`. Both are read correctly.
+
   while IFS= read -r model; do
     [[ -z "$model" ]] && continue
-    echo "$owned" | grep -qi "$model" \
+    grep -qxF "$(echo "$model" | tr '[:upper:]' '[:lower:]')" <<<"$declared" \
       || findings+=("$mod touches '$model' which it does not declare owning")
-  done < <(grep -oE 'db\.[a-zA-Z]+\.' "$repo" | sed 's/db\.//; s/\.//' | sort -u)
+  done < <(grep -oE "(${handles})\.[a-zA-Z]+\." "$repo" \
+           | sed -E "s/^(${handles})[.]//; s/[.]$//" | sort -u)
 done
 
 # obfuscated database access is itself a violation — casting or bracket-indexing
