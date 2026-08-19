@@ -2536,7 +2536,6 @@
     - docs/architecture/components-services.md
     - tests/baseline.json
     - tasks/backlog.yaml
-    - PIPELINE.md
   done_when:
     gates: [lint, types, boundaries, tests, coverage]
     assertions:
