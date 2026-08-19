@@ -91,4 +91,29 @@ matviews, so their absence from the schema is expected rather than a gap.
 | How late is dark | `expectedEvery` gives a cadence and none of the pages gives a tolerance. A source a minute late is not dark; a source a day late is |
 | Partial resolution across areas | [ADR-044](decisions.md#adr-044) records this as unsettled rather than answered: no rule in service today has a per-area fault spanning several areas, and an alert has no per-area state between open and resolved |
 
+## Suite sightings that could not be reproduced
+
+> A sighting is recorded the first time, or a recurrence has nothing to be a
+> recurrence of. Each was withdrawn as a claim under `PIPELINE.md`'s rule that a
+> figure which cannot be reproduced is withdrawn rather than defended — this
+> table is not evidence that anything is wrong, it is what a second sighting
+> would be measured against.
+
+| Date | What was seen | Why it was withdrawn |
+|---|---|---|
+| 2026-08-19 | `tests/integration/services/alerts/raise-and-resolve.test.ts` reported 2 failures — `keeps one row when the identical raise arrives again` and `keeps one row when the second raise differs in policy, areas and context` — during a mutation run whose patch touched only the in-memory store, which that Prisma-backed path does not use | No error text captured, and 11 identical runs of the identical mutated tree could not repeat it. Suspected the pool contention `vitest.config.ts` already documents: full 11-file runs fired back to back while the previous run's engines were still tearing down. Raised by the test-author of `service-alerts-raise`, which withdrew it unprompted |
+
+**Why this table exists at all.** Three consecutive nodes leaked exactly this kind
+of knowledge into places that do not survive a merge — `gate-boundaries-blind-to-a-transaction`
+left three known evasions in a pull request description,
+`service-alerts-store` left the transaction blind spot in one comment in one
+file, and this observation existed only in a message to a reviewer. What the
+build knows it does **not** check is the most expensive thing to rediscover, and
+it is the thing least likely to be written down, because there is no failing test
+demanding it.
+
+**This is not `defects.md`.** That register is Tier-0 faults in the **legacy**
+build, each fixable inside the current monolith. These are observations about
+this build's own test harness, and most of them will turn out to be nothing.
+
 > **Note** — Everything else that was ever open in this design now has a numbered record in [decisions](decisions.md). If a question isn't answered anywhere on this site, that is a gap — raise it and it becomes either a page edit or ADR-026.
