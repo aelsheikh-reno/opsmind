@@ -2665,6 +2665,7 @@
     - tests/integration/services/alerts/
     - tests/baseline.json
     - tasks/backlog.yaml
+    - docs/architecture/open-items.md
   done_when:
     gates: [lint, types, boundaries, tests, coverage]
     assertions:
