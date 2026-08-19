@@ -3555,3 +3555,40 @@
     but the conclusion was too strong: the underlying instability was reduced, not
     removed, and it has surfaced again on a different gate. Reopening that node
     is not the answer — this one names a concrete mechanism it did not.
+
+- id: gate-boundaries-blind-to-a-transaction
+  title: A table reached through db.$transaction is invisible to the ownership check
+  phase: 0
+  depends_on: [gate-service-boundary-rules]
+  spec: PIPELINE.md#the-gates
+  produces:
+    - scripts/check-boundaries.sh
+    - tests/scaffold/service-boundary-rules.test.ts
+    - tasks/backlog.yaml
+    - tests/baseline.json
+  done_when:
+    gates: [lint, types, boundaries, tests]
+    assertions:
+      - "A repository touching an undeclared table inside db.$transaction is reported by name, exactly as the direct form is"
+      - "A repository whose transaction touches only declared tables stays clean"
+  risk: low
+  status: todo
+  note: >
+    Found by the implementer of service-alerts-store, 2026-08-19, which avoided
+    transactions and said so in a comment rather than relying on the gate. Verified
+    independently at that commit.
+
+    check-boundaries.sh line 40 reads the tables a repository touches with
+    `grep -oE 'db\.[a-zA-Z]+\.'`. Inside `db.$transaction(async (tx) => ...)`
+    every table is reached as `tx.alert`, `tx.alertEvent` and so on, which that
+    pattern cannot see. So a repository can touch a table it does not declare in
+    its `// owns:` line and the ownership check stays silent — the one gate whose
+    entire job is catching that.
+
+    IT IS NOT HYPOTHETICAL FOR THIS SERVICE. An alert and its event log are
+    written together and a transaction is the natural way to do it; the store
+    used Prisma nested writes only because the author knew the gate could not
+    see the alternative. The next repository will not necessarily know.
+
+    eslint does NOT cover the gap either: block 2 permits repository.ts to import
+    the client, so nothing there objects to what it does with it afterwards.
