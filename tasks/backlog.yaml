@@ -2609,6 +2609,7 @@
     - tests/integration/services/alerts/
     - docs/architecture/data-ownership.md
     - tests/baseline.json
+    - tasks/backlog.yaml
   done_when:
     gates: [lint, types, boundaries, tests, coverage]
     assertions:
@@ -2654,7 +2655,7 @@
 - id: service-alerts-raise
   title: Alert Manager — raiseAlert and resolveAlert, deduplicated by fingerprint
   phase: 1
-  depends_on: [service-alerts-store]
+  depends_on: [service-alerts-store, gate-boundaries-blind-to-a-transaction]
   spec: docs/architecture/flows-alerting.md
   also_read:
     - lib/modules/deadlines/index.ts               # the two misconfiguration alerts, evaluate-on-register
@@ -3555,3 +3556,66 @@
     but the conclusion was too strong: the underlying instability was reduced, not
     removed, and it has surfaced again on a different gate. Reopening that node
     is not the answer — this one names a concrete mechanism it did not.
+
+- id: gate-boundaries-blind-to-a-transaction
+  title: The ownership check misses a table behind a transaction, and one whose name is a prefix
+  phase: 0
+  depends_on: [gate-service-boundary-rules]
+  spec: PIPELINE.md#the-gates
+  produces:
+    - scripts/check-boundaries.sh
+    - tests/scaffold/service-boundary-rules.test.ts
+    - tasks/backlog.yaml
+    - tests/baseline.json
+  done_when:
+    gates: [lint, types, boundaries, tests]
+    assertions:
+      - "A repository touching an undeclared table inside db.$transaction is reported by name, exactly as the direct form is"
+      - "A repository whose transaction touches only declared tables stays clean"
+      - "Declaring AlertEvent does not license touching Alert: the comparison is against whole names, never a substring"
+      - "A repository declaring every table it touches stays clean, and no existing repository changes verdict"
+  risk: low
+  status: todo
+  note: >
+    Found by the implementer of service-alerts-store, 2026-08-19, which avoided
+    transactions and said so in a comment rather than relying on the gate. Verified
+    independently at that commit.
+
+    check-boundaries.sh line 40 reads the tables a repository touches with
+    `grep -oE 'db\.[a-zA-Z]+\.'`. Inside `db.$transaction(async (tx) => ...)`
+    every table is reached as `tx.alert`, `tx.alertEvent` and so on, which that
+    pattern cannot see. So a repository can touch a table it does not declare in
+    its `// owns:` line and the ownership check stays silent — the one gate whose
+    entire job is catching that.
+
+    IT IS NOT HYPOTHETICAL FOR THIS SERVICE. An alert and its event log are
+    written together and a transaction is the natural way to do it; the store
+    used Prisma nested writes only because the author knew the gate could not
+    see the alternative. The next repository will not necessarily know.
+
+    eslint does NOT cover the gap either: block 2 permits repository.ts to import
+    the client, so nothing there objects to what it does with it afterwards.
+
+    A SECOND BLIND SPOT IN THE SAME LOOP, found by the reviewer of
+    service-alerts-store and verified independently: line 36 compares with
+    `echo "$owned" | grep -qi "$model"`, a SUBSTRING match. Declaring AlertEvent
+    therefore licenses touching Alert, because `alert` occurs inside
+    `alertevent`. Measured: with the declaration cut to `// owns: AlertEvent`
+    and the repository untouched, the gate reports alertSource and says nothing
+    about alert, which is touched and undeclared.
+
+    THIS SCHEMA IS BUILT ENTIRELY FROM SUCH PAIRS — Alert, AlertArea,
+    AlertEvent, AlertSource — and so is the rest: Person and PersonRole,
+    Deadline and DeadlineRegistration. Fix both in one pass: compare against a
+    split, trimmed token list rather than a substring, and read the transaction
+    handle as well as `db`.
+
+    WHY THIS IS NOT LOW. eslint exempts a repository.ts from the import rule
+    ENTIRELY, so for the one file permitted to touch the database
+    check-boundaries.sh is the whole enforcement of CLAUDE.md rule 1 — and
+    data-ownership.md now says exactly that for a packaged service. It goes
+    blind on the most natural thing that file does. The risk field has no value
+    between low and compliance, so the sequencing is enforced instead:
+    service-alerts-raise depends on this node, because composing an alert and
+    its event atomically is the textbook interactive transaction and it lands
+    there.

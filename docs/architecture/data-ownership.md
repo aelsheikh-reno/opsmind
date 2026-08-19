@@ -28,9 +28,12 @@
 | Finance | OpenItem · Settlement · TaxFiling · LeaseSchedule · LoanSchedule · Budget · CapitalInjection · Scenario · ScenarioEvent · commitment_forecast (matview) |
 | Ingestion | IngestionRun · ReviewQueueRef (thin — content lives with Work Items) |
 | Deadline monitor | DeadlineRegistration · ThresholdTable |
-| *Satellites (own stores)* | Alert Manager: alerts, policies, source liveness · Work Items: items, policies, assignments · Authorization: roles, grants, scopes · Connection Manager: connections, credentials · Docgen: template versions |
+| Alert Manager | Alert · AlertArea · AlertEvent · AlertSource |
+| *Capability services, not yet specified as tables* | Work Items: items, policies, assignments · Authorization: roles, grants, scopes · Connection Manager: connections, credentials · Docgen: template versions |
+
+> **Note** — **A packaged capability service is an owner in this table, not a satellite beside it.** [ADR-039](decisions.md#adr-039) made the reuse target of docgen, the Alert Manager, Work Items, Notifications and Authorization an **importable package** rather than a deployment: each brings its own table definitions and runs on the **host application's storage**. So the Alert Manager's four tables are ordinary rows of the map above, owned exclusively and reached only through `lib/services/alerts/index.ts`. The remaining entries stay prose because no one has specified their tables yet — that is a gap in the specification, not a different kind of ownership. `Alert.sourceId` and `AlertEvent.actor` are ids held with no foreign key, for the reason `DeadlineRegistration.jurisdictionId` is: a cross-owner FK is what stops a component being lifted into another codebase.
 
 
 ## Enforcement
 
-Per-module data access wrappers in the core (repository per module, no shared Prisma client reaching across), and network isolation for satellites — they physically cannot reach PostgreSQL. The three current page-level imports of lib/vat, lib/tax and lib/wallet are the violations that motivated the rule; see [presentation](architecture-presentation.md).
+Per-module data access wrappers in the core (repository per module, no shared Prisma client reaching across), and network isolation for the satellites that are still deployed — they physically cannot reach PostgreSQL. **A packaged capability service shares the host's connection by construction, so the boundary lint and `scripts/check-boundaries.sh` are the whole of its enforcement** ([ADR-039](decisions.md#adr-039)): its `repository.ts` declares `// owns:` and is read by the same two checks a module's is. The three current page-level imports of lib/vat, lib/tax and lib/wallet are the violations that motivated the rule; see [presentation](architecture-presentation.md).

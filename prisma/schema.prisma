@@ -624,3 +624,177 @@ model ThresholdTable {
   /// an alert is open — a value that flips is a resolve-then-reopen.
   @@unique([deadlineType, businessDaysBefore])
 }
+
+// ---------------------------------------------------------------------------
+// Alert Manager
+// ---------------------------------------------------------------------------
+//
+// The engine's own tables, on the host application's storage (ADR-039): it is
+// an importable package rather than a deployment, so it brings its definitions
+// and owns them exclusively. Nothing outside lib/services/alerts touches these
+// four, and lib/services/alerts/repository.ts is the only file that may.
+
+/// The engine's severity scale. DELIBERATELY NOT AlertSeverity above, which is
+/// the deadline monitor's: a second product importing this package gets no
+/// deadline monitor (ADR-039), so a caller's enum cannot be the engine's. The
+/// members are identical today, and that is expected — do not de-duplicate.
+enum AlertManagerSeverity {
+  minor
+  major
+}
+
+/// The four of ADR-020 and only these four. "Open but unconfirmed" is
+/// Alert.stale, a flag, because an alert is firing AND unconfirmed at once and
+/// a fifth state would make that pair unrepresentable.
+enum AlertState {
+  firing
+  acknowledged
+  suppressed
+  resolved
+}
+
+/// What happened to an alert. Two of these change no state — a reassert and a
+/// stale flag — which is why fromState and toState are nullable below.
+enum AlertEventKind {
+  raised
+  reasserted
+  severity_raised
+  stale_marked
+  stale_cleared
+  acknowledged
+  suppressed
+  unsuppressed
+  resolved
+}
+
+/// The three shapes of flows-alerting.md. `fire_only` cannot report clean, so
+/// quiet-window auto-resolve is its accepted degraded mode.
+enum AlertSourceKind {
+  repeating
+  direct
+  fire_only
+}
+
+/// One condition, deduplicated. The unique below IS the dedupe: reporting the
+/// same fingerprint twice updates this row and never creates a second identity
+/// for one fact.
+model Alert {
+  id String @id @default(cuid())
+
+  /// Which source raised it. Scopes the fingerprint — two sources may
+  /// legitimately compute the same one. No relation to AlertSource: a source
+  /// with no configuration row still gets its alerts recorded.
+  sourceId String
+
+  /// The source's deterministic identity. OPAQUE — never split, never parsed.
+  /// Callers escape the separator inside a segment, so a reader that cut it up
+  /// would mis-cut and silently merge two identities.
+  fingerprint String
+
+  state AlertState
+
+  /// A flag on an open alert, not a fifth state. Set when a run did not cover
+  /// this alert's areas, cleared when one does.
+  stale Boolean @default(false)
+
+  /// Set by the source, never judged by the engine. Monotonic while open: a
+  /// genuine downgrade is resolve-then-reopen, or dedupe breaks.
+  severity AlertManagerSeverity
+
+  /// What rule fired, recorded even when the engine holds no configuration for
+  /// it. The engine is not the rule book, so an unknown policy is data.
+  policyId String
+
+  /// The source's own diagnostic payload, carried whole. NEVER read for
+  /// scoping (ADR-040) — the engine must not parse a caller's bag.
+  context Json
+
+  /// When this identity first fired. Survives re-firing, unlike lastSeenAt,
+  /// which moves to the most recent run or raise that carried it.
+  firstSeenAt DateTime
+  lastSeenAt  DateTime
+
+  /// Null while open. THE ROW SURVIVES RESOLUTION — nothing is deleted to close
+  /// an alert, and a later raise reopens this same row.
+  resolvedAt DateTime?
+
+  areas  AlertArea[]
+  events AlertEvent[]
+
+  @@unique([sourceId, fingerprint])
+  /// Resolution by absence reads one source's open alerts, every run.
+  @@index([sourceId, state])
+}
+
+/// The scopes an alert belongs to. A row per area rather than an array column
+/// because the nightly question — were ALL of this alert's areas inside the set
+/// the run declared complete — is an anti-join against this table (ADR-043).
+model AlertArea {
+  id String @id @default(cuid())
+
+  alertId String
+  /// Cascade: an area is a property of its alert and has no meaning without it.
+  /// The set is replaced wholesale on each report, never accumulated.
+  alert Alert @relation(fields: [alertId], references: [id], onDelete: Cascade)
+
+  /// An opaque scope key in the caller's own vocabulary. The engine compares it
+  /// and never interprets it: it names no jurisdiction and no document
+  /// (ADR-043), and it names where the impact is, not where the fault is
+  /// (ADR-044).
+  area String
+
+  @@unique([alertId, area])
+}
+
+/// Append-only. NEVER UPDATED, NEVER DELETED: the alert row carries current
+/// state so the hot path does not replay history, and this table is why that
+/// current state can be trusted.
+model AlertEvent {
+  id String @id @default(cuid())
+
+  alertId String
+  /// Restrict, not Cascade: an alert that has a history cannot be deleted, so
+  /// the history cannot be destroyed by closing the thing it describes.
+  alert Alert @relation(fields: [alertId], references: [id], onDelete: Restrict)
+
+  at   DateTime
+  kind AlertEventKind
+
+  /// Null where the kind changes no state — a reassert or a stale flag.
+  fromState AlertState?
+  toState   AlertState?
+
+  /// The User who did it, and NULL MEANS THE SOURCE OR THE ENGINE DID: a human
+  /// resolve must never be indistinguishable from an automatic one. An id with
+  /// no relation — the Kernel owns User, and this service never joins into it.
+  actor String?
+
+  /// The run that caused it, where a run did.
+  runId String?
+
+  /// Required on suppress; carries the incomplete-scope reason on stale_marked.
+  reason String?
+
+  @@index([alertId, at])
+}
+
+/// Who is expected to report, and when each last did. A dead watcher can flag
+/// alerts unconfirmed and can never close them, which is what this table is
+/// read for.
+model AlertSource {
+  /// The identity itself, matching Alert.sourceId. No surrogate key: a source
+  /// is named by the caller and there is nothing else to key it by.
+  sourceId String @id
+
+  kind AlertSourceKind
+
+  /// The expected cadence. Null for `direct`, which is not expected to report
+  /// on one. A whole number rather than a Postgres interval because Prisma has
+  /// no interval scalar; WHAT IT COUNTS IS UNSETTLED and belongs to
+  /// service-alerts-source-registry, so nothing writes a non-null value yet.
+  expectedEvery Int?
+
+  /// Null until it first speaks.
+  lastRunAt DateTime?
+  lastRunId String?
+}
