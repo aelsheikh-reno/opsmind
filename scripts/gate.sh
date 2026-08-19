@@ -12,10 +12,13 @@
 set -uo pipefail
 mode="${1:-full}"
 fail=0
+# $3 is an optional note printed on the verdict line itself. A gate that ran a
+# different measurement from the usual one must say so where the verdict is read,
+# not in a flag nobody passes.
 run() {
   printf '%-14s' "$1"
-  if out=$(eval "$2" 2>&1); then echo "pass"
-  else echo "FAIL"; echo "$out" | tail -25 | sed 's/^/    /'; fail=1; fi
+  if out=$(eval "$2" 2>&1); then echo "pass${3:+  $3}"
+  else echo "FAIL${3:+  $3}"; echo "$out" | tail -25 | sed 's/^/    /'; fail=1; fi
 }
 
 # ---- the subject: which commit, and is it the one you have ------------------
@@ -330,7 +333,109 @@ run "types"  "npx tsc --noEmit"
 # something to keep relying on.
 suite_report="$(mktemp -t opsmind-suite-XXXXXX.json)"
 trap 'rm -f "$suite_report"' EXIT
-run "tests"  "npx vitest run --coverage --reporter=json --outputFile=\"$suite_report\""
+
+# ---- WHICH tests: the pipeline's own suite runs when the pipeline changes ----
+# tests/gates and tests/scaffold are the pipeline testing itself: 9 of 52 test
+# files and 249 of 1350 tests, and those 9 include the cases that shell out and
+# run this machinery for real. A product node pays for all of it on every run to
+# re-prove something it cannot have broken. Wall-clock savings are deliberately
+# not quoted here — three measurements of this change on a shared machine agreed
+# on the direction and on no figure — so the file counts are the claim.
+#
+# So when the COMMITTED DIFF touches none of the paths below, tests/gates and
+# tests/scaffold are skipped. The base is $base — the same one size-impl,
+# size-total and diff-cov measure — rather than a second notion of "the diff"
+# that could disagree with theirs.
+#
+# A PATH IS A TRIGGER IF CHANGING IT COULD CHANGE WHAT THESE TESTS SHOULD SAY.
+# That is the whole rule, and the list below has twice been shorter than the
+# rule. tests/gates and tests/scaffold are triggers for THEMSELVES: with only the
+# machinery listed, a diff confined to tests/gates was scoped, so the one PR that
+# changed those tests was the one PR that did not run them.
+#
+# THE SAME GAP, FOUND AGAIN, IS WHY package.json AND tsconfig.json ARE HERE.
+# Three cases read the REAL repository at run time rather than a fixture:
+# tests/scaffold/package-scripts.test.ts and toolchain.test.ts read package.json,
+# and toolchain.test.ts reads tsconfig.json. A tsconfig.json-only diff was
+# measured as scoped, which means switching `strict` off — making `npx tsc
+# --noEmit` pass trivially on code that should fail — skipped the only test in
+# the repository that would have caught it, and every gate printed pass.
+#
+# package-lock.json IS A TRIGGER TOO, and the argument is the transitive case.
+# toolchain.test.ts checks what is INSTALLED under node_modules, not only what is
+# declared, and node_modules is what `npm ci` builds from the lock: a lock-only
+# change can move an installed version, which is exactly the drift those cases
+# exist to catch. The cost objection — that a lockfile moves on every dependency
+# bump — does not survive measurement. Of the three commits in this repository's
+# whole history that touch package-lock.json, none touches it alone; a bump that
+# edits the manifest already triggers on package.json, so the lock adds runs only
+# in the transitive-only case, which is the case with no other check. n is 3, so
+# re-measure rather than trust this if lock-only churn ever becomes routine.
+#
+# NOT EVERY FILE A CASE READS BELONGS HERE. vitest.config.ts is read by none of
+# them — the references are comments and a fixture string. tests/baseline.json is
+# deliberately excluded: tests/gates/suite-scope.test.ts asks the gate which key
+# holds which floor instead of naming the keys, precisely so that editing a floor
+# does not change what the test says, and making it a trigger would take the
+# scoping away from nearly every node for nothing.
+#
+# THE RULE LIVES HERE AND NOT IN gates.yml, because CI runs this script: one rule
+# in one file decides for both, and a selection rule in the workflow would let
+# local and CI answer different questions (ADR-031, ADR-033).
+#
+# `guards` above is deliberately outside this: scripts/test-guards.sh is a
+# separate gate and the first line of every full invocation, so every run still
+# asks whether each gate blocks what it claims to. What a product node skips is
+# the deeper logic checks, not the question of whether the gates work at all.
+#
+# IT FAILS CLOSED. Scoping requires the diff to have been READ and found clean of
+# pipeline paths; an unreadable base, an unresolvable ref or any git failure runs
+# the FULL suite and says why. "Nothing touched the pipeline" and "what it
+# touched could not be determined" are different facts and must not skip the same
+# tests. Accepted risk, recorded on the backlog node: a product change that trips
+  # AND THE SHARPER FORM OF IT, which is not obvious from the list above: the
+  # pipeline's own tests read REAL repository files and assert on their content.
+  # tests/gates/stale-input.test.ts reads docs/architecture/decisions.md and
+  # asserts ADR-031 states its rule and cites all four instances; size-impl-comments
+  # reads ADR-035 and the size-impl row of PIPELINE.md. So a DOCS-ONLY change that
+  # guts one of those runs no test that would notice.
+  #
+  # docs/ is deliberately NOT a trigger, and the number is why: it appears in 32%
+  # of commits, so adding it flips about half of recent work to a full run and
+  # hands back most of the saving. The failure it guards is a docs-only pull
+  # request gutting an ADR the tests quote — visible in review of that same pull
+  # request, and a loss of a cross-check on prose rather than on behaviour. High
+  # cost, low probability, deliberately accepted.
+  #
+  # tests/kernel/kernel-source.ts IS a trigger, and the distinction is the point:
+  # it is not prose the gate quotes, it is code the gate RUNS. size-impl.mjs
+  # classifies every line of every diff through it, so a change mis-reading a
+  # comment as code moves every size-impl verdict silently. 3% of commits, a
+  # tenth of what docs/ costs. prisma/schema.prisma (6%) is the remaining
+  # candidate and is recorded on the node rather than taken.
+# an assumption inside tests/gates is not caught until a node touches a trigger.
+suite_cmd="npx vitest run --coverage --reporter=json --outputFile=\"$suite_report\""
+suite_mode="full"
+baseline_key="tests"
+if ! pipeline_diff=$(git diff --name-only "$base..." -- \
+                     ':(top)scripts/' ':(top)eslint.config.mjs' \
+                     ':(top)templates/' ':(top).github/workflows/' \
+                     ':(top)tests/gates/' ':(top)tests/scaffold/' \
+                     ':(top)package.json' ':(top)package-lock.json' \
+                     ':(top)tsconfig.json' \
+                     ':(top)tests/kernel/kernel-source.ts' 2>&1); then
+  suite_why="the diff against $base could not be read, so what it touches is unknown"
+elif [[ -n "$pipeline_diff" ]]; then
+  suite_why="the diff touches $(echo "$pipeline_diff" | wc -l | tr -d ' ') pipeline file(s)"
+else
+  # The exclusion and the floor it will be graded against are chosen HERE, in one
+  # branch, and nowhere else — see the ratchet below for why they may not part.
+  suite_mode="scoped"
+  baseline_key="tests_scoped"
+  suite_cmd+=" --exclude 'tests/gates/**' --exclude 'tests/scaffold/**'"
+  suite_why="tests/gates and tests/scaffold skipped; the diff touches neither the pipeline nor its own tests"
+fi
+run "tests"  "$suite_cmd" "[$suite_mode: $suite_why]"
 
 # ---- test count: a ratchet, so the suite cannot quietly shrink ---------------
 # Every other gate answers "did what ran pass". None answers "did everything
@@ -348,10 +453,35 @@ run "tests"  "npx vitest run --coverage --reporter=json --outputFile=\"$suite_re
 # backlog node with a reason, resolved the same way and from the same committed
 # file as size_total. A waived floor is printed with its reason; it is never
 # silent.
-test_baseline=$(sed -n 's/.*"tests"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' tests/baseline.json 2>/dev/null | head -1)
-if [[ -z "$test_baseline" ]]; then
+#
+# TWO FLOORS, ONE FOR EACH MODE, AND THE MODE PICKS THE KEY IT WAS GIVEN. A
+# scoped run collects ~220 fewer tests, so grading it against "tests" is a false
+# red, and grading a FULL run against "tests_scoped" is the far worse direction —
+# a false green that would swallow the loss of two hundred tests without a word.
+# $baseline_key is assigned exactly once, in the same branch that decides the
+# vitest exclusion, and the floor is looked up BY that key: there is no path that
+# runs one mode and grades the other, because there is nothing else to edit.
+#
+# Both keys are then required and "tests_scoped" must be strictly BELOW "tests" —
+# the scoped run executes a strict subset of the files, so any other ordering
+# means one key was edited without the other, or the two were swapped. That is
+# refused rather than graded, because the shape it fails in is silent.
+read_floor() {
+  sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p" tests/baseline.json 2>/dev/null | head -1
+}
+full_floor=$(read_floor tests)
+scoped_floor=$(read_floor tests_scoped)
+test_baseline=$(read_floor "$baseline_key")
+if [[ -z "$full_floor" || -z "$scoped_floor" ]]; then
   printf '%-14s' "test-count"; echo "FAIL"
-  echo "    tests/baseline.json is missing or has no numeric \"tests\" — refusing to skip the ratchet"
+  echo "    tests/baseline.json needs a numeric \"tests\" AND \"tests_scoped\" (found: '$full_floor' / '$scoped_floor')"
+  echo "    — the gate cannot grade the mode it ran, and refuses to skip the ratchet"
+  fail=1
+elif (( scoped_floor >= full_floor )); then
+  printf '%-14s' "test-count"; echo "FAIL"
+  echo "    \"tests_scoped\" is $scoped_floor and \"tests\" is $full_floor — the scoped run is a strict subset"
+  echo "    of the full one, so a scoped floor at or above the full floor means one was edited"
+  echo "    without the other. A full run graded against the lower number would pass a shrink."
   fail=1
 else
   count_waiver=""
@@ -381,18 +511,47 @@ else
     # count of a different run — which is how test-count reported 1064 against a
     # floor of 1111 on a docs-only commit while a direct run measured 1111.
     actual=$(sed -n 's/.*"numTotalTests"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$suite_report" 2>/dev/null | head -1)
+    #
+    # AND THE FLOOR IS CHECKED AGAINST THE EVIDENCE, not against the flag the
+    # gate handed vitest. The report names every test file it ran, so whether
+    # tests/gates and tests/scaffold were in the run is a fact this file can
+    # read — and the floor a run of that shape must be graded against follows
+    # from it. Grading proceeds only when the mode asked for, the mode the report
+    # shows, and the floor in hand all agree. Both ways of getting this wrong are
+    # therefore caught by a measurement rather than by care: an exclusion that
+    # did not take effect (a glob typo, a vitest flag change) puts a FULL count
+    # under the scoped floor, which is a shrink of two hundred tests reported as
+    # a pass, and a mode paired with the wrong key puts a scoped count under the
+    # full floor, which is a false red. Neither can print "pass".
+    pipeline_files=$(grep -oE '"name"[[:space:]]*:[[:space:]]*"[^"]*/tests/(gates|scaffold)/[^"]*"' \
+                     "$suite_report" 2>/dev/null | wc -l | tr -d ' ')
     if [[ -z "$actual" ]]; then
       printf '%-14s' "test-count"; echo "FAIL"
       echo "    could not read a test count from vitest — refusing to pass a gate that measured nothing"
       fail=1
+    fi
+    if (( pipeline_files > 0 )); then evidence_mode="full"; evidence_floor="$full_floor"
+    else evidence_mode="scoped"; evidence_floor="$scoped_floor"; fi
+    # A waiver lowers the floor on purpose, so only the MODE is checked under one.
+    if [[ -z "$actual" ]]; then :
+    elif [[ "$evidence_mode" != "$suite_mode" ]] ||
+         [[ -z "$count_waiver" && "$test_baseline" != "$evidence_floor" ]]; then
+      printf '%-14s' "test-count"; echo "FAIL"
+      echo "    the report describes a $evidence_mode run ($pipeline_files pipeline test file(s) in it), which is"
+      echo "    graded against $evidence_floor — but this gate ran as '$suite_mode' and is holding $actual against"
+      echo "    \"$baseline_key\" = $test_baseline. The mode graded must be the mode that ran: a scoped count"
+      echo "    under the full floor is a false red, and a full count under the scoped floor passes a shrink."
+      fail=1; actual=""
+    fi
+    if [[ -z "$actual" ]]; then :
     elif (( actual < test_baseline )); then
       printf '%-14s' "test-count"; echo "FAIL"
-      echo "    $actual tests, floor is $test_baseline — $((test_baseline - actual)) fewer than the base."
+      echo "    $actual tests, \"$baseline_key\" floor is $test_baseline — $((test_baseline - actual)) fewer than the base."
       echo "    If that is deliberate, record test_count_waiver on the task with a reason."
       fail=1
     else
-      run "test-count" "true"
-      (( actual > test_baseline )) && echo "    $actual tests against a floor of $test_baseline — bump tests/baseline.json to keep the ratchet tight"
+      run "test-count" "true" "[$suite_mode: $actual against the \"$baseline_key\" floor of $test_baseline]"
+      (( actual > test_baseline )) && echo "    bump \"$baseline_key\" in tests/baseline.json to $actual to keep the ratchet tight"
     fi
   fi
 fi

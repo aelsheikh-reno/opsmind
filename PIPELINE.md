@@ -122,8 +122,8 @@ Nothing merges until every gate passes. Gates are scripts, not judgements.
 | `types` | `tsc --noEmit`, no `any` introduced in a diff |
 | `boundaries` | No module writes another's tables; no page imports a module; only `repository.ts` touches the database |
 | `guards` | `scripts/test-guards.sh`: every guard still blocks what it claims to, in both directions. Full suite only — the fixtures call `gate.sh --summary`, so a guard line reachable from `--summary` would never terminate |
-| `tests` | Unit and integration pass |
-| `test-count` | The suite never shrinks: the runtime test total against the `tests` floor in `tests/baseline.json` |
+| `tests` | Unit and integration pass. **Scoped to the committed diff**: `tests/gates/` and `tests/scaffold/` — the pipeline testing itself — run only when the diff touches a trigger, and a path is a trigger if changing it could change what those tests should say (`scripts/`, `eslint.config.mjs`, `templates/`, `.github/workflows/`; `tests/gates/` and `tests/scaffold/` themselves; and `package.json`, `package-lock.json` and `tsconfig.json`, which `tests/scaffold/` reads from the real repository at run time). The mode is printed on the verdict line, `[full: …]` or `[scoped: …]`, never inferred from a flag. The rule is in `gate.sh` and not in `gates.yml`, so CI and a developer decide it identically, and it fails closed — a diff that cannot be read runs everything |
+| `test-count` | The suite never shrinks: the runtime test total against the floor for **the mode that ran** — `tests` for a full run, `tests_scoped` for a scoped one, both in `tests/baseline.json`. The key is chosen in the same branch as the exclusion; `tests_scoped` must stay strictly below `tests`; and the floor in hand is checked against the report's own list of files, so a scoped count cannot be graded against the full floor, nor a full count against the scoped one |
 | `cov-report` | `vitest run --coverage` ran and exited clean. The report it must produce is `coverage/lcov.info`; a report that is absent, empty or declares no measurable line is caught by the two gates below, which read it — and is a failure there, never a pass |
 | `diff-cov` | Coverage of **the lines this task changed** — 90% on money and compliance, 70% on low, 90% when the risk is unknown |
 | `total-cov` | Whole-repository line coverage against the `coverage_bp` ratchet in `tests/baseline.json`. Fails on a decrease, and on a `coverage_bp` lowered below the value the PR base holds |
@@ -275,6 +275,34 @@ itself — and a single file, `coverage-gate.test.ts`, is 103s of a 197s total
 because each of its cases shells out and runs the gate machinery for real. The
 twelve database-backed integration files come to roughly 35s combined. **The
 database was never the bottleneck.**
+
+**So the gate acts on it: a product node does not run the pipeline's own tests.**
+`gate.sh` reads the committed diff against the same base the size gates use, and
+excludes `tests/gates/` and `tests/scaffold/` unless the diff touches a trigger.
+Measured at `320b366` with `npx vitest run --reporter=json`: **9 of 52 test files
+and 249 of 1,350 tests**, and those 9 include every case that shells out and runs
+the gate machinery for real. The claim is stated in files and tests rather than in
+seconds on purpose — three wall-clock measurements of this same change agreed on
+the direction and on no figure, because the machine was shared each time. What a
+scoped node still runs is `guards`, the first line of every full invocation, which
+asks of every gate whether it still blocks what it claims to in both directions.
+What it skips is the deeper logic checks, and the accepted risk is that a product
+change tripping an assumption inside `tests/gates/` is not caught until a node
+touches a trigger. Both floors in `tests/baseline.json` are measured by running the
+mode they belong to, never by subtracting one from the other.
+
+**A trigger list shorter than its own rule is the failure mode here, twice found.**
+The rule is that a path is a trigger if changing it could change what these tests
+should say. Naming only the machinery left `tests/gates/` itself out, so the one PR
+that changed those tests was the one that did not run them; naming the machinery
+and the tests left out the files `tests/scaffold/` reads from the real repository —
+`package.json` and `tsconfig.json`, and `package-lock.json`, which decides what is
+installed under `node_modules` for the cases that check installed versions. A
+`tsconfig.json`-only diff was measured as scoped, which means switching `strict`
+off skipped the only test that would have caught it while `tsc --noEmit` passed
+trivially. `vitest.config.ts` is not a trigger — no pipeline case reads it — and
+`tests/baseline.json` is deliberately not one, because `suite-scope.test.ts` asks
+the gate which key holds which floor rather than naming keys.
 
 ## Mutation depth is scaled to risk
 
