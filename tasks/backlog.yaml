@@ -3575,7 +3575,7 @@
       - "Declaring AlertEvent does not license touching Alert: the comparison is against whole names, never a substring"
       - "A repository declaring every table it touches stays clean, and no existing repository changes verdict"
   risk: low
-  status: todo
+  status: done
   note: >
     Found by the implementer of service-alerts-store, 2026-08-19, which avoided
     transactions and said so in a comment rather than relying on the gate. Verified
