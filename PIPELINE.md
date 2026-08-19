@@ -245,6 +245,37 @@ weakening the gate.
 
 ---
 
+## Mutation depth is scaled to risk
+
+> Ahmed's decision, 2026-08-19, taken from measurement rather than impression.
+> `test-author` was **59% of all agent time** across the first three recorded
+> nodes, and almost none of that was writing tests — it was proving them. Each
+> mutation applies a patch, runs the affected suite against a real PostgreSQL,
+> and restores; the cost is database startup, roughly three minutes per mutation.
+
+| Node risk | Mutations |
+|---|---|
+| `compliance` or `money` | full run — every assertion gets at least one, typically 8–14 |
+| `low` | a sample of about three, aimed at the assertions most likely to be vacuous |
+| documentation only | none |
+
+**Why the line is drawn at risk rather than at cost.** A mutation run is the only
+thing that distinguishes a test which passes from a test which *discriminates*,
+and green tests that do not discriminate look exactly like green tests that do.
+Three defects were caught by mutations run **before** anything had failed: a
+boundary fix that passed both its discriminating tests and would have broken every
+declaration in the repository; a function deciding what the audit log says
+happened, whose three outcomes nothing asserted while `diff-cov` read 100%; and a
+public store export referenced by no test at all.
+
+All three were in code that would otherwise have merged green. So the depth is
+reduced where an undetected defect costs a rerun, and kept where it reaches
+payroll, a filing deadline, or an append-only log that cannot be corrected.
+
+**The coordinator asks for these, not the agent.** Every expensive round in the
+record was a round this file's own discipline demanded. Reducing it is a change to
+what is asked for, not a change in how fast anything works.
+
 ## Build metrics
 
 Every completed node appends one JSON object to `tasks/metrics.jsonl`, so the
