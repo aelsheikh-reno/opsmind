@@ -122,25 +122,17 @@ export interface AlertStore {
   recordAlertEvent(event: NewAlertEvent): Promise<unknown>;
 }
 
-/** A store that reads back, for a caller exercising the engine. `listAlerts`
- *  and `listAlertEvents` are reads the two verbs never make. */
-export interface ReadableAlertStore extends AlertStore {
-  listAlerts(): StoredAlert[];
-  listAlertEvents(alertId: string): NewAlertEvent[];
-}
-
 // Compared whole and never split, so the two halves are joined by a byte a
 // fingerprint cannot contain rather than by the separator callers escape.
 const keyOf = (identity: AlertIdentity): string => `${identity.sourceId}\u0000${identity.fingerprint}`;
 
 /**
- * An in-memory store. NOT DURABLE, and that is the whole of its limitation: a
- * host that means to keep its alerts binds `prismaAlertStore` instead. It is
- * the default only so the engine can be driven with no storage bound at all.
+ * An in-memory store. NOT DURABLE, and it keeps no history — an event is
+ * accepted and dropped, because with no read back nothing could ever see one.
+ * A host that needs either binds `prismaAlertStore`; this is only the default.
  */
-export function createMemoryAlertStore(): ReadableAlertStore {
+export function createMemoryAlertStore(): AlertStore {
   const alerts = new Map<string, StoredAlert>();
-  const events: NewAlertEvent[] = [];
   let issued = 0;
 
   return {
@@ -160,12 +152,7 @@ export function createMemoryAlertStore(): ReadableAlertStore {
       alerts.set(key, stored);
       return Promise.resolve(stored);
     },
-    recordAlertEvent: (event) => {
-      events.push(event);
-      return Promise.resolve(event);
-    },
-    listAlerts: () => [...alerts.values()],
-    listAlertEvents: (alertId) => events.filter((event) => event.alertId === alertId),
+    recordAlertEvent: (event) => Promise.resolve(event),
   };
 }
 
