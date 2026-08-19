@@ -314,7 +314,23 @@ run "guards" "bash \"$here/test-guards.sh\""
 
 run "lint"   "npx eslint ."
 run "types"  "npx tsc --noEmit"
-run "tests"  "npx vitest run"
+# ONE RUN SERVES THREE GATES, and this is the only place the suite executes.
+# `tests` wants a verdict, `test-count` wants numTotalTests, and `cov-report`
+# wants coverage/lcov.info — and a coverage run with the json reporter produces
+# all three at once. Measured 2026-08-19 on 1323 tests: three separate runs cost
+# about 330s, this one costs 123s. The extra 13s over a bare run is coverage
+# instrumentation, which cov-report needed anyway.
+#
+# Every agent pays this too, not only the gate. It was three full suites per
+# gate invocation, and a node runs the gate several times.
+#
+# The report is written to a file rather than /dev/stdout because vitest prints
+# "JSON report written to ..." into the same stream, overwriting the head of its
+# own JSON — survivable when a sed only needs a field near the end, and not
+# something to keep relying on.
+suite_report="$(mktemp -t opsmind-suite-XXXXXX.json)"
+trap 'rm -f "$suite_report"' EXIT
+run "tests"  "npx vitest run --coverage --reporter=json --outputFile=\"$suite_report\""
 
 # ---- test count: a ratchet, so the suite cannot quietly shrink ---------------
 # Every other gate answers "did what ran pass". None answers "did everything
@@ -360,8 +376,11 @@ else
   fi
   if [[ -n "$test_baseline" ]]; then
     [[ -n "$count_waiver" ]] && printf '%-14s%s\n' "count-waiver" "$count_waiver"
-    actual=$(npx vitest run --reporter=json --outputFile=/dev/stdout 2>/dev/null \
-             | sed -n 's/.*"numTotalTests"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -1)
+    # Read from the one run above rather than executing the suite a second time.
+    # A count taken from a different invocation than the pass/fail verdict is a
+    # count of a different run — which is how test-count reported 1064 against a
+    # floor of 1111 on a docs-only commit while a direct run measured 1111.
+    actual=$(sed -n 's/.*"numTotalTests"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$suite_report" 2>/dev/null | head -1)
     if [[ -z "$actual" ]]; then
       printf '%-14s' "test-count"; echo "FAIL"
       echo "    could not read a test count from vitest — refusing to pass a gate that measured nothing"
@@ -390,7 +409,10 @@ esac
 # task changed against $cov, and ratchets the total separately (ADR-030). The
 # lcov parsing lives there rather than here because this file is long enough and
 # it is the only part of the suite that has to read a report format.
-run "cov-report" "npx vitest run --coverage"
+# The suite already ran WITH coverage above, so this only confirms the report it
+# was asked to produce actually exists. An absent or empty report is a failure
+# here, never a pass — the two gates below read it.
+run "cov-report" "test -s coverage/lcov.info || { echo 'coverage/lcov.info is absent or empty after the suite ran with --coverage'; false; }"
 "$here/coverage-gate.sh" "$cov" || fail=1
 
 # ---- size: diff against the PR base, never a maybe-missing local ref --------

@@ -245,6 +245,37 @@ weakening the gate.
 
 ---
 
+## A test run is scoped to what can fail
+
+> Measured 2026-08-19, from a `test-author` accounting for its own 58 minutes.
+
+**The gate executes the suite once.** It used to run it three times — a verdict,
+`numTotalTests`, and coverage — and one coverage run with the json reporter
+produces all three. **310s to 185s** per gate invocation on 1,323 tests, and a
+node runs the gate several times.
+
+**A mutation run is scoped to the files that can possibly fail.** In the worst
+recorded case, three assertions about an *in-memory* store were run twenty-seven
+times against an eleven-file selection that boots seven PostgreSQL engines. One
+file would have done. Scope by what the patch can break, not by the directory it
+lives in.
+
+**One full-suite confirmation, at the end.** Not three. `boundaries`, `tsc` and
+`eslint` cover the cross-cutting risk during the work; the full suite answers
+"did anything else break", and that question needs asking once.
+
+**The unit that transfers is the INVOCATION, not the tool call.** The same agent
+averaged 29s per call in one round and 72s in the next while cost per invocation
+stayed flat — it had batched several runs into single calls. A per-call figure
+measures how work was grouped, not what it cost.
+
+**Where the time actually goes, so the next person optimises the right thing.**
+68% of test time is `tests/gates/` and `tests/scaffold/` — the pipeline testing
+itself — and a single file, `coverage-gate.test.ts`, is 103s of a 197s total
+because each of its cases shells out and runs the gate machinery for real. The
+twelve database-backed integration files come to roughly 35s combined. **The
+database was never the bottleneck.**
+
 ## Mutation depth is scaled to risk
 
 > Ahmed's decision, 2026-08-19, taken from measurement rather than impression.
