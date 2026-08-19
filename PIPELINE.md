@@ -255,13 +255,23 @@ gets, and for the same reason.
 | Field | What it is |
 |---|---|
 | `agents[]` | one entry per subagent invocation: `role`, `round`, `tokens`, `tool_calls`, `ms`, and a `reason` whenever `round > 1` |
-| `rework_rounds` | how many times work went back. **The quality signal** — it says where effort was redone and why |
+| `rework_rounds` | how many times work went back |
+| `rework[]` | **who** redid it and why: `role`, `round`, `trigger` (`gate` \| `reviewer` \| `coordinator`), `reason` |
+| `rework_by` | the same, totalled per role |
 | `gate_runs_local`, `ci_runs`, `ci_ms` | what verification cost |
 | `impl_lines`, `diff_lines`, `tests_added`, `suite_after`, `diff_cov_pct` | what was produced |
 | `mutations_applied` / `mutations_killed` | whether the tests discriminate, not whether they pass |
 | `findings` | by severity, from adversarial review |
 | `caught_by` | which stage found each defect: reviewer, gate, coordinator, or an agent about its own work |
 | `coordinator_tokens` | **always `null`** — see below |
+
+**Rework must name a role, or it will be read as blaming the wrong one.** A bare
+count says work went back; it does not say whether the code was wrong, the tests
+were thin, or the coordinator asked for more proof than the node required. Those
+are three different problems with three different fixes, and the first reading of
+an unattributed number is usually "the implementer is sloppy". Record the role and
+the trigger, and the number stops being an accusation and starts being a
+diagnosis.
 
 **`caught_by` is the one worth watching over time.** It answers which parts of
 this pipeline earn their cost. A stage that never catches anything is ceremony;
