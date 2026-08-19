@@ -3619,3 +3619,50 @@
     service-alerts-raise depends on this node, because composing an alert and
     its event atomically is the textbook interactive transaction and it lands
     there.
+
+- id: gate-run-on-main-always-fails
+  title: The post-merge gate run on main has never once passed
+  phase: 0
+  depends_on: []
+  spec: PIPELINE.md#the-gates
+  produces:
+    - .github/workflows/gates.yml
+    - scripts/gate.sh
+    - PIPELINE.md
+    - tasks/backlog.yaml
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "A push to main produces a gate verdict that is about the merged commit, not about an empty diff"
+      - "The diff gate still refuses a genuinely empty pull request"
+  risk: low
+  status: todo
+  note: >
+    Found 2026-08-19 while collecting timing figures, and unrecorded until now.
+    THE LAST THIRTEEN gates RUNS ON main HAVE ALL FAILED — every one since the
+    workflow gained its push trigger, at 06c75d2, 1c5ddef, 571ae80, 6ca7928,
+    87985eb, 9a956fa, c32d2fb, c5918eb, d7a8485, dce10d3, f049e97, fc0e18d and
+    15ba4bf.
+
+    The cause is one expression. gates.yml:87 runs
+    `GATE_BASE=origin/${{ github.base_ref || 'main' }}`. On a pull_request,
+    base_ref is the target branch and the diff is the PR. On a PUSH TO MAIN,
+    base_ref is empty, so GATE_BASE becomes origin/main while HEAD is also main
+    — the diff is empty, and gate-empty-diff correctly refuses it. The gate is
+    behaving exactly as designed; it is being asked a question that has no
+    meaning on that event.
+
+    WHAT IT COSTS IS NOT THE RED TICK. PIPELINE.md and the build-cycle document
+    both describe the post-merge run on main as the check that catches two
+    independently green pull requests combining badly. That run has never
+    produced a usable verdict, so that safety net does not exist and has not
+    since it was written. Branch protection is strict, which forces a rebase and
+    re-run before merge, so the risk is mitigated — but by a different mechanism
+    than the one the documents name.
+
+    A check that always fails is worse than no check: it trains everyone to
+    ignore a red main, which is the exact habit ADR-031 and merge-when-green.sh
+    exist to prevent.
+
+    I described this run to Ahmed as a working safety net on 2026-08-18. It was
+    not, and had not been at any point.
