@@ -2621,7 +2621,7 @@
       - "Every exported repository function is exercised against a real PostgreSQL, and the suite never skips"
       - "An unknown policyId is RECORDED, not only accepted: the row carries it verbatim and no configuration is consulted"
   risk: compliance
-  status: todo
+  status: done
   note: >
     Lands separately from the logic it serves, and with its integration tests,
     because a Prisma call cannot be executed without PostgreSQL and diff-cov
