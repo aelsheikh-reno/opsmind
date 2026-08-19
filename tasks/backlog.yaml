@@ -2689,15 +2689,21 @@
     this alert or resolves it. If the verbs held separate identities the user
     would see the same breach twice.
 
-    OPEN, AND IT DECIDES WHETHER A BAD NIGHT COSTS ONE ALERT OR A WHOLE RUN.
-    runDeadlineSweep awaits raiseMisconfiguration inside its jurisdiction loop
-    with no guard — verified: there is no try or catch anywhere in that
-    function, and both awaits precede reportRun. A throw from this verb rejects
-    the sweep BEFORE reportRun fires, so nothing is resolved, the complete
-    report never arrives, and the source goes dark — a larger failure than the
-    one being reported. Either the engine never throws for a data reason, or the
-    sweep grows a guard, which is an edit to a merged compliance file. Not
-    decided here.
+    ITS OPEN QUESTION WAS ANSWERED BEFORE IT RAN, 2026-08-18, and the note is
+    corrected rather than left to send someone re-deciding it. It asked whether a
+    throw from this verb costs one alert or a whole run, and observed correctly
+    that runDeadlineSweep had no try or catch anywhere.
+
+    It has one now. ADR-040 wrapped both misconfiguration raises: a failed alert
+    no longer rejects the sweep, the run still reaches reportRun, and the areas
+    that alert named are reported INCOMPLETE so absence can never resolve
+    something the run failed to raise. So a throw is survivable.
+
+    It is still not free, and the engine must not throw for a data reason. A
+    throw now costs those areas their completeness for the night, which means
+    nothing in them resolves — a smaller failure than a dark source, and still a
+    real one. Assertion 5 and ADR-040 both say an unknown policyId is accepted
+    and recorded, never refused.
 
     Roughly 140-180 implementation lines: two verbs over lifecycle.ts and the
     store.
@@ -3708,3 +3714,49 @@
     protected only if its author remembers to write that test. Nothing is
     unprotected; the guarantee wants moving into the shared script the next time
     this machinery is open.
+
+- id: service-alerts-atomic-event
+  title: A state change and its event are written together, or neither is written
+  phase: 1
+  depends_on: [service-alerts-raise]
+  spec: docs/architecture/data-model.md
+  produces:
+    - lib/services/alerts/repository.ts
+    - lib/services/alerts/index.ts
+    - tests/integration/services/alerts/
+    - tasks/backlog.yaml
+    - tests/baseline.json
+  done_when:
+    gates: [lint, types, boundaries, tests, coverage]
+    assertions:
+      - "An alert row and the event recording its change are written in one transaction"
+      - "A failure writing the event leaves the alert row unchanged, proved by forcing the event write to fail"
+      - "The ownership check still reports an undeclared table reached inside that transaction"
+  risk: compliance
+  status: todo
+  note: >
+    Found by the implementer of service-alerts-raise, which reported it rather
+    than writing the two calls and moving on, and verified independently at that
+    commit: index.ts writes store.upsertAlert then store.recordAlertEvent as two
+    separate awaits, in both raise and close.
+
+    IF THE SECOND FAILS, THE FIRST STANDS. The alert has changed state and
+    nothing in the log says so, which violates service-alerts-store's assertion 2
+    — every state change is recorded as an event — a node already merged and
+    marked done. This node is the first writer that can violate it.
+
+    IT IS AN AUDIT HOLE, NOT A CRASH. Current state stays correct; the history
+    gains a gap. For a compliance alert the event log IS the evidence of what
+    happened and who did it, and a null actor meaning the engine did it is only
+    meaningful if the row is there at all.
+
+    WHY IT WAS NOT FIXED IN PLACE. An atomic write needs a new method on
+    repository.ts, which is not in service-alerts-raise's produces, and the
+    ordering cannot simply be reversed because the event needs the alert's id.
+    Expanding that node mid-flight with a schema-touching method and its tests
+    was the larger risk.
+
+    The gate is ready for it: gate-boundaries-blind-to-a-transaction taught the
+    ownership check to see through db.$transaction, including handles not named
+    tx. The third assertion is there so that fix is re-proved against the first
+    real transaction in the repository rather than assumed.

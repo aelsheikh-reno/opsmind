@@ -5,10 +5,11 @@
 // deployment, so there is no HTTP client here and no token to rotate (ADR-039).
 //
 // Shape: pure domain in lifecycle.ts taking values rather than clients, this
-// file the only thing a caller may import. The store arrives later, as a port,
-// which is what keeps a test of the rules free of a database.
+// file the only thing a caller may import, and the store arriving as a port.
 
-import type { AlertSeverity } from "./lifecycle";
+import { isResolved, openAlert, raiseKind, reassert, resolveAlert as closeAlert } from "./lifecycle";
+import type { AlertIdentity, AlertRaise, AlertRecord, AlertSeverity } from "./lifecycle";
+import type { NewAlertEvent, StoredAlert } from "./repository";
 
 export {
   acknowledge,
@@ -21,12 +22,25 @@ export {
   OPEN_STATES,
   openAlert,
   raisedSeverity,
+  raiseKind,
   reassert,
   resolveAlert,
   sameIdentity,
   suppress,
 } from "./lifecycle";
-export type { AlertIdentity, AlertRaise, AlertRecord, AlertSeverity, AlertState } from "./lifecycle";
+export type {
+  AlertEventKind,
+  AlertIdentity,
+  AlertRaise,
+  AlertRecord,
+  AlertSeverity,
+  AlertState,
+} from "./lifecycle";
+
+/** The Prisma store, for a host to bind. Nothing outside this service reaches
+ *  repository.ts directly (CLAUDE.md rule 4); this line is how it is offered. */
+export { prismaAlertStore } from "./repository";
+export type { NewAlertEvent, NewAlertSource, StoredAlert } from "./repository";
 
 /**
  * One condition a repeating caller found, inside the one run that found it.
@@ -61,8 +75,8 @@ export interface RunScope {
 
 /**
  * The port. This is the shape callers already compile against, so it is fixed
- * rather than draft: the two verbs below are the ones a caller can use before
- * a store exists.
+ * rather than draft: the first two verbs are the merged pair a caller is
+ * already calling, and `resolveAlert` is the third of the contract's five.
  *
  * `areas` on a raise are the caller's own opaque scope keys, in the SAME
  * vocabulary as RunScope — one contract, not two. An alert closes only inside
@@ -91,6 +105,82 @@ export interface AlertManagerClient {
     areas: readonly string[],
     context: Record<string, unknown>,
   ): Promise<void>;
+  /** Idempotent, and total: an identity nothing ever raised resolves quietly.
+   *  A caller cannot know what is open, so asking is not an error. */
+  resolveAlert(fingerprint: string): Promise<void>;
+}
+
+/**
+ * The store, as a port, so the rules above stay exercisable without one.
+ * `prismaAlertStore` satisfies it structurally and is what a host binds; the
+ * unique index behind `getAlert`/`upsertAlert` IS the dedupe (data-model.md).
+ */
+export interface AlertStore {
+  getAlert(identity: AlertIdentity): Promise<StoredAlert | null>;
+  upsertAlert(record: AlertRecord): Promise<StoredAlert>;
+  /** The return is unread: an event is appended, never consulted afterwards. */
+  recordAlertEvent(event: NewAlertEvent): Promise<unknown>;
+}
+
+/** A store that reads back, for a caller exercising the engine. `listAlerts`
+ *  and `listAlertEvents` are reads the two verbs never make. */
+export interface ReadableAlertStore extends AlertStore {
+  listAlerts(): StoredAlert[];
+  listAlertEvents(alertId: string): NewAlertEvent[];
+}
+
+// Compared whole and never split, so the two halves are joined by a byte a
+// fingerprint cannot contain rather than by the separator callers escape.
+const keyOf = (identity: AlertIdentity): string => `${identity.sourceId}\u0000${identity.fingerprint}`;
+
+/**
+ * An in-memory store. NOT DURABLE, and that is the whole of its limitation: a
+ * host that means to keep its alerts binds `prismaAlertStore` instead. It is
+ * the default only so the engine can be driven with no storage bound at all.
+ */
+export function createMemoryAlertStore(): ReadableAlertStore {
+  const alerts = new Map<string, StoredAlert>();
+  const events: NewAlertEvent[] = [];
+  let issued = 0;
+
+  return {
+    getAlert: (identity) => Promise.resolve(alerts.get(keyOf(identity)) ?? null),
+    upsertAlert: (record) => {
+      const key = keyOf(record);
+      const current = alerts.get(key);
+      // firstSeenAt is taken from the stored row for the same reason the Prisma
+      // upsert leaves it out of its update: it survives re-firing.
+      issued += current === undefined ? 1 : 0;
+      const stored: StoredAlert = {
+        ...record,
+        id: current?.id ?? `alert-${issued}`,
+        areas: [...record.areas],
+        firstSeenAt: current?.firstSeenAt ?? record.firstSeenAt,
+      };
+      alerts.set(key, stored);
+      return Promise.resolve(stored);
+    },
+    recordAlertEvent: (event) => {
+      events.push(event);
+      return Promise.resolve(event);
+    },
+    listAlerts: () => [...alerts.values()],
+    listAlertEvents: (alertId) => events.filter((event) => event.alertId === alertId),
+  };
+}
+
+/**
+ * What a client is bound to. `sourceId` is REQUIRED and has no default: the
+ * port gives `raiseAlert` no source, identity is (sourceId, fingerprint), and a
+ * default would silently split an out-of-band raise from the run reporting it.
+ */
+export interface AlertManagerDeps {
+  sourceId: string;
+  /** Defaults to `createMemoryAlertStore()`, which keeps nothing across a
+   *  process. A host binds `prismaAlertStore`. */
+  store?: AlertStore;
+  /** Injectable so a run is reproducible; defaults to the current instant. */
+  now?: () => Date;
 }
 
 /**
@@ -100,23 +190,69 @@ export interface AlertManagerClient {
  * imports nothing from a caller, and a structural disagreement is a red
  * typecheck rather than a surprise at 02:00.
  *
- * IT RECORDS NOTHING YET, deliberately: the store lands as a port in the next
- * node and there is nowhere to put a raise until it does. Both verbs are
- * therefore total and cannot fail, which matters more than it looks — a caller
- * awaits them mid-run without a guard, so a throw from here would end that run
- * before it reported anything at all (ADR-040).
- *
- * Neither body NAMES a parameter, and a shorter list still satisfies the port.
- * That is worth the oddity: an implementation that cannot reach `context` is a
- * stronger guarantee than one that promises not to read it (ADR-040, ADR-039).
+ * WHERE THE LINE ON THROWING IS DRAWN, and it is drawn tightly. Nothing a
+ * caller can put in an argument is refused: an unrecognised `policyId`, an
+ * empty `context`, an empty `areas`, a fingerprint nothing has ever raised.
+ * All four are DATA, and the engine holds no rule book to judge them against —
+ * refusing one would detect a condition and then discard it, which is the
+ * failure the caller was built to prevent moved one layer down (ADR-040,
+ * flows-alerting.md). What is left to throw for is the store failing, which is
+ * not a fact about the alert and cannot be recorded instead of raised. A caller
+ * guards these calls (ADR-040), so a throw no longer ends its run — but the
+ * areas that alert named are then reported incomplete, and nothing in them
+ * resolves that night, so it is survivable rather than free.
  */
-export function createAlertManager(): AlertManagerClient {
+export function createAlertManager(deps: AlertManagerDeps): AlertManagerClient {
+  const { sourceId, store = createMemoryAlertStore(), now = () => new Date() } = deps;
+
+  // One raise, recorded as one row and one event. Read-then-write rather than
+  // a compare-and-set: the store's unique index is what makes the write
+  // idempotent, so a concurrent second raise updates the same row.
+  async function raise(input: AlertRaise, at: Date): Promise<void> {
+    const current = await store.getAlert({ sourceId: input.sourceId, fingerprint: input.fingerprint });
+    const kind = raiseKind(current, input.severity);
+    const next = current === null ? openAlert(input, at) : reassert(current, input, at);
+    const saved = await store.upsertAlert(next);
+    // Both null unless the state actually moved — a reassert and a severity
+    // rise change no state (data-model.md, the AlertEvent card).
+    await store.recordAlertEvent({
+      alertId: saved.id,
+      at,
+      kind,
+      fromState: kind === "raised" ? (current?.state ?? null) : null,
+      toState: kind === "raised" ? next.state : null,
+    });
+  }
+
+  // The resolution is written as an event before anything can reopen the row,
+  // which is what leaves it in the record when a later raise fires again.
+  async function close(fingerprint: string, at: Date): Promise<void> {
+    const current = await store.getAlert({ sourceId, fingerprint });
+    if (current === null || isResolved(current.state)) return;
+    await store.upsertAlert(closeAlert(current, at));
+    await store.recordAlertEvent({
+      alertId: current.id,
+      at,
+      kind: "resolved",
+      fromState: current.state,
+      toState: "resolved",
+    });
+  }
+
   const client: AlertManagerClient = {
+    // STILL RECORDS NOTHING: resolution by absence is service-alerts-report-run,
+    // and half of it — resolving what a complete scope did not carry — would
+    // close alerts wrongly if it landed before the scope rules do.
     reportRun() {
       return Promise.resolve();
     },
-    raiseAlert() {
-      return Promise.resolve();
+    // `context` and `areas` are handed on whole. Nothing here reads either: a
+    // scope is never dug out of the bag, and the bag is never interpreted.
+    raiseAlert(fingerprint, severity, policyId, areas, context) {
+      return raise({ sourceId, fingerprint, severity, policyId, areas, context }, now());
+    },
+    resolveAlert(fingerprint) {
+      return close(fingerprint, now());
     },
   };
   return client;

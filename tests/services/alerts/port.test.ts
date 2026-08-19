@@ -59,7 +59,7 @@ import { AREA, FP_A, MAJOR, POLICY, PORT_VERBS, SOURCE, client } from "./surface
  * one that stops returning `Promise<void>`. Each of those was mutated and each
  * one fails here.
  */
-const bound: AlertManager = createAlertManager();
+const bound: AlertManager = createAlertManager({ sourceId: SOURCE });
 
 /**
  * THE ASSERTION, HALF TWO: the client is no WIDER than the port — and this is
@@ -104,11 +104,26 @@ const bound: AlertManager = createAlertManager();
  * What is being tested is a relationship between two TYPES, not the behaviour
  * of a value; the cast only manufactures a value of the port type so that the
  * assignment on the left has something to check, and that value is never
- * called. The assignment itself is uncast, and it is the assertion. The two
- * lines together are mutual assignability, which is the word assertion 1 uses:
- * the client satisfies the port EXACTLY.
+ * called. The assignment itself is uncast, and it is the assertion.
+ *
+ * WHAT THE Pick<> NARROWED, AND WHAT IT DID NOT, since narrowing an existing
+ * assertion is not something to do in passing. Before service-alerts-raise the
+ * target was the whole `AlertManagerClient`, and the pair proved mutual
+ * assignability outright. The client then grew `resolveAlert` — flows-alerting.md
+ * fixes FIVE verbs, so it was always going to — and `AlertManager`, which
+ * declares two, stopped being assignable to it. The two-verb exactness claim was
+ * only ever accidentally true: it held because the client had not yet grown.
+ *
+ * So this now proves the narrower and correct thing: FOR THE VERBS THE PORT
+ * DECLARES, the two agree exactly. It no longer proves the client carries only
+ * those verbs, and it should not — the client legitimately carries more.
+ *
+ * IT STILL CATCHES WHAT IT WAS BUILT FOR. Measured: dropping `scopes` from
+ * `reportRun` on the client fails to compile on this line, TS2322. That is the
+ * completeness declaration two nodes were spent building and renaming, and the
+ * one-directional binding above cannot see it go.
  */
-const reverseProbe: AlertManagerClient = {} as AlertManager;
+const reverseProbe: Pick<AlertManagerClient, "reportRun" | "raiseAlert"> = {} as AlertManager;
 
 describe("the client satisfies the AlertManager port the deadline monitor already calls", () => {
   it("is assignable to the port with no cast, which is the compile-time half made visible", () => {
@@ -218,7 +233,7 @@ describe("the merged deadline sweep can drive this client end to end", () => {
   // raises a misconfiguration alert for it and declares the area incomplete
   // (ADR-040, flows-alerting.md).
   const run = async () => {
-    const engine = counted(createAlertManager());
+    const engine = counted(createAlertManager({ sourceId: SOURCE }));
     const report = await runDeadlineSweep(
       depsFor(
         [deadline("document:1", WATCHED, DUE, "AE"), deadline("document:3", WATCHED, DUE, "KW")],

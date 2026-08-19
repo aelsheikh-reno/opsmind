@@ -64,6 +64,22 @@ export function raisedSeverity(current: AlertSeverity, incoming: AlertSeverity):
 }
 
 /**
+ * What happened to an alert, as the append-only log spells it (data-model.md,
+ * the AlertEvent card). Declared beside the rules that decide it so nothing
+ * here has to reach into a store to name an outcome.
+ */
+export type AlertEventKind =
+  | "raised"
+  | "reasserted"
+  | "severity_raised"
+  | "stale_marked"
+  | "stale_cleared"
+  | "acknowledged"
+  | "suppressed"
+  | "unsuppressed"
+  | "resolved";
+
+/**
  * An alert's identity: the caller that raised it, and the caller's own
  * deterministic string.
  *
@@ -159,6 +175,16 @@ export function reassert(alert: AlertRecord, raise: AlertRaise, at: Date): Alert
     lastSeenAt: at,
     resolvedAt: null,
   };
+}
+
+/**
+ * What one raise amounts to against what is already stored, as a single event.
+ * `severity_raised` implies the reassertion it rode in on, so a raise writes
+ * one event and never two — a log a reader has to de-duplicate is not a log.
+ */
+export function raiseKind(current: AlertRecord | null, incoming: AlertSeverity): AlertEventKind {
+  if (current === null || isResolved(current.state)) return "raised";
+  return isMoreSevere(incoming, current.severity) ? "severity_raised" : "reasserted";
 }
 
 /**
