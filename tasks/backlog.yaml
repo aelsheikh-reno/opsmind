@@ -2547,7 +2547,7 @@
       - "A policyId the engine holds no configuration for is accepted and never refused"
       - "No file in the service names a jurisdiction, a deadline, a document or a correlation rule"
   risk: compliance
-  status: todo
+  status: done
   note: >
     The seam, and the pure half behind it. Same shape as the module it serves:
     domain in lifecycle.ts taking values rather than clients, index.ts the only
