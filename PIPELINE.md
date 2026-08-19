@@ -245,6 +245,39 @@ weakening the gate.
 
 ---
 
+## Build metrics
+
+Every completed node appends one JSON object to `tasks/metrics.jsonl`, so the
+pipeline's own cost and behaviour can be measured rather than recalled. One line
+per node, append-only, never rewritten — the same discipline the alert event log
+gets, and for the same reason.
+
+| Field | What it is |
+|---|---|
+| `agents[]` | one entry per subagent invocation: `role`, `round`, `tokens`, `tool_calls`, `ms`, and a `reason` whenever `round > 1` |
+| `rework_rounds` | how many times work went back. **The quality signal** — it says where effort was redone and why |
+| `gate_runs_local`, `ci_runs`, `ci_ms` | what verification cost |
+| `impl_lines`, `diff_lines`, `tests_added`, `suite_after`, `diff_cov_pct` | what was produced |
+| `mutations_applied` / `mutations_killed` | whether the tests discriminate, not whether they pass |
+| `findings` | by severity, from adversarial review |
+| `caught_by` | which stage found each defect: reviewer, gate, coordinator, or an agent about its own work |
+| `coordinator_tokens` | **always `null`** — see below |
+
+**`caught_by` is the one worth watching over time.** It answers which parts of
+this pipeline earn their cost. A stage that never catches anything is ceremony;
+a stage catching most of it is carrying the rest.
+
+**What is deliberately absent: the coordinator's own token usage.** It is not
+visible from inside the session, so every token figure here is subagents only and
+the true cost of a node is higher by an unknown amount. That is stated in the
+schema rather than left for someone to discover by adding the columns up — a
+figure that cannot be measured is recorded as absent, not estimated
+(ADR-031). Capturing it needs the CLI's own usage reporting, from outside.
+
+**Nodes before `service-alerts-store` are not recorded.** The measurements were
+never taken, and reconstructing them from memory is exactly what the
+name-your-patch rule forbids.
+
 ## What still reaches you
 
 By design, and it should be a handful of items per week rather than per hour:
