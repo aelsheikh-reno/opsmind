@@ -228,6 +228,17 @@ task graph → implementer ─┐
                                         └─ business question → you
 ```
 
+> **A reported measurement names the patch and the commit it was taken at.**
+> Added 2026-08-19 after three consecutive nodes reported a figure that did not
+> survive independent checking: a half-fix "6 failed / 6 passed" that measured
+> 5/7, a diff of "2650 added lines" that measured 2668, and a mutation with
+> "zero cover before" that had one. None changed a verdict, and that is the
+> point — the pipeline runs on self-reports, and the numbers that get reported
+> are exactly the ones nobody re-derives unless a reviewer does. A mutation
+> count states the exact patch applied and the commit it was measured at, so the
+> claim is reproducible rather than recalled. A figure that cannot be reproduced
+> is withdrawn rather than defended.
+
 Three attempts, then it stops and asks. An agent that has failed the same gate
 three times is not going to succeed on the fourth; it is going to start
 weakening the gate.
