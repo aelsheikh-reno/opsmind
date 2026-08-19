@@ -68,6 +68,14 @@ const bound: AlertManager = createAlertManager();
  * DO NOT DELETE THIS AS REDUNDANT. It is not. TypeScript deliberately lets an
  * implementation with FEWER parameters satisfy a wider signature — that is what
  * makes `array.map((x) => x)` legal — so the binding above is ONE-DIRECTIONAL.
+//
+// WHEN THIS GOES RED BECAUSE THE CLIENT GREW A VERB, the answer is neither to
+// delete it nor to cast past it — both reopen the hole above. `AlertManager` is
+// the deadline monitor's two-verb view; the client is documented at five, and
+// service-alerts-raise adds `resolveAlert` next. At that point make the probe's
+// target `Pick<AlertManagerClient, "reportRun" | "raiseAlert">`, which keeps the
+// no-wider check on exactly the verbs the port declares and lets the client grow
+// past it. TS2741 on this line is that moment, not a failure.
  * Delete `scopes` from `AlertManagerClient.reportRun` and half one still
  * compiles, every runtime case still passes, and the type error the node's
  * first assertion promised never arrives.
