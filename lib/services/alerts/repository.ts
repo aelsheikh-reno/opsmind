@@ -34,6 +34,10 @@ export interface NewAlertEvent {
   reason?: string | null;
 }
 
+/** An event before the row it hangs off exists: `alertId` is assigned by the
+ *  same write, so a caller cannot supply it and cannot get it wrong. */
+export type AlertChange = Omit<NewAlertEvent, "alertId">;
+
 /** A source and its cadence. `expectedEvery` counts no unit yet — see the
  *  schema; nothing supplies a non-null value until one is decided. */
 export interface NewAlertSource {
@@ -75,31 +79,54 @@ function toStored(row: AlertRow): StoredAlert {
   };
 }
 
+// The arguments only, so the one upsert has one definition and both writers
+// below reach the table lexically — a delegate behind a helper's own parameter
+// is invisible to scripts/check-boundaries.sh's handle reader.
+function alertUpsert(record: AlertRecord) {
+  const { sourceId, fingerprint, areas, context, firstSeenAt, ...rest } = record;
+  const fields = { ...rest, context: context as Prisma.InputJsonObject };
+  return {
+    where: { sourceId_fingerprint: { sourceId, fingerprint } },
+    create: { ...fields, sourceId, fingerprint, firstSeenAt, areas: { create: areas.map((area) => ({ area })) } },
+    // firstSeenAt is absent here because it survives re-firing. The area set is
+    // replaced rather than accumulated — an alert must not keep claiming a
+    // scope it has left, or nothing there can ever resolve it by absence.
+    update: {
+      ...fields,
+      areas: {
+        deleteMany: { area: { notIn: [...areas] } },
+        createMany: { data: areas.map((area) => ({ area })), skipDuplicates: true },
+      },
+    },
+    include: withAreas,
+  };
+}
+
 export const prismaAlertStore = {
   /** Idempotent by (sourceId, fingerprint): the unique index IS the dedupe, and
    *  a resolved row is reopened in place rather than replaced. */
   async upsertAlert(record: AlertRecord): Promise<StoredAlert> {
-    const { sourceId, fingerprint, areas, context, firstSeenAt, ...rest } = record;
-    const fields = { ...rest, context: context as Prisma.InputJsonObject };
     // Nested writes rather than an interactive transaction: they run as one
-    // statement group, and a `tx` handle would put these tables outside what
-    // scripts/check-boundaries.sh can read against the declaration above.
-    const row = await db.alert.upsert({
-      where: { sourceId_fingerprint: { sourceId, fingerprint } },
-      create: { ...fields, sourceId, fingerprint, firstSeenAt, areas: { create: areas.map((area) => ({ area })) } },
-      // firstSeenAt is absent here because it survives re-firing. The area set
-      // is replaced rather than accumulated — an alert must not keep claiming a
-      // scope it has left, or nothing there can ever resolve it by absence.
-      update: {
-        ...fields,
-        areas: {
-          deleteMany: { area: { notIn: [...areas] } },
-          createMany: { data: areas.map((area) => ({ area })), skipDuplicates: true },
-        },
-      },
-      include: withAreas,
-    });
+    // statement group, which is all this verb on its own needs.
+    const row = await db.alert.upsert(alertUpsert(record));
     return toStored(row);
+  },
+
+  /**
+   * A state change and the event recording it, committed together or not at all.
+   *
+   * Two awaits left the alert moved with nothing in the log when the second
+   * failed — current state stayed right and the history gained a hole, which for
+   * a compliance alert is the evidence gone. The order cannot be reversed
+   * instead: the event needs the id the upsert returns.
+   */
+  async applyAlertChange(record: AlertRecord, change: AlertChange): Promise<StoredAlert> {
+    const args = alertUpsert(record);
+    return db.$transaction(async (write) => {
+      const row = await write.alert.upsert(args);
+      await write.alertEvent.create({ data: { ...change, alertId: row.id } });
+      return toStored(row);
+    });
   },
 
   /** Null for an identity nothing has raised: resolving an unknown fingerprint

@@ -42,8 +42,9 @@
 // loosen a test — and the last describe in this file fails naming both what was
 // expected and what is actually there.
 import { describe, expect, it } from "vitest";
-import type { AlertRecord, AlertState } from "@/lib/services/alerts";
+import type { AlertRecord, AlertState, AlertStore } from "@/lib/services/alerts";
 import { integrationDatabase, refusalFrom } from "../../support/database";
+import { atomicWriter, type AlertChangeLike, type AtomicWrite } from "./atomic";
 
 // Order is load-bearing: integrationDatabase swaps DATABASE_URL and evicts the
 // cached client, so the repository must be reached by dynamic import AFTER it.
@@ -83,6 +84,78 @@ const CONTRACT = [
 ] as const;
 
 const store = repository.prismaAlertStore;
+
+/**
+ * THE PRODUCTION STORE IS THE PORT'S, CHECKED BY THE COMPILER — and these two
+ * lines are the only thing that checks it.
+ *
+ * `createMemoryAlertStore` binds its own literal to `AlertStore` inside
+ * index.ts, so the CONVENIENCE implementation was verified and the one every
+ * host actually runs was not. index.ts's comment on the port claims
+ * `prismaAlertStore` satisfies it structurally; nothing enforced the claim.
+ * Measured: renaming the atomic writer on this store alone produced ZERO
+ * TypeScript errors.
+ *
+ * ASSIGNMENT, NOT `satisfies`. `satisfies` applies excess-property checking to
+ * an object literal, and this store legitimately carries seven members against
+ * a port declaring four — `listAlerts`, `listAlertEvents` and the two source
+ * verbs are its own, and the port has no business requiring them. The
+ * relationship wanted is ASSIGNABILITY: everything the port requires is
+ * provided, and more is allowed. Assigning an existing VARIABLE rather than a
+ * fresh literal is what skips the excess-property check. Measured too:
+ * `satisfies AlertStore` on the store fails TS2353 naming `listAlerts`.
+ */
+const bound: AlertStore = store;
+
+/**
+ * The other direction, which is what makes it EXACT rather than merely "no
+ * narrower".
+ *
+ * lessons.md: `const bound: Port = client()` proves one and never the other —
+ * dropping `scopes` from `reportRun` compiled clean and passed all 81 cases
+ * while a comment claimed that exact mutation was caught. TypeScript lets an
+ * implementation taking FEWER parameters satisfy a wider signature, so a store
+ * whose atomic writer lost its `change` argument — which is the whole of this
+ * node — satisfies the binding above without complaint. MEASURED, not assumed:
+ * dropping that parameter leaves `bound` green.
+ *
+ * PARAMETER LISTS ONLY, AND THE RETURN TYPES ARE EXCLUDED ON PURPOSE. The port
+ * declares `recordAlertEvent` as `Promise<unknown>` and says why — "the return
+ * is unread: an event is appended, never consulted afterwards" — while the
+ * store answers with Prisma's fluent client. That widening is DELIBERATE, and a
+ * probe demanding return-type exactness reports it as a defect, which is how a
+ * correct check gets deleted for crying wolf. An argument that goes missing is
+ * a different matter: it is silent, and it is this node's own failure mode.
+ *
+ * AND IT IS NOT A SECOND MAPPED-TYPE BINDING, for a measured reason. The
+ * obvious spelling — `ParametersOf<AlertStore> = ParametersOf<typeof store>` —
+ * compiles even when the arities differ, because when both sides are the same
+ * homomorphic mapped type TypeScript compares the two SOURCE types instead of
+ * the mapped results, and falls straight back into the bivariance the probe
+ * exists to defeat. Verified: with `change` dropped it reported nothing. What
+ * follows compares the parameter tuples in both directions per member and
+ * collapses to the KEY of any member that disagrees, so `never` is the healthy
+ * answer and anything else is a compile error that names the member.
+ *
+ * The keys come from `keyof AlertStore`, not from a list written here: the port
+ * decides what it requires, and a member added to it is covered without anyone
+ * remembering to extend this. No member is named anywhere below, because no
+ * document fixes any of their names (lessons.md, "assert the distinction, not
+ * the spelling"; and "derive a list from its criterion").
+ */
+type ParamsOf<F> = F extends (...args: infer A) => unknown ? A : never;
+
+type ArityMismatch<Port, Impl> = {
+  [K in keyof Port]: K extends keyof Impl
+    ? ParamsOf<Port[K]> extends ParamsOf<Impl[K]>
+      ? ParamsOf<Impl[K]> extends ParamsOf<Port[K]>
+        ? never
+        : K
+      : K
+    : K;
+}[keyof Port];
+
+const arityMismatch: never = undefined as unknown as ArityMismatch<AlertStore, typeof store>;
 const members = (): Record<string, unknown> => (store ?? {}) as Record<string, unknown>;
 const memberNames = (): string[] =>
   Object.entries(members())
@@ -117,6 +190,27 @@ const recordAlertEvent = watch("recordAlertEvent");
 const listAlertEvents = watch("listAlertEvents");
 const upsertAlertSource = watch("upsertAlertSource");
 const getAlertSource = watch("getAlertSource");
+
+/**
+ * The store's atomic state-change writer, for
+ * tasks/backlog.yaml#service-alerts-atomic-event — found by the criterion
+ * `./atomic.ts` states rather than by a name, because no document fixes one.
+ *
+ * Wrapped like the seven above so it records itself into `called`: the last
+ * describe's "exercises every function it exports" is what makes an added
+ * function a failure until something really calls it, and satisfying that with
+ * a name added to a list would be satisfying it with a list.
+ *
+ * Discovered LAZILY. A store that does not carry it yet must fail the cases
+ * that need it, naming the node that produces it — not fail at import and take
+ * the seven merged describes above down with it.
+ */
+let atomic: ReturnType<typeof atomicWriter> | undefined;
+const applyChange: AtomicWrite = (record, change) => {
+  atomic ??= atomicWriter(store, CONTRACT);
+  called.add(atomic.name);
+  return atomic.write(record, change);
+};
 
 /**
  * The AlertEvent card, as a type. Declared here rather than imported because
@@ -746,6 +840,198 @@ describe("AlertSource — who is expected to report, and when each last did", ()
   });
 });
 
+describe("a state change and the event recording it are one write", () => {
+  // tasks/backlog.yaml#service-alerts-atomic-event, ASSERTION 1: "An alert row
+  // and the event recording its change are written in one transaction."
+  //
+  // What is asserted here is the OUTCOME the assertion is for — after one call
+  // the row and its event are both there, and the event hangs off the row that
+  // call wrote. That the two are one TRANSACTION is a claim about what happens
+  // when the second half fails, and no successful write can show it; that half
+  // is atomic-change.test.ts, which forces the failure.
+  //
+  // The change is passed with no alert id, because the writer assigns it: the
+  // event needs the id the row write returns, which is the node's own reason
+  // the order cannot be reversed and the pair cannot be two calls.
+  const change = (over: Partial<AlertChangeLike> = {}): AlertChangeLike => ({
+    at: RAISED,
+    kind: "raised",
+    fromState: null,
+    toState: "firing",
+    actor: null,
+    runId: null,
+    reason: null,
+    ...over,
+  });
+
+  it("leaves the row and the event that records it both readable afterwards", async () => {
+    const stored = await applyChange(alert(), change({ kind: "raised", toState: "firing", runId: "sweep-1" }));
+
+    expect(stored).toMatchObject({
+      id: expect.any(String),
+      sourceId: SOURCE,
+      fingerprint: FINGERPRINT,
+      state: "firing",
+      severity: "minor",
+      firstSeenAt: RAISED,
+      lastSeenAt: RAISED,
+      resolvedAt: null,
+    });
+    // The row is the row the store's own reader answers with — one write, not
+    // a value invented for the return.
+    expect(await getAlert(identity())).toEqual(stored);
+    expect(await listAlerts()).toHaveLength(1);
+
+    const events = await listAlertEvents(stored.id);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      alertId: stored.id,
+      at: RAISED,
+      kind: "raised",
+      fromState: null,
+      toState: "firing",
+      actor: null,
+      runId: "sweep-1",
+    });
+    expect(await db.alertEvent.count()).toBe(1);
+  });
+
+  it("hangs the event off the row it wrote, with another alert present to be got wrong", async () => {
+    // The id in the event comes from the SAME write. With one alert in the
+    // table any id at all reads as correct, so a second one is seeded first:
+    // an event filed against the wrong alert is a history attributed to the
+    // wrong condition, which is worse than a missing one because it looks
+    // complete.
+    const other = await upsertAlert(alert({ fingerprint: OTHER_FINGERPRINT }));
+    const stored = await applyChange(alert(), change());
+
+    expect(stored.id).not.toBe(other.id);
+    expect((await listAlertEvents(stored.id)).map((row) => row.alertId)).toEqual([stored.id]);
+    expect(await listAlertEvents(other.id)).toEqual([]);
+  });
+
+  it("files the event against the existing row when the identity has fired before", async () => {
+    // The dedupe and the atomic write are the same write. A second sighting
+    // updates one row (@@unique on the pair), so the event must hang off the id
+    // that row already had — a writer that created a fresh id would break both
+    // the dedupe and the history at once.
+    const opened = await upsertAlert(alert());
+    const closedAt = at("2026-08-05T03:00:00.000Z");
+    const closed = await applyChange(
+      alert({ state: "resolved", resolvedAt: closedAt, lastSeenAt: closedAt }),
+      change({ at: closedAt, kind: "resolved", fromState: "firing", toState: "resolved" }),
+    );
+
+    expect(closed.id).toBe(opened.id);
+    expect(closed.firstSeenAt).toEqual(RAISED);
+    expect(await listAlerts()).toHaveLength(1);
+    expect((await listAlertEvents(opened.id)).map((row) => row.alertId)).toEqual([opened.id]);
+  });
+
+  it("takes the alert id from the row it wrote, not from anything the caller passes", async () => {
+    // The AlertEvent card ties an event to the alert it happened to, and the
+    // writer is the only party that knows which row it just wrote. A caller
+    // cannot supply that id — it does not have it before the call — so an id
+    // arriving in the change is stale at best, and here it names a DIFFERENT
+    // existing alert. The row's own id wins, or the write has been made
+    // forgeable by an argument nobody is supposed to be able to pass.
+    const other = await upsertAlert(alert({ fingerprint: OTHER_FINGERPRINT }));
+    const forged = { ...change(), alertId: other.id };
+
+    const stored = await applyChange(alert(), forged);
+
+    expect(stored.id).not.toBe(other.id);
+    expect((await listAlertEvents(stored.id)).map((row) => row.alertId)).toEqual([stored.id]);
+    expect(await listAlertEvents(other.id), "the event was filed against the alert the caller named").toEqual([]);
+  });
+
+  it("appends the second change rather than rewriting the first", async () => {
+    // Append-only, across the writer that now performs every state change. The
+    // first event read must be byte-identical after the second write, or the
+    // history is a current-state field with extra steps.
+    const raised = await applyChange(alert(), change({ kind: "raised", toState: "firing" }));
+    const [firstReading] = await listAlertEvents(raised.id);
+
+    const closedAt = at("2026-08-05T03:00:00.000Z");
+    await applyChange(
+      alert({ state: "resolved", resolvedAt: closedAt, lastSeenAt: closedAt }),
+      change({ at: closedAt, kind: "resolved", fromState: "firing", toState: "resolved" }),
+    );
+
+    const events = await listAlertEvents(raised.id);
+    expect(events).toHaveLength(2);
+    expect(events[0]).toEqual(firstReading);
+    expect(events.map((row) => row.kind)).toEqual(["raised", "resolved"]);
+  });
+
+  it("carries no state change on a kind that changes none", async () => {
+    // A reassert and a severity rise move no state, so both ends are null —
+    // the same rule the two-call form was held to, restated against the writer
+    // that replaced it. A writer that inferred fromState/toState from the row
+    // it is writing would fill these in and make a reassert indistinguishable
+    // from a raise in the log.
+    const raised = await applyChange(alert(), change({ kind: "raised", toState: "firing" }));
+    await applyChange(
+      alert({ lastSeenAt: at("2026-08-02T03:00:00.000Z") }),
+      change({ at: at("2026-08-02T03:00:00.000Z"), kind: "reasserted", fromState: null, toState: null }),
+    );
+
+    const [, reasserted] = await listAlertEvents(raised.id);
+    expect(reasserted.kind).toBe("reasserted");
+    expect(reasserted.fromState).toBeNull();
+    expect(reasserted.toState).toBeNull();
+  });
+
+  it("moves every mutable column, and replaces the areas, exactly as the plain write does", async () => {
+    // The atomic writer and the plain upsert must not drift into two different
+    // rules for the same row. An alert whose fault has moved between scopes
+    // must not keep claiming the scope it has left — asserted for `upsertAlert`
+    // above, and asserted again here because a second writer is a second place
+    // for that to be got wrong, and this one is the one every state change now
+    // goes through.
+    await upsertAlert(alert({ areas: ["AE", "EG"] }));
+    const moved = await applyChange(
+      alert({
+        areas: ["KW"],
+        state: "acknowledged",
+        stale: true,
+        severity: "major",
+        policyId: "expiry-v2",
+        context: { dueDate: "2026-10-31" },
+        lastSeenAt: at("2026-08-02T03:00:00.000Z"),
+      }),
+      change({ kind: "acknowledged", fromState: "firing", toState: "acknowledged" }),
+    );
+
+    expect(moved).toMatchObject({
+      state: "acknowledged",
+      stale: true,
+      severity: "major",
+      policyId: "expiry-v2",
+      lastSeenAt: at("2026-08-02T03:00:00.000Z"),
+    });
+    expect(moved.context).toEqual({ dueDate: "2026-10-31" });
+    expect(moved.firstSeenAt).toEqual(RAISED);
+    // One key, so no order is being asserted here (ADR-038); the set comparison
+    // on the reader below is what covers the multi-key case.
+    expect(moved.areas).toEqual(["KW"]);
+    expect(new Set((await getAlert(identity()))?.areas)).toEqual(new Set(["KW"]));
+    expect(await db.alertArea.count()).toBe(1);
+    expect(await listAlerts()).toHaveLength(1);
+  });
+
+  it("writes the first sighting of an identity nothing has raised", async () => {
+    // The create arm of the same writer. The engine's raise reaches this arm
+    // every time a new condition is found, and it is the arm where the alert id
+    // does not exist until the write happens.
+    expect(await getAlert(identity())).toBeNull();
+    const stored = await applyChange(alert(), change());
+
+    expect(await listAlerts()).toHaveLength(1);
+    expect((await listAlertEvents(stored.id))[0]?.alertId).toBe(stored.id);
+  });
+});
+
 describe("the suite obtained an engine and exercised the whole surface", () => {
   // ASSERTION 6, and it is checked rather than asserted in a comment. This
   // describe is LAST on purpose: `called` is filled by the tests above.
@@ -770,6 +1056,27 @@ describe("the suite obtained an engine and exercised the whole surface", () => {
     ).toBeDefined();
     const missing = CONTRACT.filter((name) => typeof members()[name] !== "function");
     expect(missing, `not on the store, which carries: ${memberNames().join(", ") || "nothing"}`).toEqual([]);
+  });
+
+  it("is bound to the service's own AlertStore port, in both directions", () => {
+    // The runtime halves of the two bindings at the top of this file, and they
+    // are thin by construction: the claim is about two TYPES and types do not
+    // exist at run time. They are here so that deleting either binding fails a
+    // NAMED case rather than quietly removing the only guard the production
+    // store has — which is what nearly happened to port.test.ts's reverse probe
+    // when it was read as redundant.
+    expect(bound, "the forward binding no longer names the store these cases drive").toBe(store);
+    // `arityMismatch` is typed `never` and is `undefined` at run time by
+    // construction — there is nothing here to see, because the claim is about
+    // two types and types do not exist at run time. Referenced so that
+    // deleting the declaration fails this case by name.
+    expect(arityMismatch, "the arity probe is what catches a store method that dropped a parameter").toBeUndefined();
+
+    // And the member the port requires for a state change really is on the
+    // bound value, under whatever name it carries — found by the criterion in
+    // ./atomic.ts, never by a spelling this file made up.
+    const writer = atomicWriter(store, CONTRACT).name;
+    expect(typeof members()[writer], `'${writer}' is not a function on the bound store`).toBe("function");
   });
 
   it("exercises every function it exports", () => {

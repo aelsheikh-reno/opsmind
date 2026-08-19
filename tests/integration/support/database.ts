@@ -138,6 +138,15 @@ async function afterARefusal(): Promise<void> {
   });
 }
 
+/**
+ * A connection that is good again after the engine answered with an error.
+ *
+ * Exported as well as used by `refusalFrom` below, because a case may need the
+ * recovery without the refusal being the thing it asserts on — a call whose
+ * REJECTION is incidental and whose assertion is about the rows left behind.
+ */
+export { afterARefusal };
+
 /** The message a refusal carried, and a connection that is good afterwards. */
 export async function refusalFrom(work: Promise<unknown>): Promise<string> {
   const outcome = await work.then(

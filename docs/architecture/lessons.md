@@ -79,6 +79,24 @@
   it survived all 188 cases while `diff-cov` read **100%** — the lines ran, they
   were never asserted about. Coverage cannot see this; a mutation run can.
 
+## Noticing a gap is not closing it
+
+- A gap named in this file and reproduced in your own diff is **closed in that
+  diff**, or the node does not merge. `prismaAlertStore` gained a port method
+  while being bound to that port in neither direction — the exact shape recorded
+  two entries above. The test-author found it, wrote it down, and it shipped to
+  review anyway. The analysis was done; the loop from *noted* to *taken* was not.
+- **The one-directional trap survived its own fix.** The first reverse probe used
+  the same mapped type on both sides, so TypeScript compared the two source types
+  rather than the mapped results and fell back into the bivariance the probe
+  existed to defeat — compiling clean with the parameter dropped. Check that a
+  guard bites by breaking the thing it guards, even when the guard is the fix for
+  a guard.
+- **`satisfies` is not the tool for a port.** On an object literal it applies
+  excess-property checking, so a store legitimately carrying more members than
+  the port requires is rejected. The relationship is *assignability*: assign an
+  existing variable, not a fresh literal.
+
 ## Measure, do not estimate
 
 - A figure that cannot be reproduced is **withdrawn, not defended** — name the

@@ -31,6 +31,10 @@ import { describe, expect, it } from "vitest";
 
 import { createMemoryAlertStore } from "@/lib/services/alerts";
 import type { AlertRecord } from "@/lib/services/alerts";
+// One criterion for "which member writes a state change", in one place. It
+// lives beside the integration cases because that is where it was first needed;
+// a second copy of the rule here is a second thing to keep true.
+import { atomicWriter, type AlertChangeLike } from "@/tests/integration/services/alerts/atomic";
 
 const SOURCE = "deadline-monitor";
 const FP = "reno:opsmind:deadline-monitor:document:1:expiry";
@@ -148,5 +152,87 @@ describe("the in-memory store dedupes on the identity, exactly as the real one d
     areas.push("KW");
 
     expect(new Set((await store.getAlert(identity()))?.areas)).toEqual(new Set(["AE", "EG"]));
+  });
+});
+
+describe("the in-memory store writes a state change through one member, as the port requires", () => {
+  // THE DEFAULT STORE, AND NOTHING ANYWHERE CALLED THIS. `AlertManagerDeps.store`
+  // falls back to this implementation, so it is what runs in any deployment
+  // that has not bound the Prisma one — and the member every state change now
+  // goes through was reachable from no test in the repository. Same finding as
+  // `raiseKind` and as this file's own reason for existing: executing is not
+  // being asserted about, and here it was not even executing.
+  //
+  // THE PORT'S MEMBER, NOT A NAME. Which member it is comes from the criterion
+  // in tests/integration/services/alerts/atomic.ts — the one beyond the three
+  // the rest of this file already drives — because no document fixes its
+  // spelling and pinning one here would assert the spelling instead of the
+  // distinction.
+  const PORT_VERBS = ["getAlert", "upsertAlert", "recordAlertEvent"] as const;
+
+  const raising: AlertChangeLike = {
+    at: RAISED,
+    kind: "raised",
+    fromState: null,
+    toState: "firing",
+    actor: null,
+    runId: null,
+    reason: null,
+  };
+
+  // WHAT IS NOT ASSERTED HERE, AND WHY. This store keeps no history — it drops
+  // the event — so nothing about the event is observable through its own
+  // surface, and the claim that the event carries the id of the row the same
+  // write produced is held against the Prisma store, where it can be read back
+  // (tests/integration/services/alerts/repository.test.ts). Reaching for the
+  // event by patching a member and watching it be called would be asserting an
+  // internal call order, which is not this store's contract.
+
+  it("stores the alert it is handed, and reads it back exactly as its own upsert does", async () => {
+    // The failure this catches is the quiet one: a default store whose state
+    // change resolves, answers a plausible row, and keeps nothing — after which
+    // every raise in a host that injected no store is forgotten immediately and
+    // the client still looks healthy.
+    const store = createMemoryAlertStore();
+    const { write } = atomicWriter(store, PORT_VERBS);
+
+    const created = await write(alert(), raising);
+
+    expect(created).toMatchObject({ id: expect.any(String), ...alert() });
+    expect(await store.getAlert(identity()), "the state change kept nothing").toEqual(created);
+  });
+
+  it("dedupes on the identity and keeps the first sighting, so a re-raise is one record", async () => {
+    // The Alert card's rule, held against THIS member rather than only against
+    // `upsertAlert`: a second writer is a second place for the dedupe to be got
+    // wrong, and this is the one every state change goes through. A copy of the
+    // upsert that issued a fresh id, or that let `firstSeenAt` move, would pass
+    // every case above this one.
+    const store = createMemoryAlertStore();
+    const { write } = atomicWriter(store, PORT_VERBS);
+
+    const first = await write(alert(), raising);
+    const second = await write(
+      alert({ state: "acknowledged", severity: "major", firstSeenAt: LATER, lastSeenAt: LATER }),
+      { ...raising, at: LATER, kind: "acknowledged", fromState: "firing", toState: "acknowledged" },
+    );
+
+    expect(second.id).toBe(first.id);
+    expect(second.firstSeenAt).toEqual(RAISED);
+    expect(second).toMatchObject({ state: "acknowledged", severity: "major", lastSeenAt: LATER });
+    expect(await store.getAlert(identity())).toEqual(second);
+  });
+
+  it("scopes it by source, so two sources changing the same fingerprint are two records", async () => {
+    // The other half of the identity key, on the same member. Collapsing them
+    // would hide one product's alert behind another's.
+    const store = createMemoryAlertStore();
+    const { write } = atomicWriter(store, PORT_VERBS);
+
+    const mine = await write(alert({ sourceId: "deadline-monitor" }), raising);
+    const theirs = await write(alert({ sourceId: "ingestion" }), raising);
+
+    expect(theirs.id).not.toBe(mine.id);
+    expect(await store.getAlert({ sourceId: "ingestion", fingerprint: FP })).toMatchObject({ id: theirs.id });
   });
 });

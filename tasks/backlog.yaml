@@ -3789,6 +3789,21 @@
     in the same two verbs, and splitting them means opening index.ts and
     repository.ts twice.
 
+    WHAT THE IMPLEMENTER LEFT RED, on purpose. The store gains one exported
+    method, `applyAlertChange(record, change)`, and repository.test.ts asserts
+    "exercises every function it exports" — so that case now fails naming
+    `applyAlertChange` and will keep failing until a committed case calls it.
+    The implementer wrote no test by instruction; this directory is in produces
+    for exactly that. Assertion 2 was proved by a throwaway probe, NOT committed:
+    a `CHECK (false) NOT VALID` constraint on AlertEvent, a call through
+    applyAlertChange, and the Alert row read back column-for-column afterwards.
+
+    ALSO NOT CHECKED HERE. `upsertAlert` and `recordAlertEvent` stay on the port
+    and on both stores — nothing in the engine calls them for a state change any
+    more, but memory-store.test.ts and repository.test.ts do, so removing them
+    would have deleted merged tests. Nothing prevents a future writer reaching
+    for the non-atomic pair; only the comment on the port says not to.
+
 - id: gate-scopes-the-suite-to-the-diff
   title: The pipeline's own tests run when the pipeline changes, not on every product node
   phase: 0
@@ -3910,3 +3925,47 @@
     "exists and is not empty", which is hard to break silently, so it is recorded
     rather than taken. If it is ever read for content, revisit.
 
+- id: gate-source-reader-blind-to-a-transaction-handle
+  title: The TypeScript ownership reader hardcodes the handle names it can see
+  phase: 0
+  depends_on: [service-alerts-atomic-event]
+  spec: PIPELINE.md#the-gates
+  produces:
+    - tests/kernel/kernel-source.ts
+    - tests/kernel/
+    - tests/modules/deadlines/
+    - tests/integration/services/alerts/
+    - tasks/backlog.yaml
+    - tests/baseline.json
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "dbUsages reads the transaction handle from the source, whatever the author named it"
+      - "No existing repository's reported usages change, measured file by file"
+  risk: low
+  status: todo
+  note: >
+    Found by the test-author of service-alerts-atomic-event, measured rather than
+    supposed, and deliberately not fixed there.
+
+    tests/kernel/kernel-source.ts:448 carries
+    CLIENTS = new Set(["db", "tx", "trx", "client", "prisma"]). The first real
+    transaction in this repository names its handle `write`, so dbUsages returns
+    7 entries — all db.* — while write.alert and write.alertEvent are reached
+    inside the transaction and seen by neither.
+
+    IT IS THE SAME DEFECT THE SHELL SCRIPT WAS FIXED FOR, IN THE OTHER READER.
+    gate-boundaries-blind-to-a-transaction taught scripts/check-boundaries.sh to
+    read the handle out of the source precisely because the name is the author's
+    choice; the TypeScript-side reader still guesses from a list. The lesson was
+    recorded and the second reader was never checked against it.
+
+    NO FALSE GREEN TODAY. Both tables are declared, and check-boundaries.sh reads
+    the handle correctly, so the shell gate catches what the reader misses. What
+    is lost is that repository-ownership.test.ts's "touches only the tables it
+    declares" no longer reads the whole file.
+
+    Not fixed in that node because changing dbUsages alters what
+    kernel-repositories.test.ts and tests/modules/deadlines/repository.test.ts
+    see, and the test-author could not verify those inside its scope. That is the
+    right refusal, and it is why this node names them in produces.
