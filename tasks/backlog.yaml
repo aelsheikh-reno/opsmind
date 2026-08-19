@@ -2677,7 +2677,7 @@
       - "An alert raised on registration and the same fingerprint later reported by a run are one alert throughout"
       - "The context a source supplies is stored whole and nothing in it is interpreted"
   risk: compliance
-  status: todo
+  status: done
   note: >
     THIS IS THE NODE THAT MAKES A MERGED MODULE DELIVER. module-deadlines calls
     raiseAlert from registerDeadline and twice from the sweep, and until this
