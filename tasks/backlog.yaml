@@ -3789,3 +3789,124 @@
     in the same two verbs, and splitting them means opening index.ts and
     repository.ts twice.
 
+- id: gate-scopes-the-suite-to-the-diff
+  title: The pipeline's own tests run when the pipeline changes, not on every product node
+  phase: 0
+  depends_on: [gate-test-count-trusts-an-unchecked-run]
+  spec: PIPELINE.md#the-gates
+  produces:
+    - scripts/gate.sh
+    - tests/gates/
+    - tests/baseline.json
+    - PIPELINE.md
+    - tasks/backlog.yaml
+  done_when:
+    gates: [lint, types, tests, guards]
+    assertions:
+      - "A diff touching scripts/, eslint.config.mjs, templates/, .github/workflows/, tests/gates/ or tests/scaffold/ runs the pipeline's own tests"
+      - "A diff touching none of those skips them, and says so in the printed verdict rather than silently"
+      - "test-count compares against the baseline for the mode that actually ran, and a scoped run can never satisfy the full floor by accident"
+      - "The same rule decides in CI, because CI runs this script — local and CI never disagree about what ran"
+      - "The guards gate still runs on every invocation, scoped or not"
+  risk: low
+  status: todo
+  note: >
+    Ahmed's decision, 2026-08-19, after the cost was measured rather than
+    guessed. 68% of test time is the pipeline testing itself, and one file —
+    tests/gates/coverage-gate.test.ts — is 103s of a 197s summed total, because
+    each of its cases shells out and runs the gate machinery for real.
+
+    MEASURED SAVING, and smaller than I first told him: the suite goes 110s to
+    71s, about 35%, and the whole gate 185s to roughly 147s, about 20%. My first
+    figure of "roughly halves a run" was wrong and he agreed to that number, so
+    the corrected one is recorded here.
+
+    WHAT MAKES IT ACCEPTABLE IS THAT guards STILL RUNS. scripts/test-guards.sh is
+    a separate gate and the first line of every invocation; it verifies each gate
+    still blocks what it claims, in both directions. What a product node skips is
+    the deeper logic checks in tests/gates/, not the question of whether the
+    gates work at all.
+
+    NO SPLIT BRAIN, and this is the constraint that shapes the design. CI runs
+    ./scripts/gate.sh, so one rule in one file decides for both — the failure
+    ADR-031 and ADR-033 exist to prevent is a local and a CI verdict answering
+    different questions, and a selection rule living in the workflow rather than
+    the script would recreate exactly that.
+
+    THE RATCHET IS THE HARD PART. test-count reads numTotalTests, so a scoped run
+    counts fewer tests and would fail the full floor. Two baselines, and the gate
+    must compare against the one matching the mode it actually ran in — a scoped
+    run silently satisfying the full floor, or vice versa, is the defect this
+    node would introduce.
+
+    ACCEPTED RISK, stated plainly: a product change that trips an assumption in
+    the pipeline's own tests is not caught until a node touches the pipeline. The
+    guards gate covers whether a gate still fires; it does not cover every
+    proposition tests/gates/ asserts.
+
+    THE TRIGGER LIST WAS INCOMPLETE TWICE, and both gaps ran the wrong way.
+    It named the machinery — scripts/, eslint.config.mjs, templates/,
+    .github/workflows/ — and not the pipeline's own tests, so a diff confined to
+    tests/gates/ was SCOPED and the one PR that changed those tests was the one
+    PR that did not run them. Measured on a fixture whose only committed change
+    was a file under tests/gates/, not inferred. The rule is therefore stated as
+    a criterion rather than as a list: a path is a trigger if changing it could
+    change what these tests should say, which covers the machinery and the tests
+    of the machinery both.
+
+    THE SECOND GAP WAS THE SAME OMISSION AGAINST THE SAME CRITERION. Three cases
+    in tests/scaffold read the REAL repository at run time — package.json in
+    package-scripts.test.ts and toolchain.test.ts, tsconfig.json in
+    toolchain.test.ts — so a diff touching only those files was scoped, and
+    measured as scoped. The sharp one is tsconfig.json: switching `strict` off
+    makes tsc --noEmit pass trivially on code that should fail, and the only test
+    that catches it lives in tests/scaffold. Every gate printed pass.
+
+    package-lock.json IS INCLUDED, and the argument is measured rather than
+    asserted. toolchain.test.ts checks what is INSTALLED under node_modules, which
+    is what npm ci builds from the lock, so a lock-only change can move an
+    installed version — the drift those cases exist for. Against including it was
+    that a lockfile moves on every dependency bump; of the three commits in this
+    repository's whole history that touch package-lock.json, none touches it
+    alone, because a bump that changes the manifest already triggers on
+    package.json. n is 3, so the instruction is to re-measure if lock-only churn
+    ever becomes routine, not to trust this number forever.
+
+    NOT EVERY FILE A CASE READS IS A TRIGGER. vitest.config.ts is read by none of
+    them, and tests/baseline.json is deliberately excluded: suite-scope.test.ts
+    asks the gate which key holds which floor instead of naming keys, so editing a
+    floor cannot change what it says, and making it a trigger would take the
+    scoping away from nearly every node for nothing.
+
+    WHAT I DID NOT DECIDE, AND FLAG FOR AHMED. Applying the criterion mechanically
+    reaches further than this list. tests/gates and tests/scaffold also read
+    docs/architecture/decisions.md (ADR-031 and ADR-035 are asserted to exist and
+    to state their rules), PIPELINE.md (the size-impl row is asserted to describe
+    what it measures), prisma/schema.prisma and tests/kernel/kernel-source.ts. By
+    the criterion each qualifies; each would also scope-bust most product nodes,
+    since docs are edited constantly. That trade is a decision about how much of
+    the saving to keep, not a mechanical consequence, so it is recorded here
+    rather than taken.
+
+    THE RESIDUAL WAS PRICED RATHER THAN ARGUED, on review. The pipeline's own
+    tests read REAL repository files and assert on their content, so the
+    criterion reaches further than the pipeline's code. Churn measured across 93
+    commits: docs/ 32%, PIPELINE.md 12%, prisma/schema.prisma 6%,
+    tests/kernel/kernel-source.ts 3%.
+
+    tests/kernel/kernel-source.ts was TAKEN, and the distinction is what decided
+    it: it is not prose the gate quotes, it is code the gate runs — size-impl.mjs
+    classifies every line of every diff through it, so a change mis-reading a
+    comment as code moves every size-impl verdict silently. That is the budget
+    the record calls never waived in the whole history of this repository.
+
+    docs/ and PIPELINE.md were NOT taken. Adding docs/ flips about half of recent
+    commits to a full run, which is most of the saving, and the failure it guards
+    is a docs-only pull request gutting an ADR the tests quote — a deliberate act,
+    visible in review of that same pull request, costing a cross-check on prose
+    rather than on behaviour.
+
+    prisma/schema.prisma at 6% is the one remaining candidate. Its reads are
+    "exists and is not empty", which is hard to break silently, so it is recorded
+    rather than taken. If it is ever read for content, revisit.
+
