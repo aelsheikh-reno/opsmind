@@ -39,7 +39,16 @@ export interface NewAlertEvent {
 export interface NewAlertSource {
   sourceId: string;
   kind: $Enums.AlertSourceKind;
-  expectedEvery?: number | null;
+  /**
+   * DELIBERATELY UNWRITEABLE UNTIL THE UNIT IS RULED. The card types this
+   * `interval` and Prisma has no interval scalar, so the column is an Int with
+   * nothing anywhere fixing whether it counts seconds, minutes or hours —
+   * service-alerts-source-registry decides that. A comment saying "nothing
+   * writes a non-null value yet" is a convention; `null` as the only accepted
+   * value is the compiler enforcing it, and widening this line is the one edit
+   * that node has to make on purpose.
+   */
+  expectedEvery?: null;
   lastRunAt?: Date | null;
   lastRunId?: string | null;
 }
