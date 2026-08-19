@@ -39,10 +39,25 @@ Run task `$1` from `tasks/backlog.yaml` through the full pipeline.
    missed.** An estimate nobody checks against the outcome never improves.
 
 5. **Implement.** Delegate to the `implementer` subagent with the task node and
-   its `spec` document. Do not implement in this context.
+   **`docs/architecture/lessons.md`**, which is every defect this build has
+   already had. Every agent starts cold; that file is the only thing carrying
+   what the last one learned. It is short on purpose.
 
-6. **Test, independently.** Delegate to `test-author` with the task node and the
-   spec — and instruct it explicitly not to read the implementation.
+6. **Test what the diff did, not what the node describes in the abstract.**
+   Delegate to `test-author` — **but only when something asks for tests.**
+
+   Run the gate first and read `diff-cov`. If it reports **"no coverable lines
+   changed"**, the coverage floor wants nothing: the change is shell, config or
+   documentation, and the implementer's own probes — construct the violation,
+   observe the refusal — are the evidence. Persist those probes and skip the
+   agent. Two pipeline nodes spent 58 minutes on tests **no gate required**.
+
+   When tests ARE required, brief `test-author` on **the diff**: the node's
+   assertions are the specification, the diff is the surface to cover. Anything
+   in the diff no assertion reaches is either untested behaviour or an
+   unrequested feature; anything in the assertions the diff does not reach is
+   unimplemented. **Both are findings, and both are cheaper to report than to
+   paper over with a new test nobody asked for.**
 
 7. **Differential, if `risk` is `money` or `compliance`.** Delegate to `differ`.
    Any difference it reports stops the pipeline and is escalated to Ahmed. Never

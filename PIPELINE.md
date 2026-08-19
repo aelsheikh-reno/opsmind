@@ -245,6 +245,45 @@ weakening the gate.
 
 ---
 
+## The pipeline scales to the node
+
+> Rewritten 2026-08-20. The old shape was a fixed sequence — plan, implement,
+> test, differ, gate, review — applied identically whether the node changed a
+> payroll calculation or a line of shell. It cost 176 minutes for 55 lines on its
+> worst run, and 58 of those minutes went to tests **no gate had asked for**.
+
+| Node | Pipeline |
+|---|---|
+| `money` · `compliance` | full: implementer, blind test-author, differential oracle, adversarial review, full mutations |
+| everything else, with coverable lines | implementer, test-author briefed on **the diff**, review |
+| shell · config · docs — `diff-cov` says *no coverable lines changed* | implementer with its own probes persisted, then review |
+
+**Three things make it scale rather than merely shrink.**
+
+**It carries what it learned.** `docs/architecture/lessons.md` goes to every
+implementer. Every agent starts cold, and the knowledge was scattered across
+ninety backlog nodes and forty ADRs that nobody reads in full — so the same
+mistake arrived twice. The trigger list was wrong twice; the unreachable-branch
+defect appeared twice. That file is short on purpose, and it grows only from
+defects that actually happened.
+
+**The test-author works from the diff, not from the node in the abstract.** The
+assertions are the specification; the diff is the surface. Something in the diff
+that no assertion reaches is untested behaviour or an unrequested feature.
+Something in the assertions the diff never reaches is unimplemented. **Both are
+findings** — and reporting them is cheaper and more useful than inventing a test
+to cover the gap.
+
+**It asks whether tests are wanted before commissioning them.** `diff-cov` only
+measures `lib/**/*.ts`. On a shell change it reports *no coverable lines
+changed*, and the honest answer is that the implementer's probes — construct the
+violation, observe the refusal — are the evidence. Persist them; skip the agent.
+
+**What does NOT scale down.** The adversarial review runs on everything. It costs
+14% of agent time and found 14 of the 23 defects on record — the best ratio in
+the system by a wide margin — and the coordinator has found none. Cutting the
+cheapest, most productive check to save time would be optimising the wrong thing.
+
 ## Verification is stubbed until it has to be real
 
 > Written 2026-08-19 after the node that made the gate faster became the slowest
