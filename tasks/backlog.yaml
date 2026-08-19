@@ -3529,6 +3529,7 @@
   spec: PIPELINE.md#the-gates
   produces:
     - scripts/gate.sh
+    - PIPELINE.md
     - tests/gates/
     - tasks/backlog.yaml
     - tests/baseline.json
@@ -3565,6 +3566,23 @@
     but the conclusion was too strong: the underlying instability was reduced, not
     removed, and it has surfaced again on a different gate. Reopening that node
     is not the answer — this one names a concrete mechanism it did not.
+
+    FIXED BY CONSOLIDATION, not by a separate check. The gate ran the whole suite
+    three times — a verdict, a count, and coverage — so the count came from a run
+    whose outcome nothing had looked at. One coverage run with the json reporter
+    serves all three, and the count now comes from the same execution whose
+    verdict is printed beside it.
+
+    That alone was not enough for the first assertion. A suite failing to collect
+    contributes no tests AND no complaint, so test-count now refuses outright when
+    the run reports any failed suite or unhandled rejection, rather than reading a
+    total from a run that did not fully run. Proved by forcing a failing suite:
+    "2 suite(s) failed ... refusing to read a total from a run that did not fully
+    run".
+
+    The performance saving is a consequence rather than the aim: 310s to 185s per
+    gate invocation, measured on 1323 tests, and every agent verification pays the
+    same cost.
 
 - id: gate-boundaries-blind-to-a-transaction
   title: The ownership check misses a table behind a transaction, and one whose name is a prefix
