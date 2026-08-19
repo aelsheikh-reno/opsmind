@@ -3809,7 +3809,7 @@
       - "The same rule decides in CI, because CI runs this script — local and CI never disagree about what ran"
       - "The guards gate still runs on every invocation, scoped or not"
   risk: low
-  status: todo
+  status: done
   note: >
     Ahmed's decision, 2026-08-19, after the cost was measured rather than
     guessed. 68% of test time is the pipeline testing itself, and one file —
