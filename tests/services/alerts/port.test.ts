@@ -39,7 +39,7 @@ import {
 // here it cannot, because a dynamically resolved value is `unknown` and the
 // compiler would have nothing to check. If the factory is spelled differently,
 // this import is the single line that moves.
-import { createAlertManager } from "@/lib/services/alerts";
+import { createAlertManager, type AlertManagerClient } from "@/lib/services/alerts";
 
 import { GULF, calendar, d, deadline, threshold } from "@/tests/modules/deadlines/surface";
 
@@ -48,16 +48,59 @@ import { AREA, FP_A, MAJOR, POLICY, PORT_VERBS, SOURCE, client } from "./surface
 // --------------------------------------------------------- the binding --
 
 /**
- * THE ASSERTION, and it is made at compile time.
+ * THE ASSERTION, HALF ONE: the client is no NARROWER than the port.
  *
  * No `as`, no `satisfies`, no cast: the client is assigned to the merged
- * module's own port type, so `tsc --noEmit` is what rejects a signature
- * disagreement. If `reportRun` loses its fourth argument, if `raiseAlert`'s
- * `areas` goes missing (ADR-040), or if either stops returning `Promise<void>`,
- * this line stops compiling — before a single test runs, and before a merged
- * compliance module has to change to accommodate it.
+ * module's own port type, so `tsc --noEmit` is what rejects the disagreement.
+ * This direction catches a client that demands MORE or DIFFERENT than the
+ * deadline monitor supplies — an extra required parameter, a narrowed one
+ * (`areas: string` where ADR-040 says a list), a parameter type whose field is
+ * spelled differently (`jurisdictionId`, ADR-043), a verb that is missing, or
+ * one that stops returning `Promise<void>`. Each of those was mutated and each
+ * one fails here.
  */
 const bound: AlertManager = createAlertManager();
+
+/**
+ * THE ASSERTION, HALF TWO: the client is no WIDER than the port — and this is
+ * the half that catches a DROPPED TRAILING PARAMETER.
+ *
+ * DO NOT DELETE THIS AS REDUNDANT. It is not. TypeScript deliberately lets an
+ * implementation with FEWER parameters satisfy a wider signature — that is what
+ * makes `array.map((x) => x)` legal — so the binding above is ONE-DIRECTIONAL.
+ * Delete `scopes` from `AlertManagerClient.reportRun` and half one still
+ * compiles, every runtime case still passes, and the type error the node's
+ * first assertion promised never arrives.
+ *
+ * MEASURED, NOT REASONED, on 2026-08-19 by dropping `scopes` from
+ * AlertManagerClient.reportRun and running `npm run typecheck` and
+ * `npx vitest run tests/services/alerts` in each of three states:
+ *   · dropped, this line ABSENT   -> tsc exit 0, no errors, 84 tests passed
+ *   · dropped, this line PRESENT  -> tsc FAILS at this line,
+ *       `error TS2322: Type 'AlertManager' is not assignable to type
+ *        'AlertManagerClient'` — while the runtime suite STILL says 84 passed,
+ *        because there is nothing at run time to see
+ *   · restored, this line present -> tsc exit 0, 84 tests passed
+ * The middle row is the only thing standing between a dropped completeness
+ * declaration and a green pipeline.
+ *
+ * That parameter is not a detail. `scopes` is the completeness declaration, and
+ * "absence from a COMPLETE report resolves" is the whole basis on which this
+ * engine is allowed to close a compliance alert (flows-alerting.md, ADR-040).
+ * Two nodes were spent building it and renaming its field. An edit that dropped
+ * it would leave the merged sweep compiling and passing scopes into a void, and
+ * a second codebase importing this package would never learn they exist —
+ * every gate green.
+ *
+ * WHY THE CAST IS SOUND HERE, and why it does not contradict "no cast" above.
+ * What is being tested is a relationship between two TYPES, not the behaviour
+ * of a value; the cast only manufactures a value of the port type so that the
+ * assignment on the left has something to check, and that value is never
+ * called. The assignment itself is uncast, and it is the assertion. The two
+ * lines together are mutual assignability, which is the word assertion 1 uses:
+ * the client satisfies the port EXACTLY.
+ */
+const reverseProbe: AlertManagerClient = {} as AlertManager;
 
 describe("the client satisfies the AlertManager port the deadline monitor already calls", () => {
   it("is assignable to the port with no cast, which is the compile-time half made visible", () => {
@@ -67,6 +110,17 @@ describe("the client satisfies the AlertManager port the deadline monitor alread
     // export or a mis-shaped default would produce.
     expect(typeof bound.reportRun, "AlertManager.reportRun").toBe("function");
     expect(typeof bound.raiseAlert, "AlertManager.raiseAlert").toBe("function");
+  });
+
+  it("is assignable in BOTH directions, which is what makes it exact", () => {
+    // The runtime half of the reverse probe, and it is deliberately thin: there
+    // is nothing at run time to see, because the claim is that two types are
+    // mutually assignable and types do not exist at run time. The case is here
+    // so the probe is referenced by something a reader will find, and so that
+    // deleting the probe fails a named case rather than quietly removing the
+    // only guard on a dropped trailing parameter.
+    expect(reverseProbe, "the reverse probe is what catches a dropped `scopes`").toBeDefined();
+    expect(PORT_VERBS).toEqual(["reportRun", "raiseAlert"]);
   });
 
   it("publishes the two verbs the merged module already calls", () => {

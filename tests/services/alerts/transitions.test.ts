@@ -381,6 +381,60 @@ describe("reassert on a resolved alert reopens it, which is how a downgrade is e
     const stale = markStale(firingRecord());
     expect(reassert(stale, raise(), SECOND_NIGHT).stale).toBe(true);
   });
+
+  it("carries the flag through unchanged from every open state, whichever way it is set", () => {
+    // THE SAME READING FROM A SECOND ANGLE, and it is here because one case was
+    // thin cover for an unspecified rule on a compliance service. The one above
+    // is a single record; this is the whole open surface — three states x flag
+    // set and clear — and it asserts the flag comes out exactly as it went in.
+    //
+    // The angle is orthogonality rather than preservation: data-model.md calls
+    // `stale` "Orthogonal to `state` on purpose", so a re-raise that moved the
+    // flag in EITHER direction would couple the two axes. Clearing a set flag
+    // is the reviewer's mutation; setting a clear one is the same coupling
+    // arriving from the other side, and neither is caught by a case that only
+    // ever starts stale.
+    for (const { state, record } of inEveryState().filter((entry) => entry.state !== RESOLVED)) {
+      for (const flagged of [true, false]) {
+        const before = flagged ? markStale(record) : clearStale(record);
+        expect(before.stale, `${state} could not be set up ${flagged ? "stale" : "clear"}`).toBe(flagged);
+        const after = reassert(before, raise(), SECOND_NIGHT);
+        expect(after.stale, `${state}: a re-raise moved the unconfirmed flag`).toBe(flagged);
+        expect(after.state, `${state}: a re-raise moved the state`).toBe(state);
+      }
+    }
+  });
+
+  it("leaves confirmation to the one verb that knows a scope was completed", () => {
+    // THE THIRD ANGLE, and the one that says WHY the reading matters rather
+    // than merely what it is. The rule it protects belongs to the node above:
+    // "An alert stops being STALE when a later run declares its scope COMPLETE"
+    // (service-alerts-report-run). Completeness is the run's declaration, and a
+    // raise carries none — `AlertRaise` has a fingerprint, a severity, a policy,
+    // areas and a bag, and nothing that says "I finished looking".
+    //
+    // So the failure this forbids is concrete: registerDeadline raises
+    // out-of-band, with no run and no scope behind it (lib/modules/deadlines).
+    // If a raise could clear the flag, that call would mark an alert confirmed
+    // that no run has covered — a watcher that has gone dark being made to look
+    // healthy by a caller that never looked. flows-alerting.md is explicit that
+    // it must not: "A dead watcher can flag alerts unconfirmed but can never
+    // close them."
+    //
+    // Stated as a sequence rather than a single call, because that is the shape
+    // of the risk: it is not one re-raise that would confirm wrongly, it is
+    // every re-raise for as long as the source stays dark.
+    let alert = markStale(firingRecord());
+    for (const night of [SECOND_NIGHT, THIRD_NIGHT, THIRD_NIGHT]) {
+      alert = reassert(alert, raise(), night);
+      expect(alert.stale, "a raise confirmed an alert no run had covered").toBe(true);
+      expect(isOpen(alert.state), "and it is still open, still unconfirmed").toBe(true);
+    }
+    // The one door. `clearStale` is what the run-reporting node calls once it
+    // knows the scope was finished, and it is the only thing in the file that
+    // takes the flag down on an open alert.
+    expect(clearStale(alert).stale).toBe(false);
+  });
 });
 
 // ------------------------------------- assertion 5, acknowledged and suppressed --
