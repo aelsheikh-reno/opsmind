@@ -3539,7 +3539,7 @@
       - "A counting run with any failed or uncollected suite is refused, never read as a total"
       - "Three gate runs on one unchanged commit return the same test-count verdict"
   risk: low
-  status: todo
+  status: done
   note: >
     Observed 2026-08-18 on spec-coverage-audit, a DOCS-ONLY change. Three
     ./scripts/gate.sh runs on one unchanged commit returned FAIL, FAIL, PASS. The
