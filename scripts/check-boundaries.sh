@@ -53,6 +53,21 @@ for repo in "${repositories[@]}"; do
            | grep -oE '\$transaction\([[:space:]]*async[[:space:]]*\(?[[:space:]]*[A-Za-z_][A-Za-z0-9_]*' \
            | grep -oE '[A-Za-z_][A-Za-z0-9_]*$' | sort -u)
 
+  # WHAT THIS READER DOES NOT SEE, measured rather than supposed. Each fails in
+  # the safe direction — a missed violation, or a demand for a declaration —
+  # but a future author needs to know without rediscovering it:
+  #   · `$transaction((tx) => ...)` with a NON-ASYNC callback. Ordinary
+  #     TypeScript for a one-statement transaction; making `async` optional is a
+  #     one-token change and wants a case with it.
+  #   · a DESTRUCTURED parameter, `async ({ alert }) => ...`. Exotic, since it
+  #     means destructuring model delegates off the client.
+  #   · a handle whose name collides with an unrelated variable: a handle named
+  #     `t` in a file containing `t.format.call(...)` demands a declaration for
+  #     `format`. A false alarm, not a miss.
+  # Covered and easy to assume otherwise: a type annotation
+  # `async (tx: Prisma.TransactionClient) =>`, and a parameter with no
+  # parentheses, `async tx =>`. Both are read correctly.
+
   while IFS= read -r model; do
     [[ -z "$model" ]] && continue
     grep -qxF "$(echo "$model" | tr '[:upper:]' '[:lower:]')" <<<"$declared" \
