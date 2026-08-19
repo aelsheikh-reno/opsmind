@@ -2507,6 +2507,24 @@
   phase: 1
   depends_on: [module-deadlines-sweep, shapes-alert-manager, deadlines-alert-contract-scope-and-failure]
   spec: docs/architecture/flows-alerting.md
+  size_total: 2800
+  size_waiver_reason: >
+    2668 added lines, of which 139 are implementation. Ahmed, 2026-08-19. The
+    shape ADR-042 raised the budget for, arriving in the first node after it:
+    tests and fixtures, not code. 653 lines are the source reader and fixture
+    surface that the five remaining alert nodes import rather than rewrite, and
+    660 are the transition cases the coverage gate demanded after refusing the
+    first attempt at 50% of its changed lines — nine exported transitions had no
+    caller.
+
+    There is nothing to split. The implementation is 139 lines of one coherent
+    public surface, and moving tests to a follow-up PR would land a compliance
+    service with half its coverage and need a waiver for that instead. Cutting
+    tests to fit a line budget is what excluding them from size-impl exists to
+    prevent.
+
+    2800 rather than 2650 so a review round does not have to come back for
+    another fifty lines.
   also_read:
     - docs/architecture/components-services.md     # what it must never know
     - docs/architecture/architecture-containers.md # ADR-021, in-process behind the target interface
@@ -2517,6 +2535,7 @@
     - docs/architecture/flows-alerting.md
     - docs/architecture/components-services.md
     - tests/baseline.json
+    - tasks/backlog.yaml
   done_when:
     gates: [lint, types, boundaries, tests, coverage]
     assertions:
@@ -2525,7 +2544,7 @@
       - "Severity rises in place while an alert is open and never falls; a downgrade is a resolve followed by a new alert"
       - "STALE is a flag on an open alert, not a fifth state — an alert is firing and STALE at once"
       - "Acknowledged and suppressed are open: neither closes an alert and neither resolves it"
-      - "A policyId the engine holds no configuration for is accepted and recorded, never refused"
+      - "A policyId the engine holds no configuration for is accepted and never refused"
       - "No file in the service names a jurisdiction, a deadline, a document or a correlation rule"
   risk: compliance
   status: todo
@@ -2563,6 +2582,18 @@
     Roughly 150-200 implementation lines: the state predicates, the severity
     ordering, the types, and index.ts. No persistence, no verbs with side
     effects.
+
+    ASSERTION 6 WAS NARROWED UNDER REVIEW, 2026-08-19, and the half removed is
+    rehomed rather than dropped. It read "accepted and RECORDED, never refused".
+    Accepted-never-refused holds and is tested; recorded cannot hold here and is
+    not merely untested but unverifiable — createAlertManager's verbs return
+    Promise.resolve() because this node deliberately has no store.
+
+    Marking a compliance node done on a half-met assertion is how assertions
+    become aspirational, so the recording half moves to service-alerts-store,
+    where the first row is written. Same treatment ADR-040's node had when its
+    wording was found to predate the question it answered.
+
 - id: service-alerts-store
   title: Alert Manager — its own tables, and the integration tests that exercise them
   phase: 1
@@ -2587,6 +2618,7 @@
       - "A resolved alert's row survives its resolution — nothing is deleted to close an alert"
       - "The repository declares '// owns:' and touches no table outside that declaration"
       - "Every exported repository function is exercised against a real PostgreSQL, and the suite never skips"
+      - "An unknown policyId is RECORDED, not only accepted: the row carries it verbatim and no configuration is consulted"
   risk: compliance
   status: todo
   note: >
