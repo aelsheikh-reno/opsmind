@@ -406,6 +406,191 @@ describe("a raise for a resolved fingerprint reopens it, and the earlier resolut
   });
 });
 
+// ------------------------------------ what the append-only log says happened --
+
+describe("the event log distinguishes what happened, and claims a transition only where one happened", () => {
+  // The AlertEvent card is "every state change and what caused it", and it is
+  // "why the current state can be trusted" — NEVER UPDATED, NEVER DELETED. An
+  // entry that names a transition nothing made is therefore worse than a
+  // missing one: it cannot be corrected, and `service-alerts-store`'s own
+  // assertion is that every state change is recorded "carrying what changed it".
+  //
+  // WHAT IS ASSERTED AND WHAT IS DELIBERATELY NOT. `kind` has nine members on
+  // the card and no document fixes which one a re-raise or an escalation must
+  // carry, so no case below spells one — except `resolved`, which is the card's
+  // own word for closing and which assertion 4 already turns on. What the card
+  // DOES fix is the meaning of the pair beside it:
+  //
+  //   "fromState, toState | enum | null | Null where the kind changes no state
+  //    — a reassert or a stale flag"
+  //
+  // That is a rule about state and not about spelling, and it is asserted
+  // literally. Everything else here asserts DISTINCTIONS: three different
+  // things happened, so the log must call them three different things, or it
+  // cannot say which of them it was.
+
+  /** The nine the card names, and the only nine. */
+  const CARD_KINDS = [
+    "raised",
+    "reasserted",
+    "severity_raised",
+    "stale_marked",
+    "stale_cleared",
+    "acknowledged",
+    "suppressed",
+    "unsuppressed",
+    "resolved",
+  ];
+
+  it("records a first sighting and an ordinary re-raise as two different things", async () => {
+    await raise(FP, "minor");
+    const alert = await stored(FP);
+    expect(await eventsFor(db, alert.id), "a first raise recorded no event at all").toHaveLength(1);
+
+    await engine.tick();
+    await raise(FP, "minor");
+
+    const history = await eventsFor(db, alert.id);
+    expect(history, "the second raise recorded no event").toHaveLength(2);
+    expect(
+      history[1].kind,
+      "an ordinary re-raise is logged as the same thing as a first sighting, so nothing in the " +
+        "record can say which alerts are new",
+    ).not.toBe(history[0].kind);
+  });
+
+  it("records a first sighting, a re-raise and an escalation as three different things", async () => {
+    // One event per thing that happened, and three things happened: an alert
+    // opened, the same condition was seen again unchanged, and its severity
+    // rose. A log that collapses any two of those has lost the difference
+    // permanently.
+    await raise(FP, "minor");
+    const alert = await stored(FP);
+    await engine.tick();
+    await raise(FP, "minor");
+    await engine.tick();
+    await raise(FP, "major");
+
+    const history = await eventsFor(db, alert.id);
+    expect(history).toHaveLength(3);
+    expect(
+      new Set(history.map((event) => event.kind)).size,
+      `three different things happened and the log calls them: ${history.map((event) => event.kind).join(", ")}`,
+    ).toBe(3);
+  });
+
+  it("claims NO state change on a re-raise or an escalation, because neither moved the alert", async () => {
+    // data-model.md, AlertEvent: "fromState, toState … Null where the kind
+    // changes no state — a reassert or a stale flag." A re-raise leaves a
+    // firing alert firing, and an escalation raises SEVERITY, which is its own
+    // column and not a state. An entry reading firing -> firing is a transition
+    // that did not happen, written where it can never be taken back.
+    await raise(FP, "minor");
+    const alert = await stored(FP);
+    await engine.tick();
+    await raise(FP, "minor");
+    await engine.tick();
+    await raise(FP, "major");
+
+    // The premise, stated rather than assumed: the alert never left firing.
+    expect((await stored(FP)).state).toBe("firing");
+
+    const [, reasserted, escalated] = await eventsFor(db, alert.id);
+    for (const event of [reasserted, escalated]) {
+      expect(event.fromState, `${event.kind} recorded a state it moved from`).toBeNull();
+      expect(event.toState, `${event.kind} recorded a state it moved to`).toBeNull();
+    }
+  });
+
+  it("records the transition a first sighting DID make", async () => {
+    // The other half of the same rule: an event that changes state names the
+    // state it reached. An alert opens firing (ADR-020), and there was no state
+    // before it, so exactly one of the pair can be filled.
+    await raise(FP, "minor");
+    const alert = await stored(FP);
+
+    const [opened] = await eventsFor(db, alert.id);
+    expect(opened.toState, "the first sighting did not record that the alert opened").toBe("firing");
+    expect(opened.fromState, "the first sighting named a state that existed before the alert did").toBeNull();
+  });
+
+  it("records the close and the reopen as the transitions they are, so neither reads as a first sighting", async () => {
+    // Assertion 4 from the log's side. The reopen and the first sighting both
+    // end firing and may legitimately carry the same kind; what must tell them
+    // apart is WHERE EACH CAME FROM, and that is the pair the card fixes.
+    await raise(FP, "major");
+    const alert = await stored(FP);
+    await engine.tick();
+    await engine.resolveAlert(FP);
+    await engine.tick();
+    await raise(FP, "major");
+
+    const [opened, closed, reopened] = await eventsFor(db, alert.id);
+    expect(closed.kind).toBe("resolved");
+    expect(closed.fromState).toBe("firing");
+    expect(closed.toState).toBe("resolved");
+    expect(
+      reopened.fromState,
+      "the reopen did not record what it reopened FROM, so nothing distinguishes it from an alert " +
+        "seen for the first time",
+    ).toBe("resolved");
+    expect(reopened.toState).toBe("firing");
+    expect(reopened.fromState).not.toBe(opened.fromState);
+  });
+
+  it("stamps each event with the instant the change it describes happened", async () => {
+    // `at` is the whole reason an append-only log is a HISTORY rather than a
+    // bag. Asserted against the columns the same call wrote on the alert —
+    // `firstSeenAt`/`lastSeenAt` are "when this identity first fired" and "the
+    // most recent run or raise that carried it", `resolvedAt` is when it closed
+    // — so no case here needs a wall-clock literal or a clock the engine may
+    // not have taken.
+    await raise(FP, "minor");
+    const opened = await stored(FP);
+    const [opening] = await eventsFor(db, opened.id);
+    expect(opening.at, "the opening event is not stamped when the alert opened").toEqual(opened.firstSeenAt);
+
+    await engine.tick();
+    await raise(FP, "minor");
+    const seenAgain = await stored(FP);
+    const [, reasserted] = await eventsFor(db, opened.id);
+    expect(reasserted.at, "the re-raise event is not stamped when the raise arrived").toEqual(seenAgain.lastSeenAt);
+
+    await engine.tick();
+    await engine.resolveAlert(FP);
+    const closed = await stored(FP);
+    const [, , resolved] = await eventsFor(db, opened.id);
+    expect(resolved.at, "the resolution event is not stamped when the alert closed").toEqual(closed.resolvedAt);
+    expect(resolved.at.getTime()).toBeGreaterThan(opening.at.getTime());
+  });
+
+  it("writes only kinds the card names, with no actor and no run behind them", async () => {
+    // `actor` — "NULL MEANS THE SOURCE OR THE ENGINE DID IT, and a human
+    // resolve is the case that must never be indistinguishable from an
+    // automatic one". Nothing in this node has an actor: both verbs are a
+    // source talking. `runId` — "the run that caused it, WHERE A RUN DID", and
+    // neither verb here carries one.
+    await raise(FP, "minor");
+    const alert = await stored(FP);
+    await engine.tick();
+    await raise(FP, "minor");
+    await engine.tick();
+    await raise(FP, "major");
+    await engine.tick();
+    await engine.resolveAlert(FP);
+    await engine.tick();
+    await raise(FP, "minor");
+
+    const history = await eventsFor(db, alert.id);
+    expect(history.length).toBeGreaterThanOrEqual(5);
+    for (const event of history) {
+      expect(CARD_KINDS, `the log carries a kind the card does not name: ${event.kind}`).toContain(event.kind);
+      expect(event.actor, "an event this node wrote claims a human caused it").toBeNull();
+      expect(event.runId, "an event this node wrote claims a run caused it").toBeNull();
+    }
+  });
+});
+
 // --------------------------------------------------------------- assertion 7 --
 
 describe("the context a source supplies is stored whole and nothing in it is interpreted", () => {
@@ -476,6 +661,22 @@ describe("the context a source supplies is stored whole and nothing in it is int
 
     expect(areasOf(await stored(FP))).toEqual(new Set(["AE", "EG", "KW"]));
     expect(await alertCountFor(db, FP)).toBe(1);
+  });
+
+  it("replaces the areas on a later raise rather than accumulating them", async () => {
+    // An alert must not keep claiming a scope it has left. Resolution by
+    // absence asks whether ALL of an alert's areas were inside the set a run
+    // declared complete (data-model.md, AlertArea, "Why a row per area"), so an
+    // area that is no longer affected but is still recorded is one nothing can
+    // ever resolve — the alert freezes open for a scope it left.
+    await raise(FP, "major", "no-threshold-configured", ["AE", "EG", "KW"], {});
+    expect(areasOf(await stored(FP))).toEqual(new Set(["AE", "EG", "KW"]));
+
+    await engine.tick();
+    await raise(FP, "major", "no-threshold-configured", ["AE"], {});
+
+    expect(areasOf(await stored(FP))).toEqual(new Set(["AE"]));
+    expect(await db.alertArea.count()).toBe(1);
   });
 
   it("accepts an empty context and stores an empty one", async () => {

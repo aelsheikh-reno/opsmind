@@ -2662,7 +2662,9 @@
   produces:
     - lib/services/alerts/{index,lifecycle}.ts
     - tests/services/alerts/
+    - tests/integration/services/alerts/
     - tests/baseline.json
+    - tasks/backlog.yaml
   done_when:
     gates: [lint, types, boundaries, tests, coverage]
     assertions:
@@ -3760,3 +3762,11 @@
     ownership check to see through db.$transaction, including handles not named
     tx. The third assertion is there so that fix is re-proved against the first
     real transaction in the repository rather than assumed.
+
+    DO IT WITH THE EVENT-KIND WORK, not apart from it. The reviewer of
+    service-alerts-raise observed that this node and its high finding are one
+    subject seen from two sides: this one is WHETHER the event is written, that
+    one is whether it SAYS THE RIGHT THING. Both are about the same two writes
+    in the same two verbs, and splitting them means opening index.ts and
+    repository.ts twice.
+
