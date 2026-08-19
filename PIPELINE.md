@@ -245,6 +245,34 @@ weakening the gate.
 
 ---
 
+## Verification is stubbed until it has to be real
+
+> Written 2026-08-19 after the node that made the gate faster became the slowest
+> node on record: **176 minutes of agent time for 55 implementation lines**, 3.2
+> min/line against a previous worst of 2.7 and a typical 0.4–1.2.
+
+**Stub the expensive dependency from the first probe, not the second.** Testing a
+gate means running the gate, and one implementer made **sixteen real gate runs**
+at roughly four minutes each — 64 of its 83 minutes — before discovering in its
+second round that a stubbed `npx` returning a dictated report gave the same
+evidence in seconds. The cheap path existed the whole time. A brief that does not
+name it is a brief that pays for the expensive one.
+
+**At most two real end-to-end runs, and they come last.** Prove the logic against
+stubs; spend a real run only on confirming the whole thing holds together, once
+per mode. Sixteen was not sixteen times the confidence.
+
+**Do not ask for wall-clock timings.** They cost real runs to produce and they do
+not survive a loaded machine: the same change measured 238s→140s, 185s→147s and
+114s→75s on three occasions, and all three were struck from the record as
+unreproducible. **A figure that will be deleted on review should not be
+commissioned.** State the structural claim instead — files, tests, invocations —
+which is reproducible and free.
+
+**The coordinator pays for what it asks.** Every expensive round in the record
+traces to a brief demanding it. When a node runs long, the first place to look is
+what was asked for, not how fast the agent was.
+
 ## A test run is scoped to what can fail
 
 > Measured 2026-08-19, from a `test-author` accounting for its own 58 minutes.
