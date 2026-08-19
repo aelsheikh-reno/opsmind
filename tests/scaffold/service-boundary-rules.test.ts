@@ -12,6 +12,13 @@
 //      boundary blocks
 //   6. No module or kernel repository changes verdict
 //
+// A SECOND SET OF ASSERTIONS FOLLOWS AT THE FOOT OF THIS FILE, for backlog node
+// `gate-boundaries-blind-to-a-transaction`. Same subject — check-boundaries.sh
+// reading a repository's declaration — and the same fixture machinery, so it
+// lives here rather than in a file that would have to copy all of it. That block
+// carries its own header, and says which of its cases are discriminators and
+// which are regression guards.
+//
 // WHY THIS FILE IS SEPARATE FROM eslint-boundaries.test.ts.
 //
 // That file has one subject — eslint.config.mjs still says what
@@ -743,6 +750,495 @@ describe("check-boundaries.sh: a service repository is a repository, and is chec
     // repository red, the fixtures cannot say so, because none of them is shaped
     // quite like a repository somebody actually maintains.
     const { status, output } = runBoundaryCheck(repoRoot);
+    expect(status, `check-boundaries.sh is not clean on this repository:\n${output}`).toBe(0);
+  });
+});
+
+// ===========================================================================
+// Backlog node `gate-boundaries-blind-to-a-transaction`
+//
+// Assertions:
+//
+//   1. A repository touching an undeclared table inside db.$transaction is
+//      reported by name, exactly as the direct form is
+//   2. A repository whose transaction touches only declared tables stays clean
+//   3. Declaring AlertEvent does not license touching Alert: the comparison is
+//      against whole names, never a substring
+//   4. A repository declaring every table it touches stays clean, and no
+//      existing repository changes verdict
+//
+// WHICH CASES BELOW ARE DISCRIMINATORS AND WHICH ARE REGRESSION GUARDS, because
+// the next person will otherwise assume every case here should be red at HEAD.
+// Each `it` states its own direction in its first comment line; the summary is:
+//
+//   RED at HEAD, green after — these are the fix:
+//     "reports a table reached through db.$transaction by name..."      (1)
+//     "reads the transaction handle the author chose..."                (1)
+//     "sees a transactional table in every repository this build has"   (1)
+//     "refuses to let a declared AlertEvent license an undeclared Alert" (3)
+//
+//   GREEN at HEAD, green after — these are proof the fix broke nothing:
+//     "leaves a transaction that touches only declared tables alone"    (2)
+//     "leaves a repository that declares everything it touches alone"   (4)
+//     "still finds every repository in this build clean"                (4)
+//
+// A too-eager fix — one that reads any `<identifier>.<table>.` it can find, or
+// that stops matching a declaration written `A, B, C` — satisfies 1 and 3 and is
+// wrong. The three green-at-HEAD cases are the only thing that says so, and two
+// of them run against the repositories people actually maintain rather than
+// against fixtures shaped to suit the check.
+//
+// WHY THIS MATTERS MORE THAN A SHELL SCRIPT USUALLY DOES. eslint block 2 exempts
+// a repository.ts from the import rule entirely, so once that file holds the
+// client nothing in the lint layer has an opinion about what it does with it.
+// check-boundaries.sh is the whole of CLAUDE.md rule 1 for that one file, and
+// data-ownership.md now says exactly that for a packaged capability service.
+//
+// THE TWO BLIND SPOTS, BOTH MEASURED AT HEAD (b40ff55) AGAINST
+// `git show HEAD:scripts/check-boundaries.sh`:
+//
+//   - the table list is read with `grep -oE 'db\.[a-zA-Z]+\.'`, and inside
+//     `db.$transaction(async (tx) => ...)` every table is reached as `tx.alert`.
+//     `$` is not in `[a-zA-Z]`, so `db.$transaction` matches nothing either: a
+//     repository whose entire body is one transaction is read as touching NO
+//     tables at all, and comes out clean whatever it wrote to.
+//   - the ownership comparison is `echo "$owned" | grep -qi "$model"`, a
+//     SUBSTRING test. `alert` occurs inside `alertevent`, so a declaration of
+//     AlertEvent licenses touching Alert.
+//
+// This schema is built from such pairs throughout — Alert/AlertArea/AlertEvent/
+// AlertSource, Person/PersonRole, Deadline/DeadlineRegistration — so a case
+// using two unrelated names would pass even under the broken comparison and
+// prove nothing. Every pair below is a genuine prefix pair for that reason.
+// ===========================================================================
+
+/**
+ * A repository that does its work inside an interactive transaction.
+ *
+ * `handle` is a parameter, not a constant, because the name of the transaction
+ * client is chosen by whoever writes the callback. `tx` is a convention that
+ * appears in the Prisma documentation; nothing enforces it, and `trx` and `t`
+ * are both in common use. See the handle case below for why that is pinned.
+ *
+ * `annotation` carries the type annotation the typed form of the callback
+ * takes — `async (tx: Prisma.TransactionClient) => ...` is what an author gets
+ * from an editor completing the signature, and it changes the text around the
+ * handle without changing anything about what the code reaches.
+ */
+function transactionalWrites(
+  handle: string,
+  tables: readonly string[],
+  annotation: string = "",
+): string {
+  return (
+    "export async function writeAll() {\n" +
+    `  return db.$transaction(async (${handle}${annotation}) => {\n` +
+    tables.map((table) => `    await ${handle}.${table}.create({ data: {} });\n`).join("") +
+    "  });\n" +
+    "}\n"
+  );
+}
+
+/** A table name no declaration in this build contains, as a whole word or otherwise. */
+const PROBE_TABLE = "probeUndeclaredTable";
+
+/**
+ * One transaction reaching one certainly-undeclared table, appended to a copy of
+ * a real repository.
+ *
+ * Appended rather than substituted so the case does not depend on which tables
+ * that repository happens to touch today: whatever it owns, it does not own
+ * this, and the finding is expected regardless of how the file is later
+ * rewritten.
+ */
+const TRANSACTIONAL_PROBE = `\n${transactionalWrites("tx", [PROBE_TABLE])}`;
+
+/** Every repository.ts this build actually has, found the way the gate finds them. */
+function realRepositories(): string[] {
+  return ["lib/modules", "lib/kernel", "lib/services"].flatMap((parent) => {
+    const absolute = path.join(repoRoot, parent);
+    if (!fs.existsSync(absolute)) return [];
+    return fs
+      .readdirSync(absolute)
+      .map((name) => path.posix.join(parent, name, "repository.ts"))
+      .filter((relative) => fs.existsSync(path.join(repoRoot, relative)));
+  });
+}
+
+/**
+ * The real source tree, copied into a sandbox so a case may modify one file in
+ * it without touching the working copy.
+ *
+ * lib/, app/ and the schema together are everything check-boundaries.sh reads,
+ * so a run against this copy answers the same question a run at the repository
+ * root answers — and CLAUDE.md's rule that lib/services and lib/modules are left
+ * exactly as found is kept by construction, because nothing is written outside
+ * the mkdtemp directory.
+ */
+function copyRealTree(dir: string): void {
+  for (const entry of ["lib", "app"]) {
+    const from = path.join(repoRoot, entry);
+    if (fs.existsSync(from)) fs.cpSync(from, path.join(dir, entry), { recursive: true });
+  }
+  fs.mkdirSync(path.join(dir, "prisma"), { recursive: true });
+  fs.copyFileSync(
+    path.join(repoRoot, "prisma", "schema.prisma"),
+    path.join(dir, "prisma", "schema.prisma"),
+  );
+}
+
+describe("check-boundaries.sh: a transaction is not a hiding place", () => {
+  it("reports a table reached through db.$transaction by name, exactly as the direct form is", async () => {
+    // ASSERTION 1. RED AT HEAD — this is the fix.
+    //
+    // The two repositories are the same repository written twice. Both declare
+    // Alert alone; both reach alert and alertEvent; one does it directly and one
+    // does it inside a transaction. The direct one is the control, so a green
+    // here cannot come from the ownership loop having stopped working, and the
+    // expected sentence for the transactional one is DERIVED from the control's
+    // in the same run rather than restated — "exactly as the direct form is" is
+    // then literally what is compared, and a change to the wording moves both
+    // sides together instead of leaving a stale copy in a test file.
+    const fixture: Fixture = {
+      "lib/modules/payroll/repository.ts": repositorySource("Alert", ["alert", "alertEvent"]),
+      "lib/services/alerts/repository.ts": repositorySource(
+        "Alert",
+        [],
+        transactionalWrites("tx", ["alert", "alertEvent"]),
+      ),
+      "prisma/schema.prisma": CLEAN_SCHEMA,
+    };
+    await inSandbox(fixture, (dir) => {
+      const { status, findings, output } = runBoundaryCheck(dir);
+
+      const directFinding = findings.find(
+        (finding) => finding.startsWith("payroll") && finding.includes("alertEvent"),
+      );
+      expect(
+        directFinding,
+        "the direct control produced no undeclared-table finding, so this case proves nothing " +
+          `about transactions. check-boundaries.sh said:\n${output}`,
+      ).toBeDefined();
+
+      expect(
+        findings,
+        "check-boundaries.sh does not report alertEvent for lib/services/alerts/repository.ts, " +
+          "which writes it inside db.$transaction while declaring Alert alone. The table list is " +
+          "read as `db.<table>.`, and inside a transaction every table is reached through the " +
+          "transaction client instead — so a repository whose body is one transaction is read as " +
+          "touching nothing and comes out clean whatever it wrote to. eslint exempts a " +
+          "repository.ts from the import rule entirely, so this check is the whole of CLAUDE.md " +
+          `rule 1 for that file. Full output:\n${output}`,
+      ).toContain((directFinding ?? "").replace("payroll", "alerts"));
+
+      expect(
+        findings.filter((finding) => finding.includes("'alert'")),
+        "check-boundaries.sh reports the alert table, which both repositories DO declare owning. " +
+          "A check that reports a declared table reports every repository and is ignored by " +
+          `everyone within a week. Full output:\n${output}`,
+      ).toHaveLength(0);
+
+      expect(
+        findings.filter((finding) => finding.includes("transaction")),
+        "check-boundaries.sh has taken $transaction itself for a table name. It is a method on " +
+          "the client, not a model; reporting it would put a finding on every repository that " +
+          `uses one, which is the opposite of the fix. Full output:\n${output}`,
+      ).toHaveLength(0);
+
+      expect(status, "an undeclared table reached through a transaction must fail the check").not.toBe(0);
+    });
+  });
+
+  it("reads the transaction handle the author chose, not the name `tx`", async () => {
+    // ASSERTION 1, and RED AT HEAD for the same reason as the case above.
+    //
+    // PINNED DELIBERATELY, AND HERE IS THE ARGUMENT. `tx` is what the Prisma
+    // documentation writes and nothing more: the handle is a callback parameter
+    // and its name is the author's to choose. A fix that matches `tx.` literally
+    // closes the hole for the spelling one document happens to use and leaves it
+    // open for `trx`, for `t`, and for the typed form an editor generates. The
+    // defect being fixed is that the check cannot see a table; swapping one
+    // invisible spelling for another is the same defect with a smaller
+    // catchment, and the next repository is not obliged to know which spelling
+    // the gate can see. The assertion says "inside db.$transaction", and both
+    // repositories below are inside db.$transaction.
+    //
+    // Kept as its own case, and with two independent shapes, so that a fix which
+    // does hardcode `tx` fails HERE and nowhere else — which names the defect
+    // instead of merely reporting that something about transactions is wrong.
+    const fixture: Fixture = {
+      "lib/modules/payroll/repository.ts": repositorySource(
+        "PayrollRun",
+        [],
+        transactionalWrites("trx", ["payrollRun", "salaryTerm"]),
+      ),
+      "lib/kernel/person/repository.ts":
+        'import type { Prisma } from "@prisma/client";\n' +
+        repositorySource(
+          "Person",
+          [],
+          transactionalWrites("t", ["person", "personEnrolment"], ": Prisma.TransactionClient"),
+        ),
+      "prisma/schema.prisma": CLEAN_SCHEMA,
+    };
+    const expected: [owner: string, table: string, shape: string][] = [
+      ["payroll", "salaryTerm", "a handle named `trx`"],
+      ["person", "personEnrolment", "a handle named `t`, with the callback's type annotation"],
+    ];
+    await inSandbox(fixture, (dir) => {
+      const { status, findings, output } = runBoundaryCheck(dir);
+      for (const [owner, table, shape] of expected) {
+        expect(
+          findings.filter((finding) => finding.includes(owner) && finding.includes(table)),
+          `check-boundaries.sh does not report ${table}, which ${owner} writes inside ` +
+            `db.$transaction through ${shape} while not declaring it. The transaction client is a ` +
+            "callback parameter and its name is the author's choice, so a check that recognises " +
+            "one spelling of it is evaded by renaming a lambda argument — which costs nothing and " +
+            `looks like tidying. Full output:\n${output}`,
+        ).not.toHaveLength(0);
+      }
+      expect(
+        findings.filter(
+          (finding) => finding.includes("'payrollRun'") || finding.includes("'person'"),
+        ),
+        "check-boundaries.sh reports a table the repository declares owning. Reading the handle " +
+          `must not mean reporting everything reached through it. Full output:\n${output}`,
+      ).toHaveLength(0);
+      expect(status, "an undeclared table must fail the check whatever the handle is called").not.toBe(0);
+    });
+  });
+
+  it("sees a transactional table in every repository this build actually has", async () => {
+    // ASSERTION 1 against the repositories people maintain rather than against
+    // fixtures. RED AT HEAD.
+    //
+    // Every case above reasons about repositories nobody wrote. This one takes
+    // each real one, appends a transaction reaching one certainly-undeclared
+    // table, and requires the gate to say so — for all of them, so that a fix
+    // which extends the ownership loop for one path glob and not another (the
+    // way the two loops in this script have drifted apart before) is caught
+    // here. The clean copy is checked first: if the untouched tree is not clean
+    // the probe proves nothing.
+    //
+    // The probe is APPENDED rather than substituted so the case survives those
+    // repositories being rewritten: whatever tables they own tomorrow, they will
+    // not own this one.
+    await inSandbox({}, (dir) => {
+      copyRealTree(dir);
+      const repositories = realRepositories();
+      expect(
+        repositories.length,
+        "no repository.ts was found under lib/modules, lib/kernel or lib/services, so this case " +
+          "probes nothing at all",
+      ).toBeGreaterThan(0);
+
+      const baseline = runBoundaryCheck(dir);
+      expect(
+        baseline.findings,
+        "the untouched copy of this build's own source is not clean, so nothing can be concluded " +
+          `from modifying it. check-boundaries.sh said:\n${baseline.output}`,
+      ).toEqual([]);
+
+      for (const relative of repositories) {
+        const target = path.join(dir, relative);
+        const original = fs.readFileSync(target, "utf8");
+        const owner = path.posix.basename(path.posix.dirname(relative));
+        try {
+          fs.writeFileSync(target, original + TRANSACTIONAL_PROBE);
+          const { status, findings, output } = runBoundaryCheck(dir);
+          expect(
+            findings.filter(
+              (finding) => finding.includes(owner) && finding.includes(PROBE_TABLE),
+            ),
+            `check-boundaries.sh does not report ${relative} for writing ${PROBE_TABLE} inside ` +
+              "db.$transaction. It is the one file eslint permits to hold the client, so this " +
+              "check is the only thing standing between it and another owner's tables " +
+              `(CLAUDE.md rule 1). Full output:\n${output}`,
+          ).not.toHaveLength(0);
+          expect(
+            status,
+            `a real repository reaching an undeclared table must fail the check:\n${output}`,
+          ).not.toBe(0);
+        } finally {
+          // restored on the failure path too, so a red case does not change what
+          // every later iteration is measuring
+          fs.writeFileSync(target, original);
+        }
+      }
+    });
+  });
+
+  it("leaves a transaction that touches only declared tables alone", async () => {
+    // ASSERTION 2. GREEN AT HEAD AND GREEN AFTER — a regression guard, not a fix.
+    //
+    // It passes at HEAD for the wrong reason: the tables are invisible, so there
+    // is nothing to report. Its job is to still pass once they are visible. The
+    // cheapest way to make the cases above go green is to report every
+    // `<something>.<name>.` in the file, and that turns the correct, expected use
+    // of an interactive transaction — writing an alert and its event log
+    // atomically, which is why this node blocks service-alerts-raise — into a
+    // permanent red gate. A gate that is red for correct code gets switched off.
+    const fixture: Fixture = {
+      "lib/services/alerts/repository.ts": repositorySource(
+        "Alert, AlertEvent",
+        [],
+        transactionalWrites("tx", ["alert", "alertEvent"]),
+      ),
+      "prisma/schema.prisma": CLEAN_SCHEMA,
+    };
+    await inSandbox(fixture, (dir) => {
+      const { status, findings, output } = runBoundaryCheck(dir);
+      expect(
+        findings,
+        "check-boundaries.sh objects to a repository whose transaction touches only tables it " +
+          `declares owning. Full output:\n${output}`,
+      ).toEqual([]);
+      expect(status, `expected a clean exit; check-boundaries.sh said:\n${output}`).toBe(0);
+      expect(
+        output,
+        "check-boundaries.sh exited 0 without reaching its verdict line, so the run says nothing",
+      ).toContain("boundaries clean");
+    });
+  });
+
+  it("refuses to let a declared AlertEvent license an undeclared Alert, in either direction", async () => {
+    // ASSERTION 3. RED AT HEAD — this is the fix.
+    //
+    // Three genuine prefix pairs, because a pair of unrelated names would pass
+    // even under a substring comparison and prove nothing.
+    //
+    // BOTH DIRECTIONS ARE PINNED, and they are red and green at HEAD
+    // respectively:
+    //
+    //   - alerts declares AlertEvent and touches alert; person declares
+    //     PersonRole and touches person. `alert` occurs inside `alertevent`, so
+    //     at HEAD the longer declaration licenses the shorter table and neither
+    //     is reported. These two are the discriminators.
+    //   - deadlines declares Deadline and touches deadlineRegistration. The
+    //     substring test fails in that direction, so this one IS reported at
+    //     HEAD, and it must stay reported. A fix that compared the other way
+    //     round — asking whether a declared name occurs inside the touched one —
+    //     would turn the first two green and this one silently green as well,
+    //     which is the same hole facing the other way.
+    const fixture: Fixture = {
+      "lib/services/alerts/repository.ts": repositorySource("AlertEvent", ["alert", "alertEvent"]),
+      "lib/kernel/person/repository.ts": repositorySource("PersonRole", ["person", "personRole"]),
+      "lib/modules/deadlines/repository.ts": repositorySource("Deadline", [
+        "deadline",
+        "deadlineRegistration",
+      ]),
+      "prisma/schema.prisma": CLEAN_SCHEMA,
+    };
+    const mustReport: [owner: string, table: string, why: string][] = [
+      [
+        "alerts",
+        "'alert'",
+        "declares AlertEvent alone, and `alert` occurs inside `alertevent`, so a substring " +
+          "comparison licenses it",
+      ],
+      [
+        "person",
+        "'person'",
+        "declares PersonRole alone, and `person` occurs inside `personrole`",
+      ],
+      [
+        "deadlines",
+        "'deadlineRegistration'",
+        "declares Deadline alone — the direction a substring comparison already catches, and " +
+          "which must not be lost when the other direction is fixed",
+      ],
+    ];
+    const mustNotReport: [table: string, why: string][] = [
+      ["'alertEvent'", "alerts declares AlertEvent"],
+      ["'personRole'", "person declares PersonRole"],
+      ["'deadline'", "deadlines declares Deadline"],
+    ];
+    await inSandbox(fixture, (dir) => {
+      const { status, findings, output } = runBoundaryCheck(dir);
+      for (const [owner, table, why] of mustReport) {
+        expect(
+          findings.filter((finding) => finding.includes(owner) && finding.includes(table)),
+          `check-boundaries.sh does not report ${owner} touching ${table}, which it ${why}. The ` +
+            "ownership comparison must be against whole names: this schema is built from prefix " +
+            "pairs throughout — Alert/AlertArea/AlertEvent/AlertSource, Person/PersonRole, " +
+            "Deadline/DeadlineRegistration — so a substring test hands out a licence for a " +
+            `neighbouring owner's tables almost everywhere. Full output:\n${output}`,
+        ).not.toHaveLength(0);
+      }
+      for (const [table, why] of mustNotReport) {
+        expect(
+          findings.filter((finding) => finding.includes(table)),
+          `check-boundaries.sh reports ${table}, though ${why}. Comparing whole names must not ` +
+            `become comparing nothing. Full output:\n${output}`,
+        ).toHaveLength(0);
+      }
+      expect(status, "an undeclared table must fail the check").not.toBe(0);
+    });
+  });
+
+  it("leaves a repository that declares everything it touches alone, however the declaration is punctuated", async () => {
+    // ASSERTION 4, the fixture half. GREEN AT HEAD AND GREEN AFTER — a
+    // regression guard, not a fix.
+    //
+    // Whole-name comparison means splitting the declaration into names, and how
+    // it is split is where a too-eager fix goes wrong. Every separator in use is
+    // present here: every real declaration in this build is comma-separated
+    // (`// owns: Jurisdiction, BusinessCalendar, BusinessHoliday`), while
+    // data-ownership.md's map and the service fixture above spell the same list
+    // with `·`. A split on whitespace alone leaves the token `Jurisdiction,`
+    // with its comma attached, which then matches no table and turns three
+    // kernel repositories red at once.
+    //
+    // Over-declaration is pinned too: BusinessHoliday is declared and not
+    // touched. The check is one-directional by design — it asks whether every
+    // table touched is declared, never whether every table declared is touched —
+    // and a repository that owns a table it has not needed to query yet is
+    // correct, not suspicious.
+    const fixture: Fixture = {
+      "lib/kernel/jurisdiction/repository.ts": repositorySource(
+        "Jurisdiction, BusinessCalendar, BusinessHoliday",
+        ["jurisdiction", "businessCalendar"],
+      ),
+      "lib/modules/payroll/repository.ts": repositorySource("PayrollRun · SalaryTerm", [
+        "payrollRun",
+        "salaryTerm",
+      ]),
+      "lib/services/alerts/repository.ts": repositorySource(
+        "Alert, AlertArea, AlertEvent, AlertSource",
+        ["alertArea", "alertSource"],
+        transactionalWrites("tx", ["alert", "alertEvent"]),
+      ),
+      "prisma/schema.prisma": CLEAN_SCHEMA,
+    };
+    await inSandbox(fixture, (dir) => {
+      const { status, findings, output } = runBoundaryCheck(dir);
+      expect(
+        findings,
+        "check-boundaries.sh objects to a repository that declares every table it touches. " +
+          "Reading a transaction and comparing whole names must not cost the correct case: this " +
+          `is what a repository is supposed to look like. Full output:\n${output}`,
+      ).toEqual([]);
+      expect(status, `expected a clean exit; check-boundaries.sh said:\n${output}`).toBe(0);
+    });
+  });
+
+  it("still finds every repository in this build clean", async () => {
+    // ASSERTION 4, against the real thing. GREEN AT HEAD AND GREEN AFTER.
+    //
+    // Stated separately from the identical-looking case in the block above,
+    // because the way it can now break is new: a fix that reads transaction
+    // handles too liberally, or that splits a comma-separated declaration
+    // wrongly, turns a legitimate repository red — and a fix that did that would
+    // satisfy assertions 1 and 3 and still be wrong. There are eight repositories
+    // in this build (six kernel, one module, one service); none of them may
+    // change verdict, and the findings are asserted rather than only the exit
+    // code so the failure names which one moved.
+    const { status, findings, output } = runBoundaryCheck(repoRoot);
+    expect(
+      findings,
+      "check-boundaries.sh has started reporting a repository in this build that it found clean " +
+        `before. Full output:\n${output}`,
+    ).toEqual([]);
     expect(status, `check-boundaries.sh is not clean on this repository:\n${output}`).toBe(0);
   });
 });
