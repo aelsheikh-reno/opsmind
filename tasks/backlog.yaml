@@ -506,14 +506,27 @@
     - lib/kernel/fx/
     - lib/kernel/audit/
     - tests/kernel/
+    - tests/integration/kernel/
+    - tests/baseline.json
+    - tasks/backlog.yaml
   done_when:
     gates: [lint, types, boundaries, tests, coverage, differential]
     assertions:
-      - "Document types carry field schema, retention policy and ingestion rules as data"
+      - "Document types carry field schema and retention policy as data"
       - "FX rates live in their own table with an asOf date; snapshots are never recomputed"
       - "Audit entries are append-only; erasure redacts rather than deletes"
   risk: money
-  status: todo
+  status: built
+  note: >
+    Two amendments ruled by Ahmed on 2026-08-20. The original assertion also
+    required ingestion rules as data, but IngestionRule is the one kernel table
+    open-items.md records with no field-level card and the legacy oracle
+    (doc-types.ts) is display labels only — so the rule catalogue is deferred:
+    shapes-ingestion owes the IngestionRule field-level card, and the ingestion
+    module builds the rule engine on it, rather than a shape being invented
+    here. And tests/integration/kernel/ joins produces so the three new
+    repositories get integration coverage in the established convention (see
+    kernel-repository-integration-tests) instead of a follow-up node.
 
 - id: money-spine
   title: Commitment, open item and settlement
