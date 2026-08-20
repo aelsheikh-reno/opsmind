@@ -3745,6 +3745,9 @@
     - lib/services/alerts/repository.ts
     - lib/services/alerts/index.ts
     - tests/integration/services/alerts/
+    - tests/integration/support/database.ts
+    - tests/services/alerts/memory-store.test.ts
+    - docs/architecture/lessons.md
     - tasks/backlog.yaml
     - tests/baseline.json
   done_when:
@@ -3803,6 +3806,36 @@
     more, but memory-store.test.ts and repository.test.ts do, so removing them
     would have deleted merged tests. Nothing prevents a future writer reaching
     for the non-atomic pair; only the comment on the port says not to.
+
+    ENGINE-DIVERGENCE FINDING, ADR-038 — recorded, not retried. This node's
+    gates passed locally and CI failed, 7 of 133. The cause was the HARNESS, not
+    the code under test, and not flakiness: the two engines isolate differently.
+    PGlite calls PGlite.create() per file, so each file gets its own DATABASE
+    and its catalogue shows one schema. DATABASE_URL sets ?schema= on one shared
+    database, so every alerts file's schema is visible to every other. atomic.ts
+    read pg_tables for the physical AlertEvent table without constraining
+    schemaname; one row on PGlite, FOUR against postgres:16 — itest_alerts,
+    itest_alerts_raise, itest_alerts_dedupe, itest_alerts_atomic.
+
+    IT REFUSED RATHER THAN CHOOSING, and that is the whole reason this was a red
+    gate instead of a silent corruption. The caller bolts CHECK (false) onto
+    whatever the lookup returns, so an arbitrary pick would have put that
+    constraint on ANOTHER FILE'S table and surfaced later as unrelated flakiness
+    somewhere else in the suite. The guard is kept, now scoped.
+
+    THE FIX is one schema-scoped query, and integrationSchema exported from the
+    harness so a case derives its schema by the same rule the harness used
+    rather than by a second copy that can drift. Verified on BOTH engines at
+    this commit: 6 files, 133 passed under DATABASE_URL against postgres:16, and
+    6 files, 133 passed with DATABASE_URL unset. The container was queried after
+    the run: four AlertEvent tables present, the scoped lookup returns one, and
+    no opsmind_forced_ constraint survived anywhere.
+
+    NO OTHER CASE HAD THE SAME ASSUMPTION. Audited: atomic.ts was the only
+    whole-database catalogue read in the alerts files. transaction-ownership
+    reads no database at all, the remaining raw statements are SELECT 1, and
+    everything else goes through Prisma model accessors, which the connection's
+    search_path already scopes.
 
 - id: gate-scopes-the-suite-to-the-diff
   title: The pipeline's own tests run when the pipeline changes, not on every product node

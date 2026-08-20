@@ -122,3 +122,19 @@
   or one comment in one file, or a message to a reviewer — none of which survives
   a merge. Put it where the next reader already is: the script, the ADR, or
   `open-items.md`.
+
+## A catalogue read is scoped, or it answers a different question per engine
+
+- `pg_tables` and `information_schema` see the whole **database**, not your
+  schema. PGlite gives each test file its own database; `DATABASE_URL` gives the
+  whole suite one database with a schema apiece. So the identical query returns
+  **one** row locally and **four** in CI, and a case that then bolts
+  `CHECK (false)` onto "the" table it found would have poisoned another file's
+  schema. Constrain on `schemaname`, from the harness's own naming rule rather
+  than a second copy of it.
+- Green on one engine is not green. When a case reaches past the ORM, run it
+  under both before believing it.
+- The reason this cost a red gate and not a corrupted suite: the lookup
+  **refused when the answer was ambiguous** instead of taking the first row. A
+  guard that stops on "more than one" is worth writing even when you are sure
+  there can only be one.

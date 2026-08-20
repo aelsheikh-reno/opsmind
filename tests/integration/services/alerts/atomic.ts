@@ -129,17 +129,31 @@ export function atomicWriter(store: unknown, contract: readonly string[]): { nam
 const FORCED = "opsmind_forced_alertevent_write_failure";
 
 /**
- * The physical table behind the AlertEvent card, read from the catalogue.
+ * The physical table behind the AlertEvent card, read from the catalogue, IN
+ * THIS FILE'S OWN SCHEMA.
  *
  * Discovered rather than written down, because the mapping from a card to a
  * table name is the schema's to decide and this file is not entitled to assume
  * it. Compared as a WHOLE normalised token — lessons.md: `grep -qi alert` let a
  * repository declaring `AlertEvent` touch `Alert`, because every table here is a
  * prefix pair, and `Alert` must never be the table this returns.
+ *
+ * SCOPED TO ONE SCHEMA, AND THE TWO ENGINES ARE WHY. PGlite gives each file its
+ * own database, so a catalogue sweep finds one `AlertEvent`; DATABASE_URL gives
+ * the whole suite one database with a schema per file, so the same sweep finds
+ * one per alerts file. Four, on #81 — and this function refused rather than
+ * choosing, which is the only reason it was a red gate and not a poisoned
+ * neighbour: the caller adds a `CHECK (false)` to whatever comes back, so an
+ * arbitrary pick puts that constraint on ANOTHER FILE'S table and surfaces as
+ * unrelated flakiness somewhere else in the suite.
+ *
+ * The schema comes from `integrationSchema`, the harness's own rule, so it
+ * cannot drift from the schema this file was actually migrated into.
  */
-export async function alertEventTable(db: Database): Promise<string> {
+export async function alertEventTable(db: Database, schema: string): Promise<string> {
   const rows = await db.$queryRawUnsafe<{ schemaname: string; tablename: string }[]>(
-    "SELECT schemaname, tablename FROM pg_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema')",
+    "SELECT schemaname, tablename FROM pg_tables WHERE schemaname = $1",
+    schema,
   );
   const token = (name: string): string =>
     name
@@ -148,10 +162,16 @@ export async function alertEventTable(db: Database): Promise<string> {
       .replace(/s$/, "");
   const matches = rows.filter((row) => token(row.tablename) === "alertevent");
   if (matches.length !== 1) {
+    // KEPT, and it is what caught the engine divergence in the first place.
+    // Zero now means this file was not migrated into the schema it believes it
+    // owns; more than one means a schema is not what isolates these files after
+    // all. Either way the cases below would be making some other write fail, or
+    // none — and a case that fails nothing proves nothing about a rollback.
     throw new Error(
-      `${matches.length} tables answer to the AlertEvent card, so the forced-failure case below ` +
-        "cannot know which write to make fail — and a case that fails nothing proves nothing " +
-        `about a rollback. Tables present: ${rows.map((row) => `${row.schemaname}.${row.tablename}`).join(", ")}`,
+      `${matches.length} tables in schema '${schema}' answer to the AlertEvent card, so the ` +
+        "forced-failure cases cannot know which write to make fail — and a case that fails " +
+        "nothing proves nothing about a rollback. Tables in that schema: " +
+        `${rows.map((row) => row.tablename).join(", ") || "none"}`,
     );
   }
   return `"${matches[0].schemaname}"."${matches[0].tablename}"`;
@@ -167,13 +187,18 @@ export async function alertEventTable(db: Database): Promise<string> {
  * to throw before touching the database would prove only that a thrown error
  * propagates, which was never in doubt.
  *
+ * `schema` is this file's own, never the whole database. The constraint is a
+ * DDL change on a server every other integration file shares under
+ * DATABASE_URL, so the one thing it must never do is land on a table another
+ * file is writing through.
+ *
  * NOT VALID so it can be added while an alert's history already has rows in it:
  * existing rows go unchecked, and every new insert is refused. Dropped in
  * `finally`, so a failing case does not leave the constraint behind for the
  * cases after it.
  */
-export async function withEventWritesRefused<T>(db: Database, work: () => Promise<T>): Promise<T> {
-  const table = await alertEventTable(db);
+export async function withEventWritesRefused<T>(db: Database, schema: string, work: () => Promise<T>): Promise<T> {
+  const table = await alertEventTable(db, schema);
   await db.$executeRawUnsafe(`ALTER TABLE ${table} ADD CONSTRAINT "${FORCED}" CHECK (false) NOT VALID`);
   try {
     return await work();

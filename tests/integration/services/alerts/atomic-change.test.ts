@@ -34,14 +34,21 @@
 // it would see AlertEvent writes refused for reasons of its own.
 import { describe, expect, it } from "vitest";
 import type { AlertRecord } from "@/lib/services/alerts";
-import { afterARefusal, integrationDatabase, refusalFrom } from "../../support/database";
+import { afterARefusal, integrationDatabase, integrationSchema, refusalFrom } from "../../support/database";
 import { atomicWriter, withEventWritesRefused, type AlertChangeLike } from "./atomic";
 import { alertCountFor, alertEngine, alertFor, eventsFor } from "./engine";
 
 // Order is load-bearing, as in repository.test.ts: integrationDatabase swaps
 // DATABASE_URL and evicts the cached client, so everything that reaches the
 // database is imported dynamically AFTER it.
-const db = await integrationDatabase("alerts_atomic");
+// One name for the schema, used to obtain it and to address it. The forced
+// failure below is a DDL change, and under DATABASE_URL every integration file
+// shares one database with a schema apiece — so the cases must say WHICH schema
+// they are altering, and must derive it by the harness's own rule rather than
+// by a second copy of it that can drift.
+const SCHEMA = "alerts_atomic";
+const db = await integrationDatabase(SCHEMA);
+const schema = integrationSchema(SCHEMA);
 
 const repository = (await import("@/lib/services/alerts/repository")) as Record<string, unknown>;
 const store = repository.prismaAlertStore as Record<string, unknown> | undefined;
@@ -163,7 +170,7 @@ describe("the forced failure is real, and it lands on the event write", () => {
     // by writing successfully and asserting about a row nothing tried to move.
     const alert = await write(openAlert(), raising);
 
-    const refusal = await withEventWritesRefused(db, async () =>
+    const refusal = await withEventWritesRefused(db, schema, async () =>
       refusalFrom(
         db.alertEvent.create({
           data: { alertId: alert.id, at: CLOSED_AT, kind: "resolved", fromState: "firing", toState: "resolved" },
@@ -192,7 +199,7 @@ describe("a failure writing the event leaves the alert row unchanged", () => {
     expect(before.areas).toEqual(["AE", "EG"]);
     expect(before.events).toHaveLength(1);
 
-    const refusal = await withEventWritesRefused(db, () => attempt(write(resolvedAlert(), closing)));
+    const refusal = await withEventWritesRefused(db, schema, () => attempt(write(resolvedAlert(), closing)));
 
     expect(refusal, "the write was ACCEPTED while every AlertEvent insert was refused").not.toBeNull();
     expect(await everyColumn(alert.id)).toEqual(before);
@@ -206,7 +213,7 @@ describe("a failure writing the event leaves the alert row unchanged", () => {
     // having been raised — no event names it, so nothing downstream can say
     // when or why it appeared, and the fingerprint is now deduped against a row
     // whose history is empty.
-    const refusal = await withEventWritesRefused(db, () => attempt(write(openAlert(), raising)));
+    const refusal = await withEventWritesRefused(db, schema, () => attempt(write(openAlert(), raising)));
 
     expect(refusal, "the write was ACCEPTED while every AlertEvent insert was refused").not.toBeNull();
     expect(await db.alert.count(), "an alert row exists that no event records the raising of").toBe(0);
@@ -217,7 +224,7 @@ describe("a failure writing the event leaves the alert row unchanged", () => {
   it("writes both again once the event write is possible, so nothing is left poisoned", async () => {
     // A rollback that also lost the caller's change permanently would be a
     // different defect wearing the same green. The next attempt must land.
-    await withEventWritesRefused(db, () => attempt(write(openAlert(), raising)));
+    await withEventWritesRefused(db, schema, () => attempt(write(openAlert(), raising)));
 
     const alert = await write(openAlert(), raising);
     expect(await db.alert.count()).toBe(1);
@@ -240,7 +247,7 @@ describe("the same forced failure, through the two separate verbs, loses the rec
     const alert = await write(openAlert(), raising);
     const before = await everyColumn(alert.id);
 
-    const refusal = await withEventWritesRefused(db, async () => {
+    const refusal = await withEventWritesRefused(db, schema, async () => {
       const upsert = store?.upsertAlert as (record: AlertRecord) => Promise<{ id: string }>;
       const record = store?.recordAlertEvent as (event: Record<string, unknown>) => Promise<unknown>;
       await upsert.call(store, resolvedAlert());
@@ -268,7 +275,7 @@ describe("the engine's own verbs write the row and the event together", () => {
   it("leaves no alert behind when a raise cannot record that it was raised", async () => {
     const fingerprint = "reno:opsmind:deadlines:doc-raise:expiry";
 
-    await withEventWritesRefused(db, () =>
+    await withEventWritesRefused(db, schema, () =>
       attempt(engine.raiseAlert(fingerprint, "major", "expiry", ["AE"], { dueDate: "2026-09-30" })),
     );
 
@@ -294,7 +301,7 @@ describe("the engine's own verbs write the row and the event together", () => {
     expect(raised.state, "the alert was not firing before the close was attempted").toBe("firing");
     const before = await everyColumn(raised.id);
 
-    await withEventWritesRefused(db, () => attempt(engine.resolveAlert(fingerprint)));
+    await withEventWritesRefused(db, schema, () => attempt(engine.resolveAlert(fingerprint)));
 
     expect(await everyColumn(raised.id)).toEqual(before);
     expect((await eventsFor(db, raised.id)).map((row) => row.toState)).not.toContain("resolved");
