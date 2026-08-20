@@ -3754,7 +3754,7 @@
       - "A failure writing the event leaves the alert row unchanged, proved by forcing the event write to fail"
       - "The ownership check still reports an undeclared table reached inside that transaction"
   risk: compliance
-  status: todo
+  status: done
   note: >
     Found by the implementer of service-alerts-raise, which reported it rather
     than writing the two calls and moving on, and verified independently at that
