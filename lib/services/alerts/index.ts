@@ -9,7 +9,7 @@
 
 import { isResolved, openAlert, raiseKind, reassert, resolveAlert as closeAlert } from "./lifecycle";
 import type { AlertIdentity, AlertRaise, AlertRecord, AlertSeverity } from "./lifecycle";
-import type { NewAlertEvent, StoredAlert } from "./repository";
+import type { AlertChange, NewAlertEvent, StoredAlert } from "./repository";
 
 export {
   acknowledge,
@@ -40,7 +40,7 @@ export type {
 /** The Prisma store, for a host to bind. Nothing outside this service reaches
  *  repository.ts directly (CLAUDE.md rule 4); this line is how it is offered. */
 export { prismaAlertStore } from "./repository";
-export type { NewAlertEvent, NewAlertSource, StoredAlert } from "./repository";
+export type { AlertChange, NewAlertEvent, NewAlertSource, StoredAlert } from "./repository";
 
 /**
  * One condition a repeating caller found, inside the one run that found it.
@@ -120,6 +120,15 @@ export interface AlertStore {
   upsertAlert(record: AlertRecord): Promise<StoredAlert>;
   /** The return is unread: an event is appended, never consulted afterwards. */
   recordAlertEvent(event: NewAlertEvent): Promise<unknown>;
+  /**
+   * The pair above as ONE unit, and the only way this engine moves an alert.
+   *
+   * The two verbs stay on the port because a caller may write a row or append
+   * an event alone; a STATE CHANGE is never one of those cases, because a row
+   * that moved with nothing in the log is the evidence gone (data-model.md, the
+   * AlertEvent card).
+   */
+  applyAlertChange(record: AlertRecord, change: AlertChange): Promise<StoredAlert>;
 }
 
 // Compared whole and never split, so the two halves are joined by a byte a
@@ -135,7 +144,7 @@ export function createMemoryAlertStore(): AlertStore {
   const alerts = new Map<string, StoredAlert>();
   let issued = 0;
 
-  return {
+  const store: AlertStore = {
     getAlert: (identity) => Promise.resolve(alerts.get(keyOf(identity)) ?? null),
     upsertAlert: (record) => {
       const key = keyOf(record);
@@ -153,7 +162,16 @@ export function createMemoryAlertStore(): AlertStore {
       return Promise.resolve(stored);
     },
     recordAlertEvent: (event) => Promise.resolve(event),
+    // Its own two verbs rather than a copy of them, so both stay live. There is
+    // nothing to roll back here: this store drops the event and keeps no
+    // history, so no partial write it could leave behind exists.
+    applyAlertChange: async (record, change) => {
+      const stored = await store.upsertAlert(record);
+      await store.recordAlertEvent({ ...change, alertId: stored.id });
+      return stored;
+    },
   };
+  return store;
 }
 
 /**
@@ -199,11 +217,11 @@ export function createAlertManager(deps: AlertManagerDeps): AlertManagerClient {
     const current = await store.getAlert({ sourceId: input.sourceId, fingerprint: input.fingerprint });
     const kind = raiseKind(current, input.severity);
     const next = current === null ? openAlert(input, at) : reassert(current, input, at);
-    const saved = await store.upsertAlert(next);
-    // Both null unless the state actually moved — a reassert and a severity
-    // rise change no state (data-model.md, the AlertEvent card).
-    await store.recordAlertEvent({
-      alertId: saved.id,
+    // One unit, not two awaits: a raise that moved the row and then failed to
+    // log it left no trace that the state had changed at all.
+    // fromState/toState are both null unless the state actually moved — a
+    // reassert and a severity rise change none (data-model.md, AlertEvent).
+    await store.applyAlertChange(next, {
       at,
       kind,
       fromState: kind === "raised" ? (current?.state ?? null) : null,
@@ -216,9 +234,7 @@ export function createAlertManager(deps: AlertManagerDeps): AlertManagerClient {
   async function close(fingerprint: string, at: Date): Promise<void> {
     const current = await store.getAlert({ sourceId, fingerprint });
     if (current === null || isResolved(current.state)) return;
-    await store.upsertAlert(closeAlert(current, at));
-    await store.recordAlertEvent({
-      alertId: current.id,
+    await store.applyAlertChange(closeAlert(current, at), {
       at,
       kind: "resolved",
       fromState: current.state,

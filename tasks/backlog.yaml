@@ -3745,6 +3745,9 @@
     - lib/services/alerts/repository.ts
     - lib/services/alerts/index.ts
     - tests/integration/services/alerts/
+    - tests/integration/support/database.ts
+    - tests/services/alerts/memory-store.test.ts
+    - docs/architecture/lessons.md
     - tasks/backlog.yaml
     - tests/baseline.json
   done_when:
@@ -3788,6 +3791,51 @@
     one is whether it SAYS THE RIGHT THING. Both are about the same two writes
     in the same two verbs, and splitting them means opening index.ts and
     repository.ts twice.
+
+    WHAT THE IMPLEMENTER LEFT RED, on purpose. The store gains one exported
+    method, `applyAlertChange(record, change)`, and repository.test.ts asserts
+    "exercises every function it exports" — so that case now fails naming
+    `applyAlertChange` and will keep failing until a committed case calls it.
+    The implementer wrote no test by instruction; this directory is in produces
+    for exactly that. Assertion 2 was proved by a throwaway probe, NOT committed:
+    a `CHECK (false) NOT VALID` constraint on AlertEvent, a call through
+    applyAlertChange, and the Alert row read back column-for-column afterwards.
+
+    ALSO NOT CHECKED HERE. `upsertAlert` and `recordAlertEvent` stay on the port
+    and on both stores — nothing in the engine calls them for a state change any
+    more, but memory-store.test.ts and repository.test.ts do, so removing them
+    would have deleted merged tests. Nothing prevents a future writer reaching
+    for the non-atomic pair; only the comment on the port says not to.
+
+    ENGINE-DIVERGENCE FINDING, ADR-038 — recorded, not retried. This node's
+    gates passed locally and CI failed, 7 of 133. The cause was the HARNESS, not
+    the code under test, and not flakiness: the two engines isolate differently.
+    PGlite calls PGlite.create() per file, so each file gets its own DATABASE
+    and its catalogue shows one schema. DATABASE_URL sets ?schema= on one shared
+    database, so every alerts file's schema is visible to every other. atomic.ts
+    read pg_tables for the physical AlertEvent table without constraining
+    schemaname; one row on PGlite, FOUR against postgres:16 — itest_alerts,
+    itest_alerts_raise, itest_alerts_dedupe, itest_alerts_atomic.
+
+    IT REFUSED RATHER THAN CHOOSING, and that is the whole reason this was a red
+    gate instead of a silent corruption. The caller bolts CHECK (false) onto
+    whatever the lookup returns, so an arbitrary pick would have put that
+    constraint on ANOTHER FILE'S table and surfaced later as unrelated flakiness
+    somewhere else in the suite. The guard is kept, now scoped.
+
+    THE FIX is one schema-scoped query, and integrationSchema exported from the
+    harness so a case derives its schema by the same rule the harness used
+    rather than by a second copy that can drift. Verified on BOTH engines at
+    this commit: 6 files, 133 passed under DATABASE_URL against postgres:16, and
+    6 files, 133 passed with DATABASE_URL unset. The container was queried after
+    the run: four AlertEvent tables present, the scoped lookup returns one, and
+    no opsmind_forced_ constraint survived anywhere.
+
+    NO OTHER CASE HAD THE SAME ASSUMPTION. Audited: atomic.ts was the only
+    whole-database catalogue read in the alerts files. transaction-ownership
+    reads no database at all, the remaining raw statements are SELECT 1, and
+    everything else goes through Prisma model accessors, which the connection's
+    search_path already scopes.
 
 - id: gate-scopes-the-suite-to-the-diff
   title: The pipeline's own tests run when the pipeline changes, not on every product node
@@ -3910,3 +3958,47 @@
     "exists and is not empty", which is hard to break silently, so it is recorded
     rather than taken. If it is ever read for content, revisit.
 
+- id: gate-source-reader-blind-to-a-transaction-handle
+  title: The TypeScript ownership reader hardcodes the handle names it can see
+  phase: 0
+  depends_on: [service-alerts-atomic-event]
+  spec: PIPELINE.md#the-gates
+  produces:
+    - tests/kernel/kernel-source.ts
+    - tests/kernel/
+    - tests/modules/deadlines/
+    - tests/integration/services/alerts/
+    - tasks/backlog.yaml
+    - tests/baseline.json
+  done_when:
+    gates: [lint, types, tests]
+    assertions:
+      - "dbUsages reads the transaction handle from the source, whatever the author named it"
+      - "No existing repository's reported usages change, measured file by file"
+  risk: low
+  status: todo
+  note: >
+    Found by the test-author of service-alerts-atomic-event, measured rather than
+    supposed, and deliberately not fixed there.
+
+    tests/kernel/kernel-source.ts:448 carries
+    CLIENTS = new Set(["db", "tx", "trx", "client", "prisma"]). The first real
+    transaction in this repository names its handle `write`, so dbUsages returns
+    7 entries — all db.* — while write.alert and write.alertEvent are reached
+    inside the transaction and seen by neither.
+
+    IT IS THE SAME DEFECT THE SHELL SCRIPT WAS FIXED FOR, IN THE OTHER READER.
+    gate-boundaries-blind-to-a-transaction taught scripts/check-boundaries.sh to
+    read the handle out of the source precisely because the name is the author's
+    choice; the TypeScript-side reader still guesses from a list. The lesson was
+    recorded and the second reader was never checked against it.
+
+    NO FALSE GREEN TODAY. Both tables are declared, and check-boundaries.sh reads
+    the handle correctly, so the shell gate catches what the reader misses. What
+    is lost is that repository-ownership.test.ts's "touches only the tables it
+    declares" no longer reads the whole file.
+
+    Not fixed in that node because changing dbUsages alters what
+    kernel-repositories.test.ts and tests/modules/deadlines/repository.test.ts
+    see, and the test-author could not verify those inside its scope. That is the
+    right refusal, and it is why this node names them in produces.

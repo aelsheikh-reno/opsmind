@@ -138,6 +138,15 @@ async function afterARefusal(): Promise<void> {
   });
 }
 
+/**
+ * A connection that is good again after the engine answered with an error.
+ *
+ * Exported as well as used by `refusalFrom` below, because a case may need the
+ * recovery without the refusal being the thing it asserts on — a call whose
+ * REJECTION is incidental and whose assertion is about the rows left behind.
+ */
+export { afterARefusal };
+
 /** The message a refusal carried, and a connection that is good afterwards. */
 export async function refusalFrom(work: Promise<unknown>): Promise<string> {
   const outcome = await work.then(
@@ -150,12 +159,28 @@ export async function refusalFrom(work: Promise<unknown>): Promise<string> {
 }
 
 /**
+ * The schema a named integration file is given.
+ *
+ * Exported because THE TWO ENGINES ISOLATE DIFFERENTLY, and a case that has to
+ * name its own schema must derive it by the same rule the harness does rather
+ * than by a second copy that can drift. PGlite gets a whole DATABASE per file
+ * (`PGlite.create()` above), so its catalogue shows one schema; DATABASE_URL
+ * gets one database for the whole suite with a SCHEMA per file, so its
+ * catalogue shows every other file's schema as well. Anything reading
+ * `pg_tables` or `information_schema` without constraining `schemaname` is
+ * therefore green on PGlite and wrong against a server — measured on #81, where
+ * four schemas answered to one table name.
+ */
+export const integrationSchema = (name: string): string =>
+  `itest_${name.replace(/[^a-z0-9]+/gi, "_").toLowerCase()}`;
+
+/**
  * Obtains an engine, migrates a schema of this file's own, and hands back the
  * client the repositories hold. Registers the truncate and the teardown itself,
  * so a caller cannot forget either.
  */
 export async function integrationDatabase(name: string): Promise<Database> {
-  const schema = `itest_${name.replace(/[^a-z0-9]+/gi, "_").toLowerCase()}`;
+  const schema = integrationSchema(name);
   const engine = await withDeadline(`obtaining a database engine for ${schema}`, resolveEngine(schema));
   await withDeadline(`applying the migrations to ${schema}`, migrate(engine, schema));
 
